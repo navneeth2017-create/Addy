@@ -1253,7 +1253,7 @@ async function handleSignup(e) {
 // ADMIN: TABS
 // ==========================================
 function switchTab(tab, btn) {
-  ['stores', 'pending', 'reps', 'users', 'products', 'orders', 'inventory', 'settings'].forEach(t => {
+  ['stores', 'pending', 'reps', 'users', 'products', 'orders', 'inventory', 'commissions', 'store-claims', 'settings'].forEach(t => {
     const el = document.getElementById('tab-' + t);
     if (!el) return;
     if (t === tab) {
