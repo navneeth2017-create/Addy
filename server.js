@@ -41,7 +41,11 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 // ── DB ────────────────────────────────────────────────────────────────────────
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  options: '-c search_path=addy,public'  // ADDY uses its own schema, isolated from WowCow
+});
 
 async function q(text, params) {
   const client = await pool.connect();
@@ -101,6 +105,9 @@ async function sendNotification(subject, htmlBody) {
   }
 }
 async function migrate() {
+  // Create isolated addy schema — keeps ADDY tables separate from WowCow (public schema)
+  await q('CREATE SCHEMA IF NOT EXISTS addy');
+  await q('SET search_path TO addy,public');
   const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
   await q(schema);
   console.log('✅ Schema ready');
@@ -112,13 +119,6 @@ async function migrate() {
     await q('ALTER TABLE orders ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL');
     console.log('✅ orders.user_id FK migration applied');
   } catch(e) { console.log('ℹ️  orders.user_id FK already up to date'); }
-
-  // ── Fix users role check constraint to include dsd ───────────────────────────
-  try {
-    await q('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
-    await q("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('admin','dsd','investor','store_owner','distributor','rep','master_distributor'))");
-    console.log('✅ users_role_check constraint updated');
-  } catch(e) { console.log('ℹ️  role constraint already up to date'); }
 
   // ── ADDY DSD Tier System migrations ──────────────────────────────────────────
   try {

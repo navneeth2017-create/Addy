@@ -186,18 +186,14 @@ function timeAgo(dateStr) {
 }
 
 // --- Logo ---
-const logoSVG = `<svg viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" stroke="white" stroke-width="2" fill="none"/><path d="M2 7L12 12M12 12L22 7M12 12V22" stroke="white" stroke-width="2"/><path d="M7 4.5L17 9.5" stroke="white" stroke-width="1.5" opacity="0.5"/></svg>`;
-
 function renderLogo(container) {
   if (!container) return;
   const token = localStorage.getItem('addy_token');
   const role = (token ? JSON.parse(atob(token.split('.')[1])).role : null);
-  const roleFileMap = { admin: 'admin', investor: 'investor', dsd: 'owner', dsd: 'dsd', rep: 'rep' };
-  const dashFile = roleFileMap[role] || 'admin';
-  const href = token ? `/dashboard-${dashFile}.html?t=${token}` : '/login.html';
+  const href = token ? `/dashboard-${role === 'admin' ? 'admin' : 'dsd'}.html?t=${token}` : '/login.html';
   container.innerHTML = `
     <a href="${href}" style="display:flex;align-items:center;text-decoration:none;cursor:pointer;" title="Go to dashboard">
-      <img src="https://addyproducts.com/wp-content/uploads/2025/03/WGCPADDY-Logo-300x165.png" alt="ADDY" style="height:56px;width:auto;object-fit:contain;margin:4px 0;">
+      <img src="/images/addy-logo.svg" alt="ADDY DSD" style="height:56px;width:auto;object-fit:contain;margin:4px 0;">
     </a>`;
 }
 
