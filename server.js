@@ -113,6 +113,13 @@ async function migrate() {
     console.log('✅ orders.user_id FK migration applied');
   } catch(e) { console.log('ℹ️  orders.user_id FK already up to date'); }
 
+  // ── Fix users role check constraint to include dsd ───────────────────────────
+  try {
+    await q('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
+    await q("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('admin','dsd','investor','store_owner','distributor','rep','master_distributor'))");
+    console.log('✅ users_role_check constraint updated');
+  } catch(e) { console.log('ℹ️  role constraint already up to date'); }
+
   // ── ADDY DSD Tier System migrations ──────────────────────────────────────────
   try {
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS tier INTEGER NOT NULL DEFAULT 1 CHECK(tier IN (1,2,3))');
