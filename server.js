@@ -190,8 +190,8 @@ async function migrate() {
     if (!exists) {
       const hash = bcrypt.hashSync(acc.password, 10);
       await q(
-        "INSERT INTO users (email,name,phone,role,password_hash,status,tier) VALUES ($1,$2,'','$3',$4,'active',$5)".replace("'$3'", "'" + acc.role + "'"),
-        [acc.email, acc.name, hash, acc.tier]
+        "INSERT INTO users (email,name,phone,role,password_hash,status,tier) VALUES ($1,$2,$3,$4,$5,'active',$6)",
+        [acc.email, acc.name, '', acc.role, hash, acc.tier]
       );
       console.log('✅ Demo account created: ' + acc.email);
     }
