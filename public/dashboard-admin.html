@@ -410,13 +410,21 @@
         </div>
 
         <div style="background:var(--bg-secondary);border-radius:10px;padding:16px;margin-bottom:16px;">
-          <p style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;">Pricing by Tier</p>
-          <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">These are the base prices for each tier. Individual users can be overridden at the account level.</p>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-            <div class="form-group"><label>DSD ($)</label><input type="number" id="pf-price-dsd" step="0.01" min="0" placeholder="0.00"></div>
-            <div class="form-group"><label>DSD ($)</label><input type="number" id="pf-price-dsd" step="0.01" min="0" placeholder="0.00"></div>
-            <div class="form-group"><label>DSD ($)</label><input type="number" id="pf-price-rep" step="0.01" min="0" placeholder="0.00"></div>
-            <div class="form-group"><label>Default DSD Price ($)</label><input type="number" id="pf-price-dsd" step="0.01" min="0" placeholder="0.00"></div>
+          <p style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;">Tier Pricing Preview</p>
+          <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Prices are auto-calculated from cost price. Individual DSD overrides can be set per user.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 1 · 35%</div>
+              <div id="preview-tier1" style="font-size:18px;font-weight:800;color:var(--green);">—</div>
+            </div>
+            <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 2 · 30%</div>
+              <div id="preview-tier2" style="font-size:18px;font-weight:800;color:var(--accent);">—</div>
+            </div>
+            <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 3 · 25%</div>
+              <div id="preview-tier3" style="font-size:18px;font-weight:800;color:var(--text-secondary);">—</div>
+            </div>
           </div>
         </div>
 

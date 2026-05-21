@@ -601,6 +601,16 @@ app.get('/api/stores', authenticate, async (req, res) => {
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
+// Must be before /:id route to avoid param matching
+app.get('/api/stores/pending-claims', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const stores = await all(
+      "SELECT s.*, u.name as rep_name, u.email as rep_email FROM stores s JOIN users u ON u.id=s.exclusive_rep_id WHERE s.store_approval_status='pending' ORDER BY s.id DESC"
+    );
+    res.json(stores);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/stores/:id', authenticate, authorize('admin'), async (req, res) => {
   try {
     const store = await one('SELECT * FROM stores WHERE id=$1', [req.params.id]);
@@ -1961,14 +1971,7 @@ app.get('/api/my-stores', authenticate, authorize('dsd'), async (req, res) => {
 });
 
 // Get pending store claims (admin)
-app.get('/api/stores/pending-claims', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const stores = await all(
-      "SELECT s.*, u.name as rep_name, u.email as rep_email FROM stores s JOIN users u ON u.id=s.exclusive_rep_id WHERE s.store_approval_status='pending' ORDER BY s.id DESC"
-    );
-    res.json(stores);
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
+
 
 
 // ── START ─────────────────────────────────────────────────────────────────────

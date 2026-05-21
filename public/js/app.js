@@ -410,7 +410,14 @@ async function loadPayoutRequests() {
   const pending = (requests || []).filter(r => r.status === 'pending');
   const badge = document.getElementById('payouts-badge');
   if (badge) { badge.textContent = pending.length; badge.style.display = pending.length ? 'inline' : 'none'; }
-  if (!pending.length) { el.innerHTML = '<div style="padding:20px;color:var(--text-muted);text-align:center;">No pending payout requests</div>'; return; }
+  if (!pending.length) {
+    el.innerHTML = `<div style="padding:32px;text-align:center;">
+      <div style="font-size:28px;margin-bottom:10px;">✅</div>
+      <div style="font-weight:600;color:var(--text);margin-bottom:4px;">All caught up</div>
+      <div style="font-size:13px;color:var(--text-muted);">No pending payout requests right now.</div>
+    </div>`;
+    return;
+  }
   el.innerHTML = pending.map(r => `
     <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--bg-card);">
       <div style="flex:1;">
@@ -442,7 +449,14 @@ async function loadCommissionsTable() {
   const tbody = document.getElementById('commissions-tbody');
   if (!tbody) return;
   const rows = await apiFetch('/api/commissions');
-  if (!rows || !rows.length) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px;">No commission activity yet</td></tr>'; return; }
+  if (!rows || !rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;">
+      <div style="font-size:28px;margin-bottom:10px;">💸</div>
+      <div style="font-weight:600;color:var(--text);margin-bottom:4px;">No commissions yet</div>
+      <div style="font-size:13px;color:var(--text-muted);">Commissions are earned when a Tier 2 or Tier 3 DSD places an order.<br>They'll show up here automatically.</div>
+    </td></tr>`;
+    return;
+  }
   tbody.innerHTML = rows.map(r => `<tr>
     <td>${esc(r.earner_name || r.earner_email || '—')}</td>
     <td>${esc(r.buyer_name || '—')}</td>

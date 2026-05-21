@@ -337,11 +337,18 @@ async function handleProductSubmit(e) {
 
 function updateTierPricePreview() {
   const cp = parseFloat(document.getElementById('pf-cost-price')?.value || 0);
-  const el = document.getElementById('tier-price-preview');
-  if (!el) return;
-  if (!cp || cp <= 0) { el.textContent = 'Enter cost price above'; return; }
-  const t1 = (cp * 0.65).toFixed(2), t2 = (cp * 0.70).toFixed(2), t3 = (cp * 0.75).toFixed(2);
-  el.innerHTML = `<strong>Tier 1:</strong> $${t1} &nbsp;|&nbsp; <strong>Tier 2:</strong> $${t2} &nbsp;|&nbsp; <strong>Tier 3:</strong> $${t3}`;
+  const t1El = document.getElementById('preview-tier1');
+  const t2El = document.getElementById('preview-tier2');
+  const t3El = document.getElementById('preview-tier3');
+  if (!cp || cp <= 0) {
+    if (t1El) t1El.textContent = '—';
+    if (t2El) t2El.textContent = '—';
+    if (t3El) t3El.textContent = '—';
+    return;
+  }
+  if (t1El) t1El.textContent = '$' + (cp * 0.65).toFixed(2);
+  if (t2El) t2El.textContent = '$' + (cp * 0.70).toFixed(2);
+  if (t3El) t3El.textContent = '$' + (cp * 0.75).toFixed(2);
 }
 
 async function deleteProduct(id) {
