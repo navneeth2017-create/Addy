@@ -13,11 +13,9 @@
   <!-- Background pill -->
   <rect x="0" y="8" width="280" height="84" rx="12" fill="url(#navyGrad)"/>
 
-  <!-- Left accent bar -->
-  <rect x="0" y="8" width="5" height="84" rx="3" fill="url(#blueAccent)"/>
 
   <!-- ADDY text -->
-  <text x="22" y="68" font-family="'Arial Black', 'Arial Bold', Arial" font-weight="900"
+  <text x="14" y="68" font-family="'Arial Black', 'Arial Bold', Arial" font-weight="900"
         font-size="52" fill="white" letter-spacing="-1">ADDY</text>
 
   <!-- Registered mark -->
@@ -29,6 +27,6 @@
         font-size="13" fill="white" text-anchor="middle" letter-spacing="1">DSD</text>
 
   <!-- Tagline -->
-  <text x="22" y="84" font-family="Arial" font-size="9" fill="rgba(255,255,255,0.45)"
+  <text x="14" y="84" font-family="Arial" font-size="9" fill="rgba(255,255,255,0.45)"
         letter-spacing="2.5" font-weight="600">PARTNER PORTAL</text>
 </svg>
