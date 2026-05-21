@@ -198,6 +198,7 @@ function renderLogo(container) {
   container.innerHTML = `
     <a href="${href}" style="display:flex;align-items:center;text-decoration:none;cursor:pointer;" title="Go to dashboard">
       <img src="https://addyproducts.com/wp-content/uploads/2025/03/WGCPADDY-Logo-300x165.png" alt="ADDY" style="height:56px;width:auto;object-fit:contain;margin:4px 0;">
+    </a>`;
 }
 
 
