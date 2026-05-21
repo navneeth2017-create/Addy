@@ -89,12 +89,8 @@ function logout() {
 
   overlay.innerHTML = `
     <div id="farewell-inner" style="opacity:0;transform:translateY(16px);transition:opacity 0.6s ease 0.15s,transform 0.6s ease 0.15s;">
-      <div style="width:64px;height:64px;background:#2563eb;border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 28px;">
-        <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
-          <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" stroke="white" stroke-width="1.8" fill="none"/>
-          <path d="M2 7L12 12M12 12L22 7M12 12V22" stroke="white" stroke-width="1.8"/>
-          <path d="M7 4.5L17 9.5" stroke="white" stroke-width="1.4" opacity="0.5"/>
-        </svg>
+      <div style="margin:0 auto 28px;text-align:center;">
+        <img src="/images/addy-logo.svg" alt="ADDY" style="height:64px;width:auto;object-fit:contain;">
       </div>
       <p style="font-size:13px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#3b82f6;margin-bottom:18px;">ADDY Distribution</p>
       <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:clamp(36px,6vw,64px);font-weight:800;color:#ffffff;line-height:1.1;letter-spacing:-1px;margin-bottom:20px;">

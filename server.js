@@ -127,6 +127,7 @@ async function migrate() {
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS commission_balance NUMERIC(10,2) NOT NULL DEFAULT 0');
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_id TEXT');
     await q('ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(10,2) NOT NULL DEFAULT 0');
+    await q('ALTER TABLE products ADD COLUMN IF NOT EXISTS retail_price NUMERIC(10,2) NOT NULL DEFAULT 0');
     await q('ALTER TABLE stores ADD COLUMN IF NOT EXISTS exclusive_rep_id INTEGER REFERENCES users(id)');
     await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_approval_status TEXT NOT NULL DEFAULT 'approved'");
     console.log('✅ ADDY DSD tier/commission migrations applied');
@@ -235,12 +236,13 @@ async function getPriceForUser(productId, userId, role) {
   // 1. Check per-user price override (admin can set custom price per DSD)
   const userPrice = await one('SELECT price FROM product_prices WHERE product_id=$1 AND user_id=$2', [productId, userId]);
   if (userPrice) return parseFloat(userPrice.price);
-  // 2. Calculate tier-based price from cost_price
+  // 2. Calculate tier-based price from retail_price
+  // DSD pays retail × (1 - margin%) so they keep their margin % when selling at retail
   const user = await one('SELECT tier FROM users WHERE id=$1', [userId]);
-  const product = await one('SELECT cost_price FROM products WHERE id=$1', [productId]);
+  const product = await one('SELECT retail_price, cost_price FROM products WHERE id=$1', [productId]);
   const tier = user?.tier || 1;
-  const cost = parseFloat(product?.cost_price || 0);
-  if (cost > 0) return Math.round(cost * TIER_MULTIPLIERS[tier] * 100) / 100;
+  const retail = parseFloat(product?.retail_price || 0);
+  if (retail > 0) return Math.round(retail * TIER_MULTIPLIERS[tier] * 100) / 100;
   // 3. Fallback to role-based price
   const rolePrice = await one('SELECT price FROM product_prices WHERE product_id=$1 AND role=$2 AND user_id IS NULL ORDER BY id DESC', [productId, role]);
   return rolePrice ? parseFloat(rolePrice.price) : null;

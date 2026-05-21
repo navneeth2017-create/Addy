@@ -168,7 +168,10 @@ function showEditProduct(id) {
   document.getElementById('pf-name').value = p.name;
   document.getElementById('pf-sku').value = p.sku || '';
   const cpEl = document.getElementById('pf-cost-price');
-  if (cpEl) { cpEl.value = p.cost_price || ''; updateTierPricePreview(); }
+  if (cpEl) cpEl.value = p.cost_price || '';
+  const rpEl = document.getElementById('pf-retail-price');
+  if (rpEl) rpEl.value = p.retail_price || '';
+  updateTierPricePreview();
   document.getElementById('pf-description').value = p.description || '';
   document.getElementById('pf-stock').value = p.stock;
   document.getElementById('pf-active').value = String(p.active ?? 1);
@@ -312,6 +315,7 @@ async function handleProductSubmit(e) {
     name: document.getElementById('pf-name').value.trim(),
     sku: document.getElementById('pf-sku').value.trim(),
     cost_price: parseFloat(document.getElementById('pf-cost-price')?.value || 0),
+    retail_price: parseFloat(document.getElementById('pf-retail-price')?.value || 0),
     description: document.getElementById('pf-description').value.trim(),
     stock: parseInt(document.getElementById('pf-stock').value) || 0,
     active: parseInt(document.getElementById('pf-active').value),
@@ -336,19 +340,44 @@ async function handleProductSubmit(e) {
 }
 
 function updateTierPricePreview() {
-  const cp = parseFloat(document.getElementById('pf-cost-price')?.value || 0);
-  const t1El = document.getElementById('preview-tier1');
-  const t2El = document.getElementById('preview-tier2');
-  const t3El = document.getElementById('preview-tier3');
-  if (!cp || cp <= 0) {
-    if (t1El) t1El.textContent = '—';
-    if (t2El) t2El.textContent = '—';
-    if (t3El) t3El.textContent = '—';
+  const retail = parseFloat(document.getElementById('pf-retail-price')?.value || 0);
+  const myCost = parseFloat(document.getElementById('pf-cost-price')?.value || 0);
+
+  const els = {
+    t1: document.getElementById('preview-tier1'),
+    t2: document.getElementById('preview-tier2'),
+    t3: document.getElementById('preview-tier3'),
+    t1p: document.getElementById('preview-tier1-profit'),
+    t2p: document.getElementById('preview-tier2-profit'),
+    t3p: document.getElementById('preview-tier3-profit'),
+  };
+
+  if (!retail || retail <= 0) {
+    Object.values(els).forEach(el => { if (el) el.textContent = '—'; });
     return;
   }
-  if (t1El) t1El.textContent = '$' + (cp * 0.65).toFixed(2);
-  if (t2El) t2El.textContent = '$' + (cp * 0.70).toFixed(2);
-  if (t3El) t3El.textContent = '$' + (cp * 0.75).toFixed(2);
+
+  // DSD pays = retail × (1 - their margin) — they make their % when selling at retail
+  const t1pays = retail * 0.65;  // Tier 1: 35% margin
+  const t2pays = retail * 0.70;  // Tier 2: 30% margin
+  const t3pays = retail * 0.75;  // Tier 3: 25% margin
+
+  if (els.t1) els.t1.textContent = '$' + t1pays.toFixed(2) + ' / unit';
+  if (els.t2) els.t2.textContent = '$' + t2pays.toFixed(2) + ' / unit';
+  if (els.t3) els.t3.textContent = '$' + t3pays.toFixed(2) + ' / unit';
+
+  // Show admin profit per tier if cost is entered
+  if (myCost > 0) {
+    const profit = (v) => {
+      const p = v - myCost;
+      return (p >= 0 ? '+' : '') + '$' + p.toFixed(2) + ' your profit';
+    };
+    if (els.t1p) els.t1p.textContent = profit(t1pays);
+    if (els.t2p) els.t2p.textContent = profit(t2pays);
+    if (els.t3p) els.t3p.textContent = profit(t3pays);
+  } else {
+    [els.t1p, els.t2p, els.t3p].forEach(el => { if (el) el.textContent = ''; });
+  }
 }
 
 async function deleteProduct(id) {

@@ -409,11 +409,19 @@
 </div>
         </div>
 
-        <div class="form-group">
-          <label style="font-size:13px;font-weight:600;color:var(--text);">Your Cost Price ($) <span style="font-weight:400;color:var(--text-muted);">— tier prices calculate automatically</span></label>
-          <input type="number" step="0.01" min="0" id="pf-cost-price" placeholder="e.g. 10.00"
-            oninput="updateTierPricePreview()"
-            style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;box-sizing:border-box;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:4px;">
+          <div class="form-group">
+            <label style="font-size:13px;font-weight:600;color:var(--text);">Retail Price ($) <span style="font-weight:400;color:var(--text-muted);">what DSDs sell for</span></label>
+            <input type="number" step="0.01" min="0" id="pf-retail-price" placeholder="e.g. 10.00"
+              oninput="updateTierPricePreview()"
+              style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;box-sizing:border-box;">
+          </div>
+          <div class="form-group">
+            <label style="font-size:13px;font-weight:600;color:var(--text);">Your Cost ($) <span style="font-weight:400;color:var(--text-muted);">what you paid</span></label>
+            <input type="number" step="0.01" min="0" id="pf-cost-price" placeholder="e.g. 4.00"
+              oninput="updateTierPricePreview()"
+              style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;box-sizing:border-box;">
+          </div>
         </div>
 
         <div style="background:var(--bg-secondary);border-radius:10px;padding:16px;margin-bottom:16px;">
@@ -421,16 +429,19 @@
           <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Prices are auto-calculated from cost price. Individual DSD overrides can be set per user.</p>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
             <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
-              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 1 · 35%</div>
-              <div id="preview-tier1" style="font-size:18px;font-weight:800;color:var(--green);">—</div>
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 1 · 35% margin</div>
+              <div id="preview-tier1" style="font-size:16px;font-weight:800;color:var(--green);">—</div>
+              <div id="preview-tier1-profit" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
             </div>
             <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
-              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 2 · 30%</div>
-              <div id="preview-tier2" style="font-size:18px;font-weight:800;color:var(--accent);">—</div>
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 2 · 30% margin</div>
+              <div id="preview-tier2" style="font-size:16px;font-weight:800;color:var(--accent);">—</div>
+              <div id="preview-tier2-profit" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
             </div>
             <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
-              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 3 · 25%</div>
-              <div id="preview-tier3" style="font-size:18px;font-weight:800;color:var(--text-secondary);">—</div>
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 3 · 25% margin</div>
+              <div id="preview-tier3" style="font-size:16px;font-weight:800;color:var(--text-secondary);">—</div>
+              <div id="preview-tier3-profit" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
             </div>
           </div>
         </div>
