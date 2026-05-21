@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ADDY Distribution — Energy &amp; Focus Supplements</title>
-  <link rel="icon" href="/images/favicon-cow.ico" type="image/x-icon">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
   <style>
@@ -29,20 +29,15 @@
     }
     nav.scrolled { border-color: var(--border); background: rgba(255,255,255,0.97); }
     .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-    @keyframes haloFloat {
-      0%, 100% { transform: translateX(-50%) translateY(0px); opacity: 0.9; }
       50%       { transform: translateX(-50%) translateY(-4px); opacity: 1; }
     }
-    @keyframes wingFlutter {
-      0%   { transform: scale(1) rotate(0deg); }
       15%  { transform: scale(1.06) rotate(-2deg); }
       30%  { transform: scale(1.08) rotate(2deg); }
       45%  { transform: scale(1.06) rotate(-1.5deg); }
       60%  { transform: scale(1.04) rotate(1deg); }
       100% { transform: scale(1) rotate(0deg); }
     }
-    .wing-flutter { animation: wingFlutter 0.5s ease-out forwards; }
-    .wc-logo-wrap:hover .wc-logo-img { filter: brightness(1.05); }
+
       width: 36px; height: 36px; background: var(--blue); border-radius: 9px;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
@@ -252,13 +247,7 @@
 
   <nav id="nav">
     <a href="/index.html" class="nav-logo" style="text-decoration:none;">
-      <div class="wc-logo-wrap" onclick="cowWingFlutter(this)" style="position:relative;display:inline-flex;align-items:center;height:90px;">
-        <svg viewBox="0 0 34 8" style="position:absolute;top:4px;left:50%;transform:translateX(-50%);width:26px;animation:haloFloat 2s ease-in-out infinite;">
-          <ellipse cx="17" cy="4" rx="15" ry="3.2" fill="none" stroke="#FFD700" stroke-width="2" opacity="0.95"/>
-          <ellipse cx="17" cy="4" rx="15" ry="3.2" fill="none" stroke="#FFA500" stroke-width="0.8" opacity="0.4"/>
-        </svg>
-        <img src="https://addyproducts.com/wp-content/uploads/2025/03/WGCPADDY-Logo-300x165.png" alt="ADDY" class="wc-logo-img" style="height:90px;width:auto;object-fit:contain;" draggable="false">
-      </div>
+      <img src="https://addyproducts.com/wp-content/uploads/2025/03/WGCPADDY-Logo-300x165.png" alt="ADDY" style="height:70px;width:auto;object-fit:contain;">
     </a>
     <div class="nav-actions">
       <a href="/login.html" class="btn-nav-login">Log In</a>
@@ -431,14 +420,7 @@
       });
     });
 
-    // Products — load live from API so admin changes reflect here
-    function cowWingFlutter(el) {
-      const img = el.querySelector('.wc-logo-img');
-      if (!img) return;
-      img.classList.remove('wing-flutter');
-      void img.offsetWidth;
-      img.classList.add('wing-flutter');
-      img.addEventListener('animationend', () => img.classList.remove('wing-flutter'), { once: true });
+    // Products — load live from API so admin changes reflect here);
     }
 
     async function loadLandingProducts() {

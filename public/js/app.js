@@ -197,24 +197,9 @@ function renderLogo(container) {
   const href = token ? `/dashboard-${dashFile}.html?t=${token}` : '/login.html';
   container.innerHTML = `
     <a href="${href}" style="display:flex;align-items:center;text-decoration:none;cursor:pointer;" title="Go to dashboard">
-      <div class="wc-logo-wrap" onclick="cowWingFlutter(this)" style="position:relative;display:inline-flex;align-items:center;height:100px;">
-        <svg class="wc-halo" viewBox="0 0 34 8" style="position:absolute;top:4px;left:50%;transform:translateX(-50%);width:26px;animation:haloFloat 2s ease-in-out infinite;">
-          <ellipse cx="17" cy="4" rx="15" ry="3.2" fill="none" stroke="#FFD700" stroke-width="2" opacity="0.95"/>
-          <ellipse cx="17" cy="4" rx="15" ry="3.2" fill="none" stroke="#FFA500" stroke-width="0.8" opacity="0.4"/>
-        </svg>
-        <img src="/images/logo.png" alt="ADDY DSD Portal" class="wc-logo-img" style="height:100px;width:auto;object-fit:contain;transition:transform 0.1s;" draggable="false">
-      </div>
-    </a>`;
+      <img src="https://addyproducts.com/wp-content/uploads/2025/03/WGCPADDY-Logo-300x165.png" alt="ADDY" style="height:56px;width:auto;object-fit:contain;margin:4px 0;">
 }
 
-function cowWingFlutter(el) {
-  const img = el.querySelector('.wc-logo-img');
-  if (!img) return;
-  img.classList.remove('wing-flutter');
-  void img.offsetWidth;
-  img.classList.add('wing-flutter');
-  img.addEventListener('animationend', () => img.classList.remove('wing-flutter'), { once: true });
-}
 
 // --- Dark Mode ---
 function initTheme() {

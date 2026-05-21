@@ -295,44 +295,27 @@ app.post('/api/login', rateLimit(10, 60 * 1000), async (req, res) => {
 
 app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
   try {
-    const { email, password, name, phone, role, store_name, address, city, state, zip, category } = req.body;
-    if (!email || !password || !name || !role) return res.status(400).json({ error: 'Email, password, name, and role are required' });
-    if (!['dsd','dsd','rep'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    const { email, password, name, phone, referral_code } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: 'Name, email and password are required' });
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
     const existing = await one('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (existing) return res.status(409).json({ error: 'An account with this email already exists' });
 
-    const hash = bcrypt.hashSync(password, 10);
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      if (role === 'dsd') {
-        if (!store_name) throw new Error('Store name is required');
-        const sr = await client.query(
-          `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,0,0,0,'pending') RETURNING id`,
-          [store_name, name, email.toLowerCase(), address||'', city||'', state||'', zip||'', category||'General']
-        );
-        const storeId = sr.rows[0].id;
-        const ur = await client.query(
-          `INSERT INTO users (email,password_hash,role,store_id,name,phone,status) VALUES ($1,$2,$3,$4,$5,$6,'pending') RETURNING id`,
-          [email.toLowerCase(), hash, 'dsd', storeId, name, phone||'']
-        );
-        await client.query('INSERT INTO owner_stores (owner_id,store_id) VALUES ($1,$2)', [ur.rows[0].id, storeId]);
-      } else {
-        const ur = await client.query(
-          `INSERT INTO users (email,password_hash,role,name,phone,status) VALUES ($1,$2,$3,$4,$5,'pending') RETURNING id`,
-          [email.toLowerCase(), hash, role, name, phone||'']
-        );
-        if (role === 'rep') {
-          await client.query('INSERT INTO reps (user_id,sponsor_id,commission_rate) VALUES ($1,NULL,0.10)', [ur.rows[0].id]);
-        }
-      }
-      await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
+    // Resolve referral code (email of recruiter)
+    let referredById = null;
+    if (referral_code && referral_code.trim()) {
+      const recruiter = await one("SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND role='dsd'", [referral_code.trim()]);
+      if (recruiter) referredById = recruiter.id;
+    }
 
-    await logActivity('signup_request', `${name} (${role})`, email.toLowerCase());
+    const hash = bcrypt.hashSync(password, 10);
+    // New DSDs default to Tier 3 — admin promotes them
+    await q(
+      "INSERT INTO users (email,password_hash,role,name,phone,status,tier,referred_by) VALUES ($1,$2,'dsd',$3,$4,'pending',3,$5)",
+      [email.toLowerCase(), hash, name, phone||'', referredById]
+    );
+
+    await logActivity('signup_request', `${name} (DSD)`, email.toLowerCase());
 
     // Email notification
     const roleLabel = role === 'dsd' ? 'DSD' : role === 'dsd' ? 'DSD' : 'DSD';
