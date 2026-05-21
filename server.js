@@ -579,6 +579,8 @@ app.get('/api/stores', authenticate, async (req, res) => {
              SUM(oi.quantity) as units
       FROM order_items oi
       LEFT JOIN products p ON p.id = oi.product_id
+      LEFT JOIN orders o ON o.id = oi.order_id
+      WHERE o.status != 'cancelled' AND o.payment_status != 'cancelled'
       GROUP BY p.name ORDER BY revenue DESC LIMIT 10
     `);
     // Orders over time (last 30 days)
@@ -586,6 +588,7 @@ app.get('/api/stores', authenticate, async (req, res) => {
       SELECT DATE(created_at) as date, COUNT(*) as orders, SUM(total) as revenue
       FROM orders
       WHERE created_at >= NOW() - INTERVAL '30 days'
+        AND status != 'cancelled' AND payment_status != 'cancelled'
       GROUP BY DATE(created_at) ORDER BY date ASC
     `);
 
@@ -1351,9 +1354,10 @@ app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
     const invoice = await one('SELECT * FROM invoices WHERE order_id=$1', [req.params.orderId]);
     if (!invoice) return res.status(404).send('Invoice not found');
     const items = await all('SELECT oi.*,COALESCE(p.name,\'[Deleted Product]\') as name,COALESCE(p.sku,\'—\') as sku FROM order_items oi LEFT JOIN products p ON p.id=oi.product_id WHERE oi.order_id=$1', [req.params.orderId]);
-    const statusColor = invoice.payment_status === 'paid' ? '#16a34a' : invoice.payment_status === 'overdue' ? '#dc2626' : '#d97706';
-    const statusBg = invoice.payment_status === 'paid' ? '#f0fdf4' : invoice.payment_status === 'overdue' ? '#fef2f2' : '#fffbeb';
-    const statusLabel = invoice.payment_status.charAt(0).toUpperCase() + invoice.payment_status.slice(1);
+    const isCancelled = invoice.payment_status === 'cancelled';
+    const statusColor = invoice.payment_status === 'paid' ? '#16a34a' : isCancelled ? '#6b7280' : invoice.payment_status === 'overdue' ? '#dc2626' : '#d97706';
+    const statusBg = invoice.payment_status === 'paid' ? '#f0fdf4' : isCancelled ? '#f1f5f9' : invoice.payment_status === 'overdue' ? '#fef2f2' : '#fffbeb';
+    const statusLabel = isCancelled ? 'CANCELLED' : invoice.payment_status.charAt(0).toUpperCase() + invoice.payment_status.slice(1);
     const itemRows = items.map(i => `
       <tr>
         <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;">${i.name}${i.sku ? `<span style="color:#94a3b8;font-size:11px;display:block;">${i.sku}</span>` : ''}</td>
@@ -1699,6 +1703,10 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
     const order = await one('SELECT * FROM orders WHERE id=$1', [req.params.id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
     await q('UPDATE orders SET status=$1 WHERE id=$2', [status, req.params.id]);
+    if (status === 'cancelled') {
+      await q("UPDATE invoices SET payment_status='cancelled' WHERE order_id=$1", [req.params.id]);
+      await q("UPDATE orders SET payment_status='cancelled' WHERE id=$1", [req.params.id]);
+    }
     if (status === 'delivered' && order.status !== 'delivered' && order.store_id) {
       const items = await all('SELECT * FROM order_items WHERE order_id=$1', [req.params.id]);
       for (const item of items) {

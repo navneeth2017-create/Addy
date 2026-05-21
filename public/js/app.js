@@ -1722,62 +1722,6 @@ function filterStores(val) {
   renderDSDTable(filtered);
 }
 
-// ==========================================
-// REP DASHBOARD
-// ==========================================
-async function loadDSDDashboard() {
-  if (!requireAuth(['rep'])) return;
-  initTheme();
-  initSessionTimeout();
-  document.getElementById('user-role').className = 'role-badge rep';
-  renderLogo(document.getElementById('logo-container'));
-
-  const data = await apiFetch('/api/reps');
-  if (!data || !data.rep) return;
-
-  animateValue(document.getElementById('stat-stores'), data.storeCount);
-  animateCurrency(document.getElementById('stat-store-rev'), data.storeRevenue);
-  animateCurrency(document.getElementById('stat-my-commission'), data.myCommission);
-  animateCurrency(document.getElementById('stat-sponsor-commission'), data.sponsorCommission);
-  animateCurrency(document.getElementById('stat-total-earnings'), data.totalEarnings);
-
-  // My stores table
-  const storesTbody = document.getElementById('my-stores-tbody');
-  if (!data.stores || !data.stores.length) {
-    storesTbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted);">No stores assigned yet</td></tr>';
-  } else {
-    storesTbody.innerHTML = data.stores.map(s => `
-      <tr>
-        <td>${esc(s.name)}</td>
-        <td>${esc(s.category)}</td>
-        <td class="revenue-cell">${formatCurrency(s.monthly_revenue)}</td>
-        <td class="revenue-cell">${formatCurrency(s.monthly_revenue * 0.10)}</td>
-        <td><a href="/shop.html?store_id=${s.id}" style="display:inline-block;padding:5px 12px;background:#2563eb;color:#fff;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;">🛒 Buy</a></td>
-      </tr>
-    `).join('');
-  }
-
-  // Downline reps table
-  const downlineTbody = document.getElementById('downline-tbody');
-  if (!data.downline || !data.downline.length) {
-    downlineTbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);">No reps enrolled yet. Use "+ Enroll New DSD" to add one.</td></tr>';
-  } else {
-    downlineTbody.innerHTML = data.downline.map(d => {
-      const theirCommission = d.store_revenue * d.commission_rate;
-      const myBonus = theirCommission * 0.05;
-      return `
-        <tr>
-          <td>${esc(d.name)}</td>
-          <td>${esc(d.email)}</td>
-          <td>${d.store_count}</td>
-          <td class="revenue-cell">${formatCurrency(theirCommission)}</td>
-          <td class="revenue-cell">${formatCurrency(myBonus)}</td>
-        </tr>
-      `;
-    }).join('');
-  }
-}
-
 function showEnrollModal() {
   document.getElementById('enroll-modal').classList.add('active');
 }
