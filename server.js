@@ -194,14 +194,21 @@ async function migrate() {
     { email: 'demo@addy.com',    password: 'addy-dsd-2026',   role: 'dsd',   name: 'Demo DSD', tier: 1 },
   ];
   for (const acc of demoAccounts) {
+    const hash = bcrypt.hashSync(acc.password, 10);
     const exists = await one('SELECT id FROM users WHERE email=$1', [acc.email]);
     if (!exists) {
-      const hash = bcrypt.hashSync(acc.password, 10);
       await q(
         "INSERT INTO users (email,name,phone,role,password_hash,status,tier) VALUES ($1,$2,$3,$4,$5,'active',$6)",
         [acc.email, acc.name, '', acc.role, hash, acc.tier]
       );
       console.log('✅ Demo account created: ' + acc.email);
+    } else {
+      // Always sync password + status so demo accounts always work
+      await q(
+        "UPDATE users SET password_hash=$1,status='active',role=$2,tier=$3 WHERE email=$4",
+        [hash, acc.role, acc.tier, acc.email]
+      );
+      console.log('✅ Demo account synced: ' + acc.email);
     }
   }
 
