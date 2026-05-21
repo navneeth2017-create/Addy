@@ -121,7 +121,7 @@ async function migrate() {
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_id TEXT');
     await q('ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(10,2) NOT NULL DEFAULT 0');
     await q('ALTER TABLE stores ADD COLUMN IF NOT EXISTS exclusive_rep_id INTEGER REFERENCES users(id)');
-    await q('ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_approval_status TEXT NOT NULL DEFAULT 'approved'');
+    await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_approval_status TEXT NOT NULL DEFAULT 'approved'");
     console.log('✅ ADDY DSD tier/commission migrations applied');
   } catch(e) { console.log('ℹ️  ADDY migrations already up to date:', e.message); }
 
@@ -842,7 +842,7 @@ app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req
       await q('DELETE FROM product_prices WHERE user_id=$1 AND product_id=$2', [req.params.id, product_id]);
     } else {
       await q(
-        'INSERT INTO product_prices (product_id, user_id, role, price) VALUES ($1,$2,'dsd',$3) ON CONFLICT (product_id, user_id, role) DO UPDATE SET price=EXCLUDED.price',
+        "INSERT INTO product_prices (product_id, user_id, role, price) VALUES ($1,$2,'dsd',$3) ON CONFLICT (product_id, user_id, role) DO UPDATE SET price=EXCLUDED.price",
         [product_id, req.params.id, parseFloat(price)]
       );
     }
@@ -1807,7 +1807,7 @@ app.post('/api/payouts/request', authenticate, authorize('dsd'), async (req, res
     const user = await one('SELECT commission_balance, name, email FROM users WHERE id=$1', [req.user.id]);
     const balance = parseFloat(user.commission_balance || 0);
     if (balance <= 0) return res.status(400).json({ error: 'No commission balance available' });
-    const existing = await one('SELECT id FROM payout_requests WHERE user_id=$1 AND status='pending'', [req.user.id]);
+    const existing = await one("SELECT id FROM payout_requests WHERE user_id=$1 AND status='pending'", [req.user.id]);
     if (existing) return res.status(400).json({ error: 'You already have a pending payout request' });
     const pr = await one(
       'INSERT INTO payout_requests (user_id, amount) VALUES ($1,$2) RETURNING id',
@@ -1859,7 +1859,7 @@ app.patch('/api/payouts/:id/approve', authenticate, authorize('admin'), async (r
     // Deduct from commission balance
     await q('UPDATE users SET commission_balance=commission_balance-$1 WHERE id=$2', [pr.amount, pr.user_id]);
     // Mark related commissions as paid
-    await q('UPDATE commissions SET status='paid' WHERE earner_id=$1 AND status='pending'', [pr.user_id]);
+    await q("UPDATE commissions SET status='paid' WHERE earner_id=$1 AND status='pending'", [pr.user_id]);
     await logActivity('payout_approved', `$${parseFloat(pr.amount).toFixed(2)} to ${pr.name || pr.email}`, req.user.email);
     res.json({ success: true, stripe_transfer_id: stripeTransferId });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1870,7 +1870,7 @@ app.patch('/api/payouts/:id/reject', authenticate, authorize('admin'), async (re
   try {
     const pr = await one('SELECT * FROM payout_requests WHERE id=$1', [req.params.id]);
     if (!pr || pr.status !== 'pending') return res.status(400).json({ error: 'Cannot reject this request' });
-    await q('UPDATE payout_requests SET status='rejected',admin_note=$1,processed_at=NOW() WHERE id=$2', [req.body.note||'', req.params.id]);
+    await q("UPDATE payout_requests SET status='rejected',admin_note=$1,processed_at=NOW() WHERE id=$2", [req.body.note||'', req.params.id]);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1884,7 +1884,7 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
     const existing = await one('SELECT id,exclusive_rep_id FROM stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [name, city||'']);
     if (existing?.exclusive_rep_id) return res.status(409).json({ error: 'This store is already claimed by another rep' });
     const store = await one(
-      'INSERT INTO stores (name,address,city,state,zip,phone,email,category,store_approval_status,exclusive_rep_id,monthly_revenue,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,0,'active') RETURNING id',
+      "INSERT INTO stores (name,address,city,state,zip,phone,email,category,store_approval_status,exclusive_rep_id,monthly_revenue,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,0,'active') RETURNING id",
       [name, address||'', city||'', state||'', zip||'', phone||'', email||'', category||'General', req.user.id]
     );
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
@@ -1919,7 +1919,7 @@ app.get('/api/my-stores', authenticate, authorize('dsd'), async (req, res) => {
 app.get('/api/stores/pending-claims', authenticate, authorize('admin'), async (req, res) => {
   try {
     const stores = await all(
-      'SELECT s.*, u.name as rep_name, u.email as rep_email FROM stores s JOIN users u ON u.id=s.exclusive_rep_id WHERE s.store_approval_status='pending' ORDER BY s.id DESC'
+      "SELECT s.*, u.name as rep_name, u.email as rep_email FROM stores s JOIN users u ON u.id=s.exclusive_rep_id WHERE s.store_approval_status='pending' ORDER BY s.id DESC"
     );
     res.json(stores);
   } catch(e) { res.status(500).json({ error: e.message }); }
