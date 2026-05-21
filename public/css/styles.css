@@ -1179,4 +1179,4 @@ input[type="checkbox"] {
 }
 
 /* ── ADDY LOGO ────────────────────────────────────────────────────────────── */
-.addy-logo-float { display: block; }
+.addy-logo-float { display: inline-block; }

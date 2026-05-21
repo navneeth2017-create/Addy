@@ -250,10 +250,7 @@ async function calculateAndSaveCommissions(orderId, buyerId, orderTotal) {
 }
 
 // ── FAVICON ───────────────────────────────────────────────────────────────────
-app.get('/favicon.svg', (req, res) => {
-  res.setHeader('Content-Type', 'image/svg+xml');
-  res.send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="6" fill="#2563eb"/><path d="M12 4L4 8V16L12 20L20 16V8L12 4Z" stroke="white" stroke-width="1.5" fill="none"/><path d="M4 8L12 12M12 12L20 8M12 12V20" stroke="white" stroke-width="1.5"/></svg>`);
-});
+// favicon served as static file from public/favicon.svg
 
 // ── PROTECTED DASHBOARD SERVING ───────────────────────────────────────────────
 function serveDashboard(allowedRoles) {
