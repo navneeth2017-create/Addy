@@ -180,18 +180,39 @@ async function migrate() {
   }
 
   // Create production admin account if it doesn't exist
-  const adminEmail = process.env.ADMIN_EMAIL || 'admin@addydsds.com';
+  // ── Demo + Admin accounts ─────────────────────────────────────────────────
+  const demoAccounts = [
+    { email: 'admin@addy.com',   password: 'addy-admin-2026', role: 'admin', name: 'Admin',    tier: 1 },
+    { email: 'demo@addy.com',    password: 'addy-dsd-2026',   role: 'dsd',   name: 'Demo DSD', tier: 1 },
+  ];
+  for (const acc of demoAccounts) {
+    const exists = await one('SELECT id FROM users WHERE email=$1', [acc.email]);
+    if (!exists) {
+      const hash = bcrypt.hashSync(acc.password, 10);
+      await q(
+        "INSERT INTO users (email,name,phone,role,password_hash,status,tier) VALUES ($1,$2,'','$3',$4,'active',$5)".replace("'$3'", "'" + acc.role + "'"),
+        [acc.email, acc.name, hash, acc.tier]
+      );
+      console.log('✅ Demo account created: ' + acc.email);
+    }
+  }
+
+  // ── Production admin via env vars ──────────────────────────────────────────
+  const adminEmail = process.env.ADMIN_EMAIL;
   const adminPassword = process.env.ADMIN_PASSWORD;
-  const prodAdmin = await one('SELECT id FROM users WHERE email=$1', [adminEmail]);
-  if (!prodAdmin && adminPassword) {
+  if (adminEmail && adminPassword) {
+    const existing = await one('SELECT id FROM users WHERE email=$1', [adminEmail]);
     const hash = bcrypt.hashSync(adminPassword, 10);
-    await q(
-      "INSERT INTO users (email, name, phone, role, password_hash, status) VALUES ($1,$2,$3,$4,$5,'active')",
-      [adminEmail, 'Admin', '', 'admin', hash]
-    );
-    console.log('✅ Production admin account created: ' + adminEmail);
-  } else if (!prodAdmin && !adminPassword) {
-    console.warn('⚠️  No admin account exists and ADMIN_PASSWORD env var not set. Set it in Railway to auto-create admin.');
+    if (!existing) {
+      await q(
+        "INSERT INTO users (email,name,phone,role,password_hash,status,tier) VALUES ($1,'Admin','','admin',$2,'active',1)",
+        [adminEmail, hash]
+      );
+      console.log('✅ Production admin created: ' + adminEmail);
+    } else {
+      await q("UPDATE users SET password_hash=$1,role='admin',status='active' WHERE email=$2", [hash, adminEmail]);
+      console.log('✅ Production admin password synced: ' + adminEmail);
+    }
   }
 }
 
