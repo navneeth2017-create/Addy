@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 100" width="280" height="100">
+  <defs>
+    <linearGradient id="navyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0F1E3C"/>
+      <stop offset="100%" style="stop-color:#1a3160"/>
+    </linearGradient>
+    <linearGradient id="blueAccent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2563EB"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background pill -->
+  <rect x="0" y="8" width="280" height="84" rx="12" fill="url(#navyGrad)"/>
+
+  <!-- Left accent bar -->
+  <rect x="0" y="8" width="5" height="84" rx="3" fill="url(#blueAccent)"/>
+
+  <!-- ADDY text -->
+  <text x="22" y="68" font-family="'Arial Black', 'Arial Bold', Arial" font-weight="900"
+        font-size="52" fill="white" letter-spacing="-1">ADDY</text>
+
+  <!-- Registered mark -->
+  <text x="196" y="34" font-family="Arial" font-size="14" fill="rgba(255,255,255,0.6)">®</text>
+
+  <!-- DSD badge -->
+  <rect x="210" y="46" width="58" height="28" rx="6" fill="url(#blueAccent)"/>
+  <text x="239" y="65" font-family="'Arial Black', Arial" font-weight="900"
+        font-size="13" fill="white" text-anchor="middle" letter-spacing="1">DSD</text>
+
+  <!-- Tagline -->
+  <text x="22" y="84" font-family="Arial" font-size="9" fill="rgba(255,255,255,0.45)"
+        letter-spacing="2.5" font-weight="600">PARTNER PORTAL</text>
+</svg>

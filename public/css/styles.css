@@ -1178,3 +1178,13 @@ input[type="checkbox"] {
   text-align: center; max-width: 80%; line-height: 1.3;
 }
 
+/* ── ADDY LOGO FLOAT ANIMATION ───────────────────────────────────────────── */
+@keyframes addyFloat {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-7px); }
+}
+
+.addy-logo-float {
+  animation: addyFloat 3.5s ease-in-out infinite;
+  display: block;
+}
