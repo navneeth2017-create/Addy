@@ -303,10 +303,7 @@ function serveDashboard(allowedRoles) {
   };
 }
 app.get('/dashboard-admin.html', serveDashboard(['admin']));
-app.get('/dashboard-dsd.html', serveDashboard(['investor']));
-app.get('/dashboard-dsd.html', serveDashboard(['dsd']));
-app.get('/dashboard-dsd.html', serveDashboard(['dsd']));
-app.get('/dashboard-dsd.html', serveDashboard(['rep']));
+app.get('/dashboard-dsd.html', serveDashboard(['dsd', 'investor', 'rep']));
 
 app.use(express.static(path.join(__dirname, 'public'), {
   index: 'index.html',
