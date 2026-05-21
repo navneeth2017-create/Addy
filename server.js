@@ -1783,6 +1783,43 @@ app.patch('/api/inventory/:store_id/:product_id', authenticate, async (req, res)
 });
 
 
+// ── IMPORT PRODUCTS FROM WOWCOW ──────────────────────────────────────────────
+app.post('/api/products/import-from-wowcow', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    // Read from WowCow's public schema directly
+    const wowcowProducts = await all(
+      "SELECT id, name, description, image_url, sku FROM public.products WHERE active=1 ORDER BY name"
+    );
+
+    if (!wowcowProducts.length) {
+      return res.json({ success: true, imported: 0, skipped: 0, message: 'No active products found on WowCow' });
+    }
+
+    let imported = 0, skipped = 0;
+    for (const p of wowcowProducts) {
+      // Check if already imported (match by SKU or name)
+      const existing = await one(
+        'SELECT id FROM products WHERE sku=$1 OR LOWER(name)=LOWER($2)',
+        [p.sku || '', p.name]
+      );
+      if (existing) { skipped++; continue; }
+
+      // Import with inactive status and no pricing — admin sets cost price before activating
+      await q(
+        'INSERT INTO products (name,description,image_url,sku,stock,cost_price,active) VALUES ($1,$2,$3,$4,0,0,0)',
+        [p.name, p.description || '', p.image_url || '', p.sku || '']
+      );
+      imported++;
+    }
+
+    await logActivity('imported_products', `${imported} products imported from WowCow`, req.user.email);
+    res.json({ success: true, imported, skipped, message: `Imported ${imported} product${imported !== 1 ? 's' : ''} — set cost prices and activate to make available to DSDs` });
+  } catch(e) {
+    console.error('Import error:', e.message);
+    res.status(500).json({ error: 'Import failed: ' + e.message });
+  }
+});
+
 // ── ADDY DSD TIER & COMMISSION ENDPOINTS ──────────────────────────────────────
 
 // Update DSD rep tier (admin only)

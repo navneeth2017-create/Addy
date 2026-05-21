@@ -12,6 +12,24 @@ const PRODUCT_TIERS = [
 
 let _preorderRefreshInterval = null;
 
+async function importFromWowCow() {
+  if (!confirm('Import all active products from WowCow?\n\nThey will be added as INACTIVE with no pricing set. You can set cost prices and activate them before DSDs can see them.')) return;
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳ Importing...';
+
+  const result = await apiFetch('/api/products/import-from-wowcow', { method: 'POST' });
+
+  btn.disabled = false;
+  btn.textContent = '⬇ Import from WowCow';
+
+  if (result && result.success) {
+    showToast(result.message, 'success');
+    if (result.imported > 0) loadProductsTab();
+  }
+}
+
 async function loadProductsTab() {
   const products = await apiFetch('/api/products/all');
   _allProducts = products || [];
