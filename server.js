@@ -1813,6 +1813,51 @@ app.patch('/api/inventory/:store_id/:product_id', authenticate, async (req, res)
 });
 
 
+// ── SEARCH WOWCOW STORES (for ADDY claim modal) ─────────────────────────────
+app.get('/api/wowcow-stores/search', authenticate, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.length < 2) return res.json([]);
+    const stores = await all(
+      "SELECT id, name, address, city, state, zip, category FROM public.stores WHERE LOWER(name) LIKE LOWER($1) OR LOWER(city) LIKE LOWER($1) LIMIT 10",
+      [`%${q}%`]
+    );
+    res.json(stores);
+  } catch(e) { res.json([]); }
+});
+
+// When store claim approved, sync back to public.stores so WowCow can see it
+app.patch('/api/stores/:id/approve-claim', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { approved } = req.body;
+    const store = await one('SELECT * FROM stores WHERE id=$1', [req.params.id]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    await q('UPDATE stores SET store_approval_status=$1 WHERE id=$2', [approved ? 'approved' : 'rejected', req.params.id]);
+    if (approved) {
+      // Sync to WowCow's public.stores so both platforms see it
+      const exists = await one('SELECT id FROM public.stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [store.name, store.city||'']);
+      if (!exists) {
+        await q(
+          "INSERT INTO public.stores (name,address,city,state,zip,category,status,monthly_revenue) VALUES ($1,$2,$3,$4,$5,$6,'active',0) ON CONFLICT DO NOTHING",
+          [store.name, store.address||'', store.city||'', store.state||'', store.zip||'', store.category||'General']
+        );
+      }
+    }
+    await logActivity(approved ? 'approved_store' : 'rejected_store', store.name, req.user.email);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Map data endpoint — returns all approved stores with geocodable addresses
+app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const stores = await all(
+      "SELECT id, name, address, city, state, zip, category, store_approval_status, exclusive_rep_id FROM stores WHERE store_approval_status='approved' ORDER BY name"
+    );
+    res.json(stores);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── IMPORT PRODUCTS FROM WOWCOW ──────────────────────────────────────────────
 app.post('/api/products/import-from-wowcow', authenticate, authorize('admin'), async (req, res) => {
   try {
@@ -1964,18 +2009,6 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
     );
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
     res.json({ success: true, id: store.id, message: 'Store submitted for approval' });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// Admin approve/reject store claim
-app.patch('/api/stores/:id/approve-claim', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const { approved } = req.body;
-    const store = await one('SELECT * FROM stores WHERE id=$1', [req.params.id]);
-    if (!store) return res.status(404).json({ error: 'Store not found' });
-    await q('UPDATE stores SET store_approval_status=$1 WHERE id=$2', [approved ? 'approved' : 'rejected', req.params.id]);
-    await logActivity(approved ? 'approved_store' : 'rejected_store', store.name, req.user.email);
-    res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

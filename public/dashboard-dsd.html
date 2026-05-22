@@ -116,6 +116,13 @@
           <h2>Claim a Store</h2>
           <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Submit a store for exclusive assignment. Admin will review and approve your claim.</p>
           <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="position:relative;">
+              <input type="text" id="cs-search" placeholder="🔍 Search existing stores from WowCow network..."
+                oninput="searchWowCowStores(this.value)"
+                style="width:100%;padding:10px;border:2px solid var(--accent);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;">
+              <div id="wc-store-results" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.15);"></div>
+            </div>
+            <div style="text-align:center;font-size:11px;color:var(--text-muted);">— or fill in manually below —</div>
             <input type="text" id="cs-name" placeholder="Store name *" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
             <input type="text" id="cs-address" placeholder="Address" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
             <div style="display:grid;grid-template-columns:1fr 80px 100px;gap:8px;">
