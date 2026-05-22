@@ -904,35 +904,41 @@ app.get('/api/pending-users', authenticate, authorize('admin'), async (req, res)
 });
 
 // Set/change pricing tier for any user
-async function applyPricingTier(userId, tier, customPrices) {
-  const products = await all('SELECT id FROM products WHERE active=1');
-  for (const p of products) {
-    let price = null;
-    if (tier === 'custom' && customPrices && customPrices[p.id] !== undefined) {
-      price = parseFloat(customPrices[p.id]);
-    } else if (tier !== 'custom') {
-      const rp = await one('SELECT price FROM product_prices WHERE product_id=$1 AND role=$2 AND user_id IS NULL', [p.id, tier]);
-      if (rp) price = parseFloat(rp.price);
-    }
-    if (price !== null && !isNaN(price)) {
-      await q(
-        `INSERT INTO product_prices (product_id,user_id,role,price) VALUES ($1,$2,NULL,$3)
-         ON CONFLICT (product_id,user_id,role) DO UPDATE SET price=EXCLUDED.price`,
-        [p.id, userId, price]
-      );
-    }
+async function applyPricingTier(userId, tierVal, customPrices, customMarginPct) {
+  // ADDY DSD tier system: tier 1=35%, tier 2=30%, tier 3=25%, custom=user-defined %
+  const TIER_MULTS = { 1: 0.65, 2: 0.70, 3: 0.75 };
+  const tierNum = parseInt(tierVal);
+  const mult = customMarginPct ? (1 - customMarginPct / 100) : (TIER_MULTS[tierNum] || 0.75);
+
+  // Update user's tier number
+  const finalTier = customMarginPct ? 3 : (tierNum || 3);
+  await q('UPDATE users SET tier=$1 WHERE id=$2', [finalTier, userId]);
+
+  // If custom %, store it on the user for future reference
+  if (customMarginPct) {
+    await q('UPDATE users SET pricing_tier=$1 WHERE id=$2', [`custom_${customMarginPct}pct`, userId]);
+  } else {
+    await q('UPDATE users SET pricing_tier=$1 WHERE id=$2', [`tier_${finalTier}`, userId]);
   }
-  // Persist the tier name on the user so it can be displayed in the admin UI
-  await q('UPDATE users SET pricing_tier=$1 WHERE id=$2', [tier, userId]);
+
+  // Set per-user price overrides based on retail_price × multiplier
+  const products = await all('SELECT id, retail_price FROM products WHERE active=1');
+  for (const p of products) {
+    const retail = parseFloat(p.retail_price || 0);
+    if (retail <= 0) continue;
+    const price = Math.round(retail * mult * 100) / 100;
+    await q('DELETE FROM product_prices WHERE product_id=$1 AND user_id=$2', [p.id, userId]);
+    await q("INSERT INTO product_prices (product_id,user_id,role,price) VALUES ($1,$2,'dsd',$3)", [p.id, userId, price]);
+  }
 }
 
 app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req, res) => {
   try {
     const user = await one('SELECT * FROM users WHERE id=$1', [req.params.id]);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const { tier, custom_prices } = req.body || {};
-    if (!tier) return res.status(400).json({ error: 'Tier is required' });
-    await applyPricingTier(parseInt(req.params.id), tier, custom_prices);
+    const { tier, custom_prices, custom_margin_pct } = req.body || {};
+    if (!tier && tier !== 0) return res.status(400).json({ error: 'Tier is required' });
+    await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
     await logActivity('pricing_updated', user.name||user.email, req.user.email);
     res.json({ success: true });
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
@@ -944,8 +950,8 @@ app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req
     if (!user) return res.status(404).json({ error: 'User not found' });
     await q("UPDATE users SET status='active' WHERE id=$1", [req.params.id]);
     if (user.store_id) await q("UPDATE stores SET status='active' WHERE id=$1", [user.store_id]);
-    const { tier, custom_prices } = req.body || {};
-    if (tier) await applyPricingTier(parseInt(req.params.id), tier, custom_prices);
+    const { tier, custom_prices, custom_margin_pct } = req.body || {};
+    if (tier) await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
     await logActivity('approved', user.name||user.email, req.user.email);
 
     // Send approval email to user
@@ -1159,8 +1165,8 @@ app.post('/api/products', authenticate, authorize('admin'), async (req, res) => 
     const { name, description, image_url, sku, stock, cost_price, prices } = req.body;
     if (!name) return res.status(400).json({ error: 'Product name is required' });
     const p = await one(
-      'INSERT INTO products (name,description,image_url,sku,stock) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-      [name, description||'', image_url||'', sku||'', stock||0]
+      'INSERT INTO products (name,description,image_url,sku,stock,retail_price,cost_price,active) VALUES ($1,$2,$3,$4,$5,$6,$7,1) RETURNING *',
+      [name, description||'', image_url||'', sku||'', stock||0, parseFloat(req.body.retail_price||0), parseFloat(req.body.cost_price||0)]
     );
     if (prices) {
       for (const [role, price] of Object.entries(prices)) {

@@ -184,13 +184,16 @@ function timeAgo(dateStr) {
 // --- Logo ---
 function renderLogo(container) {
   if (!container) return;
-  const token = localStorage.getItem('addy_token');
-  const role = (token ? JSON.parse(atob(token.split('.')[1])).role : null);
-  const href = token ? `/dashboard-${role === 'admin' ? 'admin' : 'dsd'}.html?t=${token}` : '/login.html';
-  container.innerHTML = `
-    <a href="${href}" style="display:flex;align-items:center;text-decoration:none;cursor:pointer;" title="Go to dashboard">
-      <img src="/images/addy-logo.svg" alt="ADDY DSD" style="height:56px;width:auto;object-fit:contain;margin:4px 0;">
+  try {
+    const token = localStorage.getItem('addy_token');
+    const role = token ? JSON.parse(atob(token.split('.')[1])).role : null;
+    const href = role === 'admin' ? '/dashboard-admin.html' : '/dashboard-dsd.html';
+    container.innerHTML = `<a href="${href}" style="display:flex;align-items:center;text-decoration:none;cursor:pointer;">
+      <img src="/images/addy-logo.svg" alt="ADDY" style="height:52px;width:auto;object-fit:contain;" onerror="this.style.display='none';this.parentElement.textContent='ADDY'">
     </a>`;
+  } catch(e) {
+    container.innerHTML = '<a href="/dashboard-dsd.html" style="text-decoration:none;font-weight:900;font-size:22px;color:var(--text);">ADDY</a>';
+  }
 }
 
 
@@ -1310,13 +1313,12 @@ async function loadPendingApprovals() {
   `).join('');
 }
 
-// Pricing tiers (internal names never shown to users)
+// ADDY DSD pricing tiers
 const PRICING_TIERS = [
-  { value: 'dsd', label: 'DSD' },
-  { value: 'dsd',        label: 'DSD' },
-  { value: 'rep',                label: 'DSD' },
-  { value: 'dsd',        label: 'Wholesale / DSD' },
-  { value: 'custom',             label: 'Custom (set per product)' },
+  { value: '3', label: 'Tier 3 — 25% margin (starter)' },
+  { value: '2', label: 'Tier 2 — 30% margin' },
+  { value: '1', label: 'Tier 1 — 35% margin (best)' },
+  { value: 'custom', label: 'Custom % (set manually below)' },
 ];
 
 let _approveTargetUserId = null;
@@ -1338,10 +1340,9 @@ async function showApprovePricingModal(userId, userName, userRole) {
     `<option value="${t.value}">${t.label}</option>`
   ).join('');
 
-  // Default tier based on role
-  const defaultTier = userRole === 'dsd' ? 'dsd' : userRole === 'dsd' ? 'dsd' : 'rep';
-  tierSelect.value = defaultTier;
-  renderTierPreview(defaultTier);
+  // Default to Tier 3 for new DSDs
+  tierSelect.value = '3';
+  renderTierPreview('3');
 
   modal.classList.add('active');
 }
@@ -1364,21 +1365,47 @@ async function renderTierPreview(tier) {
         </div>`;
       }).join('')}
     `;
+  } else if (tier === 'custom') {
+    // show custom % input
+    previewWrap.innerHTML = `
+      <div class="form-group" style="margin-bottom:10px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text);">Custom margin % <span style="font-weight:400;color:var(--text-muted);">(e.g. 28 = they pay 72% of retail)</span></label>
+        <input type="number" step="1" min="1" max="60" id="custom-margin-pct" placeholder="e.g. 28"
+          oninput="updateCustomMarginPreview()"
+          style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;margin-top:6px;">
+      </div>
+      <div id="custom-margin-preview"></div>
+    `;
   } else {
-    // Show what prices they'll get from the selected tier
+    // Show calculated tier prices from retail_price
+    const multipliers = { '1': 0.65, '2': 0.70, '3': 0.75 };
+    const mult = multipliers[tier] || 0.75;
+    const marginPct = Math.round((1 - mult) * 100);
     const rows = _approveProducts.map(p => {
-      const rp = (p.role_prices || []).find(r => r.role === tier);
-      const price = rp ? `$${parseFloat(rp.price).toFixed(2)}` : '<span style="color:var(--red)">No price set</span>';
-      return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border);">
-        <span style="color:var(--text);">${esc(p.name)}</span>
-        <span style="font-weight:600;color:var(--text);">${price}</span>
-      </div>`;
+      const retail = parseFloat(p.retail_price || 0);
+      const price = retail > 0
+        ? `<span style="font-weight:700;color:var(--green);">$${(retail * mult).toFixed(2)}</span>`
+        : '<span style="color:var(--text-muted);font-size:12px;">Set retail price first</span>';
+      return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--text);">${esc(p.name)}</span>${price}</div>`;
     }).join('');
     previewWrap.innerHTML = `
-      <p style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Prices they'll receive:</p>
-      ${rows}
+      <p style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">They pay (${marginPct}% margin — keeps ${marginPct}% when selling at retail):</p>
+      ${rows || '<p style="color:var(--text-muted);font-size:13px;">No products yet</p>'}
     `;
   }
+}
+
+function updateCustomMarginPreview() {
+  const pct = parseFloat(document.getElementById('custom-margin-pct')?.value || 0);
+  const el = document.getElementById('custom-margin-preview');
+  if (!el || !pct) return;
+  const mult = 1 - (pct / 100);
+  el.innerHTML = _approveProducts.map(p => {
+    const retail = parseFloat(p.retail_price || 0);
+    const price = retail > 0 ? `<span style="color:var(--green);font-weight:700;">$${(retail * mult).toFixed(2)}</span>` : '<span style="color:var(--text-muted);">—</span>';
+    return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border);"><span>${esc(p.name)}</span>${price}</div>`;
+  }).join('');
 }
 
 async function showChangeTierModal(userId, userName) {
@@ -1398,8 +1425,9 @@ async function showChangeTierModal(userId, userName) {
     `<option value="${t.value}">${t.label}</option>`
   ).join('');
 
-  tierSelect.value = 'dsd';
-  renderTierPreview('dsd');
+  const userRow = _approveProducts.length ? null : null; // tier loaded from user
+  tierSelect.value = '3';
+  renderTierPreview('3');
   modal.classList.add('active');
 }
 
@@ -1410,7 +1438,8 @@ async function confirmApproveWithPricing() {
   btn.disabled = true;
   btn.textContent = 'Saving...';
 
-  let pricingPayload = { tier };
+  const customPct = tier === 'custom' ? parseFloat(document.getElementById('custom-margin-pct')?.value || 0) : null;
+  let pricingPayload = { tier: tier === 'custom' ? 3 : parseInt(tier), custom_margin_pct: customPct };
 
   if (tier === 'custom') {
     const customPrices = {};
@@ -1756,7 +1785,7 @@ async function loadUsersTab() {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No users yet</td></tr>';
     return;
   }
-  const roleLabels = { admin: 'Admin', investor: 'Investor', dsd: 'DSD', dsd: 'DSD', rep: 'DSD' };
+  const roleLabels = { admin: 'Admin', dsd: 'DSD' };
   const tierLabels = {
     dsd: 'Master Dist.',
     dsd: 'DSD',
@@ -1839,7 +1868,7 @@ async function toggleUserStatus(id, status, btn) {
 function showUserDetail(userId) {
   const u = (window._adminUsers || []).find(x => x.id === userId);
   if (!u) return;
-  const roleLabels = { admin: 'Admin', investor: 'Investor', dsd: 'DSD', dsd: 'DSD', rep: 'DSD' };
+  const roleLabels = { admin: 'Admin', dsd: 'DSD' };
   const modal = document.getElementById('user-detail-modal');
   const content = document.getElementById('user-detail-content');
   content.innerHTML = `
