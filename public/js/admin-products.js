@@ -118,10 +118,16 @@ function renderProductsTable() {
     return;
   }
   tbody.innerHTML = _allProducts.map((p, i) => {
-    const prices = PRODUCT_TIERS.map(t => {
-      const rp = (p.role_prices || []).find(x => x.role === t.key);
-      return rp ? `<span style="white-space:nowrap;">${t.label}: <strong>$${parseFloat(rp.price).toFixed(2)}</strong></span>` : '';
-    }).filter(Boolean).join('<br>');
+    // ADDY uses retail_price to auto-calculate tier prices
+    const retail = parseFloat(p.retail_price || 0);
+    const prices = retail > 0
+      ? [
+          `<span style="white-space:nowrap;">Retail: <strong>$${retail.toFixed(2)}</strong></span>`,
+          `<span style="white-space:nowrap;color:#16a34a;">T1: <strong>$${(retail*0.65).toFixed(2)}</strong></span>`,
+          `<span style="white-space:nowrap;color:#2563eb;">T2: <strong>$${(retail*0.70).toFixed(2)}</strong></span>`,
+          `<span style="white-space:nowrap;color:#64748b;">T3: <strong>$${(retail*0.75).toFixed(2)}</strong></span>`,
+        ].join('<br>')
+      : '<span style="color:var(--red);font-size:12px;">Set retail price</span>';
     const statusBadge = p.active === 2
       ? `<span class="status-badge coming-soon">Coming Soon</span>`
       : p.active === 1
