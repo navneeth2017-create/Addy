@@ -2189,7 +2189,7 @@ function showMyOrderDetail(orderId) {
 // TAB SWITCHER FOR NON-ADMIN DASHBOARDS
 // ==========================================
 function switchMyTab(tab, btn) {
-  ['main','orders','inventory'].forEach(t => {
+  ['main','orders','inventory','stores','commissions'].forEach(t => {
     const el = document.getElementById('my-tab-' + t);
     if (el) el.style.display = t === tab ? 'block' : 'none';
   });
@@ -2197,6 +2197,8 @@ function switchMyTab(tab, btn) {
   if (btn) btn.classList.add('active');
   if (tab === 'orders') loadMyOrders('my-orders-tbody');
   if (tab === 'inventory') loadInventory();
+  if (tab === 'stores') loadMyStores();
+  if (tab === 'commissions') loadMyCommissions();
 }
 
 // ==========================================

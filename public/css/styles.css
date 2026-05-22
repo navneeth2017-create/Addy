@@ -229,7 +229,7 @@ body {
   justify-content: space-between;
 }
 
-.topbar .logo-mark { margin-bottom: 0; }
+.topbar .logo-mark { margin-bottom: 0; min-width: 140px; }
 .topbar .logo-icon { width: 32px; height: 32px; border-radius: 8px; }
 .topbar .logo-icon svg { width: 18px; height: 18px; }
 .topbar .logo-text { font-size: 20px; }

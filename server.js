@@ -1706,6 +1706,12 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
     if (status === 'cancelled') {
       await q("UPDATE invoices SET payment_status='cancelled' WHERE order_id=$1", [req.params.id]);
       await q("UPDATE orders SET payment_status='cancelled' WHERE id=$1", [req.params.id]);
+      // Reverse commissions earned on this order
+      const commissions = await all("SELECT earner_id, amount FROM commissions WHERE order_id=$1 AND status='pending'", [req.params.id]);
+      for (const c of commissions) {
+        await q('UPDATE users SET commission_balance=commission_balance-$1 WHERE id=$2', [c.amount, c.earner_id]);
+      }
+      await q('DELETE FROM commissions WHERE order_id=$1', [req.params.id]);
     }
     if (status === 'delivered' && order.status !== 'delivered' && order.store_id) {
       const items = await all('SELECT * FROM order_items WHERE order_id=$1', [req.params.id]);
