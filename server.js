@@ -257,33 +257,53 @@ async function getPriceForUser(productId, userId, role) {
 
 async function calculateAndSaveCommissions(orderId, buyerId, orderTotal) {
   try {
-    const buyer = await one('SELECT id, tier, referred_by FROM users WHERE id=$1', [buyerId]);
+    // Guard 1: skip if order total is invalid
+    if (!orderTotal || orderTotal <= 0) return;
+
+    // Guard 2: skip if commissions already calculated for this order (prevent duplicates)
+    const existing = await one('SELECT id FROM commissions WHERE order_id=$1 LIMIT 1', [orderId]);
+    if (existing) {
+      console.log('Commissions already calculated for order #' + orderId + ' — skipping');
+      return;
+    }
+
+    const buyer = await one('SELECT id, referred_by FROM users WHERE id=$1', [buyerId]);
     if (!buyer || !buyer.referred_by) return;
 
-    const recruiter = await one('SELECT id, tier, referred_by FROM users WHERE id=$1', [buyer.referred_by]);
+    // Guard 3: prevent self-referral
+    if (buyer.referred_by === buyer.id) return;
+
+    const recruiter = await one("SELECT id, referred_by, status FROM users WHERE id=$1 AND role='dsd'", [buyer.referred_by]);
     if (!recruiter) return;
 
-    // Level 1 commission: direct recruiter earns based on buyer tier
-    const level1Rate = buyer.tier === 2 ? 0.05 : buyer.tier === 3 ? 0.05 : 0;
-    if (level1Rate > 0) {
-      const commission = Math.round(orderTotal * level1Rate * 100) / 100;
-      await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,1)',
-        [recruiter.id, orderId, buyerId, commission, level1Rate]);
-      await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [commission, recruiter.id]);
-    }
-
-    // Level 2 commission: recruiter's recruiter earns 3% on Tier 3 sales only
-    if (buyer.tier === 3 && recruiter.referred_by) {
-      const grandRecruiter = await one('SELECT id FROM users WHERE id=$1', [recruiter.referred_by]);
-      if (grandRecruiter) {
-        const level2Rate = 0.03;
-        const commission2 = Math.round(orderTotal * level2Rate * 100) / 100;
-        await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,2)',
-          [grandRecruiter.id, orderId, buyerId, commission2, level2Rate]);
-        await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [commission2, grandRecruiter.id]);
+    // Guard 4: only pay commission to active recruiters
+    if (recruiter.status !== 'active') {
+      console.log('Recruiter #' + recruiter.id + ' is not active — skipping L1 commission');
+    } else {
+      const level1Amount = Math.round(orderTotal * 0.05 * 100) / 100;
+      if (level1Amount > 0) {
+        await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,1)',
+          [recruiter.id, orderId, buyerId, level1Amount, 0.05]);
+        await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [level1Amount, recruiter.id]);
+        console.log('✅ Commission L1: $' + level1Amount + ' → user #' + recruiter.id);
       }
     }
-  } catch(e) { console.error('Commission calculation error:', e.message); }
+
+    // Level 2: recruiter's recruiter earns 3%
+    if (recruiter.referred_by && recruiter.referred_by !== buyer.id) {
+      // Guard 5: prevent circular chain (A→B→A)
+      const grandRecruiter = await one("SELECT id, status FROM users WHERE id=$1 AND role='dsd'", [recruiter.referred_by]);
+      if (grandRecruiter && grandRecruiter.id !== buyerId && grandRecruiter.status === 'active') {
+        const level2Amount = Math.round(orderTotal * 0.03 * 100) / 100;
+        if (level2Amount > 0) {
+          await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,2)',
+            [grandRecruiter.id, orderId, buyerId, level2Amount, 0.03]);
+          await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [level2Amount, grandRecruiter.id]);
+          console.log('✅ Commission L2: $' + level2Amount + ' → user #' + grandRecruiter.id);
+        }
+      }
+    }
+  } catch(e) { console.error('❌ Commission calculation error for order #' + orderId + ':', e.message); }
 }
 
 // ── FAVICON ───────────────────────────────────────────────────────────────────
@@ -335,8 +355,13 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
     // Resolve referral code (email of recruiter)
     let referredById = null;
     if (referral_code && referral_code.trim()) {
-      const recruiter = await one("SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND role='dsd'", [referral_code.trim()]);
-      if (recruiter) referredById = recruiter.id;
+      const rcEmail = referral_code.trim().toLowerCase();
+      // Prevent self-referral
+      if (rcEmail !== email.toLowerCase()) {
+        const recruiter = await one("SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND role='dsd' AND status='active'", [rcEmail]);
+        if (recruiter) referredById = recruiter.id;
+        else console.log('Referral code not found or recruiter not active:', rcEmail);
+      }
     }
 
     const hash = bcrypt.hashSync(password, 10);
@@ -414,6 +439,16 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
 });
 
 app.get('/api/me', authenticate, (req, res) => res.json(req.user));
+
+app.get('/api/profile', authenticate, async (req, res) => {
+  try {
+    const user = await one(
+      'SELECT id,name,email,role,phone,status,tier,commission_balance,referred_by,stripe_connect_id FROM users WHERE id=$1',
+      [req.user.id]
+    );
+    res.json(user);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.patch('/api/profile', authenticate, async (req, res) => {
   try {
@@ -1185,12 +1220,13 @@ app.post('/api/products', authenticate, authorize('admin'), async (req, res) => 
 
 app.patch('/api/products/:id', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { name, description, image_url, sku, stock, cost_price, active, prices } = req.body;
+    const { name, description, image_url, sku, stock, cost_price, retail_price, active, prices } = req.body;
     const p = await one('SELECT * FROM products WHERE id=$1', [req.params.id]);
     if (!p) return res.status(404).json({ error: 'Product not found' });
     const updated = await one(
-      'UPDATE products SET name=$1,description=$2,image_url=$3,sku=$4,stock=$5,active=$6 WHERE id=$7 RETURNING *',
-      [name??p.name, description??p.description, image_url??p.image_url, sku??p.sku, stock??p.stock, active??p.active, req.params.id]
+      'UPDATE products SET name=$1,description=$2,image_url=$3,sku=$4,stock=$5,active=$6,retail_price=$7,cost_price=$8 WHERE id=$9 RETURNING *',
+      [name??p.name, description??p.description, image_url??p.image_url, sku??p.sku, stock??p.stock, active??p.active,
+       parseFloat(retail_price??p.retail_price??0), parseFloat(cost_price??p.cost_price??0), req.params.id]
     );
     if (prices) {
       for (const [role, price] of Object.entries(prices)) {
@@ -1715,7 +1751,8 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
       // Reverse commissions earned on this order
       const commissions = await all("SELECT earner_id, amount FROM commissions WHERE order_id=$1 AND status='pending'", [req.params.id]);
       for (const c of commissions) {
-        await q('UPDATE users SET commission_balance=commission_balance-$1 WHERE id=$2', [c.amount, c.earner_id]);
+        // Floor at 0 — never let balance go negative
+        await q('UPDATE users SET commission_balance=GREATEST(0, commission_balance-$1) WHERE id=$2', [c.amount, c.earner_id]);
       }
       await q('DELETE FROM commissions WHERE order_id=$1', [req.params.id]);
     }
@@ -1901,6 +1938,29 @@ app.post('/api/products/import-from-wowcow', authenticate, authorize('admin'), a
   }
 });
 
+// ── ADMIN: RECALCULATE COMMISSIONS FOR AN ORDER ──────────────────────────────
+// Safety tool in case something went wrong — deletes and recalculates
+app.post('/api/commissions/recalculate/:orderId', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const order = await one('SELECT id, user_id, total, status FROM orders WHERE id=$1', [req.params.orderId]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.status === 'cancelled') return res.status(400).json({ error: 'Cannot recalculate on cancelled order' });
+
+    // Reverse existing commissions first
+    const existing = await all('SELECT earner_id, amount FROM commissions WHERE order_id=$1', [order.id]);
+    for (const c of existing) {
+      await q('UPDATE users SET commission_balance=GREATEST(0,commission_balance-$1) WHERE id=$2', [c.amount, c.earner_id]);
+    }
+    await q('DELETE FROM commissions WHERE order_id=$1', [order.id]);
+
+    // Recalculate fresh
+    await calculateAndSaveCommissions(order.id, order.user_id, parseFloat(order.total));
+
+    const newCommissions = await all('SELECT * FROM commissions WHERE order_id=$1', [order.id]);
+    res.json({ success: true, commissions: newCommissions, message: `Recalculated ${newCommissions.length} commission(s)` });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── ADDY DSD TIER & COMMISSION ENDPOINTS ──────────────────────────────────────
 
 // Update DSD rep tier (admin only)
@@ -1930,15 +1990,22 @@ app.get('/api/commissions', authenticate, async (req, res) => {
 // Request a payout
 app.post('/api/payouts/request', authenticate, authorize('dsd'), async (req, res) => {
   try {
-    const user = await one('SELECT commission_balance, name, email FROM users WHERE id=$1', [req.user.id]);
-    const balance = parseFloat(user.commission_balance || 0);
-    if (balance <= 0) return res.status(400).json({ error: 'No commission balance available' });
-    const existing = await one("SELECT id FROM payout_requests WHERE user_id=$1 AND status='pending'", [req.user.id]);
-    if (existing) return res.status(400).json({ error: 'You already have a pending payout request' });
-    const pr = await one(
-      'INSERT INTO payout_requests (user_id, amount) VALUES ($1,$2) RETURNING id',
-      [req.user.id, balance]
-    );
+    // Use a transaction to prevent race conditions on double-submit
+    const client = await pool.connect();
+    let pr, balance;
+    try {
+      await client.query('BEGIN');
+      const user = await client.query('SELECT commission_balance, name, email FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+      const userData = user.rows[0];
+      balance = parseFloat(userData?.commission_balance || 0);
+      if (balance <= 0) { await client.query('ROLLBACK'); client.release(); return res.status(400).json({ error: 'No commission balance available' }); }
+      const existing = await client.query("SELECT id FROM payout_requests WHERE user_id=$1 AND status='pending'", [req.user.id]);
+      if (existing.rows.length) { await client.query('ROLLBACK'); client.release(); return res.status(400).json({ error: 'You already have a pending payout request' }); }
+      const prResult = await client.query('INSERT INTO payout_requests (user_id, amount) VALUES ($1,$2) RETURNING id', [req.user.id, balance]);
+      pr = prResult.rows[0];
+      await client.query('COMMIT');
+    } catch(e) { await client.query('ROLLBACK'); client.release(); throw e; }
+    finally { client.release(); }
     await logActivity('payout_requested', `$${balance.toFixed(2)} by ${user.name || user.email}`, user.email);
     res.json({ success: true, id: pr.id, amount: balance });
   } catch(e) { res.status(500).json({ error: e.message }); }
