@@ -2096,6 +2096,11 @@ function renderOrderDetailModal(o, isAdmin) {
         <span style="font-size:13px;color:var(--text-secondary);">Shipping</span>
         <span style="font-size:13px;color:var(--text);">${parseFloat(o.shipping_cost)===0?'FREE':'$'+parseFloat(o.shipping_cost).toFixed(2)}</span>
       </div>
+      ${parseFloat(o.processing_fee||0) > 0 ? `
+      <div style="display:flex;justify-content:space-between;padding:4px 0;">
+        <span style="font-size:13px;color:var(--text-secondary);">Processing Fee (2.9% + $0.30)</span>
+        <span style="font-size:13px;color:var(--text);">$${parseFloat(o.processing_fee).toFixed(2)}</span>
+      </div>` : ''}
       <div style="display:flex;justify-content:space-between;padding:10px 0 0;border-top:1px solid var(--border);margin-top:6px;">
         <span style="font-size:15px;font-weight:700;color:var(--text);">Total</span>
         <span style="font-size:15px;font-weight:700;color:var(--accent);">$${parseFloat(o.total).toFixed(2)}</span>

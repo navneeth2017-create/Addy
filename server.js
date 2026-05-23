@@ -133,6 +133,12 @@ async function migrate() {
     console.log('✅ ADDY DSD tier/commission migrations applied');
   } catch(e) { console.log('ℹ️  ADDY migrations already up to date:', e.message); }
 
+  // ── Add processing_fee column to orders ──────────────────────────────────────
+  try {
+    await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
+    console.log('✅ processing_fee column ready');
+  } catch(e) { console.log('ℹ️  processing_fee already exists'); }
+
   // ── Fix order_items.product_id FK to allow NULL (enables product deletion) ──
   try {
     await q('ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL');
@@ -1649,7 +1655,12 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
     const subtotal = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
     const shipping_cost = subtotal > 500 ? 0 : 15;
-    const total = subtotal + shipping_cost;
+    // Stripe fee passthrough: customer pays fee so we receive full amount
+    // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
+    const processing_fee = payment_method === 'card'
+      ? Math.round(((subtotal + shipping_cost + 0.30) / 0.971 - subtotal - shipping_cost) * 100) / 100
+      : 0;
+    const total = Math.round((subtotal + shipping_cost + processing_fee) * 100) / 100;
     const payment_status = payment_method === 'card' ? 'paid' : 'unpaid';
 
     const client = await pool.connect();
@@ -1657,9 +1668,9 @@ app.post('/api/orders', authenticate, async (req, res) => {
     try {
       await client.query('BEGIN');
       const or = await client.query(
-        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,total,shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-        [userId, store_id||null, payment_method, payment_status, subtotal, shipping_cost, total,
+        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+        [userId, store_id||null, payment_method, payment_status, subtotal, shipping_cost, processing_fee, total,
          shipping_name||'', shipping_address, shipping_city, shipping_state, shipping_zip, notes||'']
       );
       order = or.rows[0];
@@ -1711,6 +1722,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
           <table style="width:100%;border-collapse:collapse;">
             <tr><td style="padding:4px 0;color:#64748b;font-size:13px;">Subtotal</td><td style="padding:4px 0;text-align:right;font-size:13px;">$${parseFloat(order.subtotal).toFixed(2)}</td></tr>
             <tr><td style="padding:4px 0;color:#64748b;font-size:13px;">Shipping</td><td style="padding:4px 0;text-align:right;font-size:13px;">${parseFloat(order.shipping_cost) === 0 ? 'FREE' : '$' + parseFloat(order.shipping_cost).toFixed(2)}</td></tr>
+            ${parseFloat(order.processing_fee||0) > 0 ? `<tr><td style="padding:4px 0;color:#64748b;font-size:13px;">Processing Fee (2.9% + $0.30)</td><td style="padding:4px 0;text-align:right;font-size:13px;">$${parseFloat(order.processing_fee).toFixed(2)}</td></tr>` : ''}
             <tr style="border-top:2px solid #e2e8f0;"><td style="padding:10px 0 0;font-weight:700;font-size:15px;">Total</td><td style="padding:10px 0 0;text-align:right;font-weight:700;font-size:15px;color:#2563eb;">$${parseFloat(order.total).toFixed(2)}</td></tr>
           </table>
         </div>

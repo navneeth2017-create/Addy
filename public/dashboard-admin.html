@@ -129,6 +129,10 @@
             </table>
           </div>
           <div class="table-footer" id="table-footer"></div>
+          <!-- Map View (hidden by default, toggled by setStoreView) -->
+          <div id="stores-map-view" style="display:none;padding:8px 0;">
+            <div id="stores-map" style="height:520px;border-radius:10px;border:1px solid var(--border);"></div>
+          </div>
         </div>
       </div>
 
@@ -247,13 +251,6 @@
         </div>
         <div id="inventory-content"><div class="loading" style="padding:40px;text-align:center;">Loading inventory...</div></div>
       </div>
-
-      <!-- SETTINGS TAB -->
-          <!-- Map View -->
-          <div id="stores-map-view" style="display:none;padding:8px 0;">
-            <div id="stores-map" style="height:520px;border-radius:10px;border:1px solid var(--border);"></div>
-          </div>
-      </div><!-- end tab-stores -->
 
       <!-- Commissions & Payouts Tab -->
       <div id="tab-commissions" style="display:none;">
