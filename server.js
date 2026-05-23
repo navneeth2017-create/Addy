@@ -1877,16 +1877,17 @@ app.patch('/api/stores/:id/approve-claim', authenticate, authorize('admin'), asy
     if (!store) return res.status(404).json({ error: 'Store not found' });
     await q('UPDATE stores SET store_approval_status=$1 WHERE id=$2', [approved ? 'approved' : 'rejected', req.params.id]);
     if (approved) {
-      // Sync to WowCow's public.stores so both platforms see it
-      const exists = await one('SELECT id FROM public.stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [store.name, store.city||'']);
-      if (!exists) {
-        await q(
-          "INSERT INTO public.stores (name,address,city,state,zip,category,status,monthly_revenue) VALUES ($1,$2,$3,$4,$5,$6,'active',0) ON CONFLICT DO NOTHING",
-          [store.name, store.address||'', store.city||'', store.state||'', store.zip||'', store.category||'General']
-        );
-      }
+      // Auto-sync approved store to WowCow's public.stores
+      try {
+        const exists = await one("SELECT id FROM public.stores WHERE LOWER(name)=LOWER($1)", [store.name]);
+        if (!exists) {
+          await q("INSERT INTO public.stores (name,address,city,state,zip,category,status,monthly_revenue,owner_name) VALUES ($1,$2,$3,$4,$5,$6,'active',0,'')",
+            [store.name, store.address||'', store.city||'', store.state||'', store.zip||'', store.category||'General']);
+          console.log('✅ Store synced to WowCow:', store.name);
+        }
+      } catch(syncErr) { console.log('Store sync to WowCow skipped:', syncErr.message); }
     }
-    await logActivity(approved ? 'approved_store' : 'rejected_store', store.name, req.user.email);
+    await logActivity(approved ? 'approved_store_claim' : 'rejected_store_claim', store.name, req.user.email);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
