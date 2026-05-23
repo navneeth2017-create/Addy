@@ -121,7 +121,7 @@
           <div id="cart-total-row" class="cart-total" style="display:none;">
             <span>Total</span><span id="cart-total-val">$0.00</span>
           </div>
-          <div id="cart-shipping-note" style="font-size:11px;color:var(--text-muted);margin-bottom:12px;display:none;">Free shipping on orders over $500</div>
+          <div id="cart-shipping-note" style="font-size:11px;color:var(--text-muted);margin-bottom:12px;display:none;">Free shipping on orders over $350</div>
           <button class="checkout-btn" id="checkout-btn" disabled onclick="showCheckout()">Proceed to Checkout</button>
         </div>
       </div>
@@ -138,7 +138,8 @@
         <h3>Order Summary</h3>
         <div id="checkout-items"></div>
         <div class="order-summary-row"><span>Subtotal</span><span id="co-subtotal">$0.00</span></div>
-        <div class="order-summary-row"><span>Shipping</span><span id="co-shipping">$15.00</span></div>
+        <div class="order-summary-row"><span>Shipping</span><span id="co-shipping">$35.00</span></div>
+        <div class="order-summary-row" id="co-fee-row" style="display:none;color:var(--text-muted);font-size:13px;"><span>Processing Fee (2.9% + $0.30)</span><span id="co-fee">$0.00</span></div>
         <div class="order-summary-total"><span>Total</span><span id="co-total">$0.00</span></div>
       </div>
 

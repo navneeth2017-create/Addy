@@ -305,7 +305,7 @@ function showCheckout() {
   if (!items.length) return;
 
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-  const shipping = subtotal > 500 ? 0 : 15;
+  const shipping = subtotal >= 350 ? 0 : 35;
   const total = subtotal + shipping;
 
   document.getElementById('co-subtotal').textContent = `$${subtotal.toFixed(2)}`;
@@ -405,7 +405,7 @@ async function placeOrder() {
     let stripePaymentIntentId = null;
     if (_selectedPayment === 'card' && _stripeActive && _stripeCardElement) {
       const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-      const shipping = subtotal > 500 ? 0 : 15;
+      const shipping = subtotal >= 350 ? 0 : 35;
       const totalCents = Math.round((subtotal + shipping) * 100);
       const intentRes = await apiFetch('/api/payment/intent', { method: 'POST', body: JSON.stringify({ amount_cents: totalCents }) });
       if (!intentRes?.clientSecret) { showToast('Card payment error. Please try invoice instead.', 'error'); return; }

@@ -1654,7 +1654,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
     }
 
     const subtotal = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
-    const shipping_cost = subtotal > 500 ? 0 : 15;
+    const shipping_cost = subtotal >= 350 ? 0 : 35;
     // Stripe fee passthrough: customer pays fee so we receive full amount
     // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
     const processing_fee = payment_method === 'card'
