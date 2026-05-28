@@ -1893,8 +1893,8 @@ app.patch('/api/stores/:id/approve-claim', authenticate, authorize('admin'), asy
       try {
         const exists = await one("SELECT id FROM public.stores WHERE LOWER(name)=LOWER($1)", [store.name]);
         if (!exists) {
-          await q("INSERT INTO public.stores (name,address,city,state,zip,category,status,monthly_revenue,owner_name) VALUES ($1,$2,$3,$4,$5,$6,'active',0,'')",
-            [store.name, store.address||'', store.city||'', store.state||'', store.zip||'', store.category||'General']);
+          await q("INSERT INTO public.stores (name,owner_name,email,address,city,state,zip,category,status,monthly_revenue,wholesale_price,retail_price,distribution_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',0,0,0,0)",
+            [store.name, store.name, store.email||'', store.address||'', store.city||'', store.state||'', store.zip||'', store.category||'General']);
           console.log('✅ Store synced to WowCow:', store.name);
         }
       } catch(syncErr) { console.log('Store sync to WowCow skipped:', syncErr.message); }
