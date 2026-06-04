@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADDY - Admin Dashboard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+  <script>const saved=localStorage.getItem('addy_theme')||'light';document.documentElement.setAttribute('data-theme',saved);</script>
+  <style>
+    @keyframes pulse-red {
+      0%, 100% { color: inherit; }
+      50% { color: var(--red); }
+    }
+    @keyframes pulse-yellow {
+      0%, 100% { color: inherit; }
+      50% { color: var(--yellow); }
+    }
+    @keyframes pulse-green {
+      0%, 100% { color: inherit; }
+      50% { color: var(--green); }
+    }
+    .tab-low-stock    { animation: pulse-red    1.8s ease-in-out infinite; font-weight: 700; }
+    .tab-medium-stock { animation: pulse-yellow 1.8s ease-in-out infinite; font-weight: 700; }
+    .tab-pending      { animation: pulse-red    1.8s ease-in-out infinite; font-weight: 700; }
+    .tab-new-orders   { animation: pulse-green  1.8s ease-in-out infinite; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="topbar">
+      <div class="logo-mark" id="logo-container"><a href="/dashboard-admin.html" style="display:flex;align-items:center;text-decoration:none;"><img src="/images/addy-logo.svg" alt="ADDY" style="height:52px;width:auto;object-fit:contain;"></a></div>
+      <div class="user-info">
+        <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"></button>
+        <button id="push-bell-btn" onclick="togglePushNotifications()" title="Order notifications" style="background:none;border:1px solid var(--border);border-radius:8px;padding:5px 9px;cursor:pointer;font-size:17px;line-height:1;transition:all 0.2s;">🔔</button>
+        <button class="btn-logout" onclick="showProfile()">Profile</button>
+        <span class="role-badge" id="user-role">Admin</span>
+        <button class="btn-logout" onclick="logout()">Sign Out</button>
+      </div>
+    </div>
+
+    <div class="main-content">
+
+      <!-- Tab Nav -->
+      <div style="display:flex;gap:8px;margin-bottom:28px;border-bottom:1px solid var(--border);padding-bottom:0;flex-wrap:wrap;">
+        <button class="admin-tab active" onclick="switchTab('stores',this)">Stores</button>
+        <button class="admin-tab" onclick="switchTab('pending',this)">Pending Approvals <span id="pending-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
+        <button class="admin-tab" onclick="switchTab('reps',this)">DSDs</button>
+        <button class="admin-tab" onclick="switchTab('users',this)">Users</button>
+        <button class="admin-tab" onclick="switchTab('products',this)">Products <span id="low-stock-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
+        <button class="admin-tab" onclick="switchTab('orders',this)">Orders <span id="orders-badge" style="display:none;background:var(--green);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
+        <button class="admin-tab" onclick="switchTab('inventory',this)">Inventory</button>
+        <button class="admin-tab" onclick="switchTab('commissions',this)">Commissions <span id="payouts-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
+        <button class="admin-tab" onclick="switchTab('store-claims',this)">Store Claims <span id="claims-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
+        <button class="admin-tab" onclick="switchTab('settings',this)">Settings</button>
+      </div>
+
+      <!-- STORES TAB -->
+      <div id="tab-stores">
+        <div class="page-header">
+          <div><h1>All Stores</h1><p>Full access to every store in the network</p></div>
+          <div class="page-actions">
+            <button class="btn btn-sm btn-green" onclick="showAddStore()">+ Add Store</button>
+            <button class="btn btn-sm btn-outline" onclick="exportCSV()">Export CSV</button>
+            <div style="display:flex;gap:6px;">
+              <button id="btn-list-view" class="btn btn-sm" onclick="setStoreView('list')" style="background:var(--accent);color:#fff;">☰ List</button>
+              <button id="btn-map-view" class="btn btn-sm" onclick="setStoreView('map')" style="background:var(--bg-secondary);color:var(--text);">🗺 Map</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">Total Stores</div><div class="stat-value" id="stat-total">--</div></div>
+          <div class="stat-card"><div class="stat-label">Total Monthly Revenue</div><div class="stat-value revenue" id="stat-revenue">--</div></div>
+          <div class="stat-card"><div class="stat-label">Avg Revenue Per Store</div><div class="stat-value revenue" id="stat-avg">--</div></div>
+          <div class="stat-card"><div class="stat-label">Store Status</div><div class="stat-sub" id="stat-active" style="margin-top:8px;font-size:14px;">--</div></div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card"><h3>Revenue by Product</h3><div style="height:280px;"><canvas id="chart-category"></canvas></div></div>
+          <div class="chart-card"><h3>Orders (Last 30 Days)</h3><div style="height:280px;"><canvas id="chart-top"></canvas></div></div>
+        </div>
+
+        <div class="activity-card">
+          <h3>Recent Activity</h3>
+          <ul class="activity-list" id="activity-list"><li class="loading">Loading...</li></ul>
+        </div>
+
+        <div class="table-card">
+          <div class="table-toolbar">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <h2 style="margin:0;">Store Directory</h2>
+              <button class="btn btn-sm btn-danger" onclick="deleteAllStores()" style="font-size:12px;padding:5px 12px;">🗑 Delete All Stores</button>
+            </div>
+            <div class="toolbar-controls">
+              <select class="filter-select" id="filter-category" onchange="adminFilter('category', this.value)"><option value="">All Categories</option></select>
+              <select class="filter-select" id="filter-state" onchange="adminFilter('state', this.value)"><option value="">All States</option></select>
+              <select class="filter-select" id="filter-status" onchange="adminFilter('status', this.value)">
+                <option value="">All Statuses</option>
+                <option value="active">Active</option>
+                <option value="pending">Pending</option>
+                <option value="inactive">Inactive</option>
+              </select>
+              <input type="text" class="search-input" id="search-input" placeholder="Search name, owner, email, city..." oninput="adminSearchDebounced(this.value)">
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th class="check-col"><input type="checkbox" onchange="toggleSelectAll(this.checked)"></th>
+                  <th data-sort="name" onclick="sortAdmin('name')">Store Name</th>
+                  <th data-sort="owner_name" onclick="sortAdmin('owner_name')">Owner</th>
+                  <th>Email</th>
+                  <th data-sort="city" onclick="sortAdmin('city')">City</th>
+                  <th data-sort="state" onclick="sortAdmin('state')">State</th>
+                  <th data-sort="category" onclick="sortAdmin('category')">Category</th>
+                  <th data-sort="status" onclick="sortAdmin('status')">Status</th>
+                  <th data-sort="monthly_revenue" onclick="sortAdmin('monthly_revenue')">Revenue/mo</th>
+                  <th>Wholesale</th>
+                  <th>Retail</th>
+                  <th>Dist. Cost</th>
+                </tr>
+              </thead>
+              <tbody id="stores-tbody"><tr><td colspan="12" class="loading">Loading stores...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="table-footer" id="table-footer"></div>
+          <!-- Map View (hidden by default, toggled by setStoreView) -->
+          <div id="stores-map-view" style="display:none;padding:8px 0;">
+            <div id="stores-map" style="height:520px;border-radius:10px;border:1px solid var(--border);"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PENDING APPROVALS TAB -->
+      <div id="tab-pending" style="display:none;">
+        <div class="page-header">
+          <div><h1>Pending Approvals</h1><p>New store owner sign-up requests awaiting review</p></div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>Sign-up Requests</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Store Name</th><th>City</th><th>State</th><th>Status</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="pending-tbody"><tr><td colspan="9" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- REPS TAB -->
+      <div id="tab-reps" style="display:none;">
+        <div class="page-header">
+          <div><h1>DSD Management</h1><p>All sales reps and their commission breakdown</p></div>
+          <div class="page-actions">
+            <button class="btn btn-sm btn-green" onclick="showAddDSDModal()">+ Add DSD</button>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>All DSDs</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th><th>Email</th><th>Sponsor</th><th>Stores</th><th>Store Revenue</th><th>Their Comm (10%)</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="reps-tbody"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- USERS TAB -->
+      <div id="tab-users" style="display:none;">
+        <div class="page-header">
+          <div><h1>User Management</h1><p>Create and manage admin and investor accounts</p></div>
+          <div class="page-actions">
+            <button class="btn btn-sm btn-green" onclick="showCreateUserModal('admin')">+ Add Admin</button>
+            <button class="btn btn-sm btn-outline" onclick="showCreateUserModal('investor')">+ Add Investor</button>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>All Users</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th><th>Email</th><th>Role</th><th>Phone</th><th>Status</th><th>Tier</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="users-tbody"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- PRODUCTS TAB -->
+      <div id="tab-products" style="display:none;">
+        <div class="page-header">
+          <div><h1>Products</h1><p>Manage your product catalog and pricing</p></div>
+          <div class="page-actions">
+            <button class="btn btn-sm" onclick="importFromWowCow()" style="background:#f59e0b;color:#fff;font-weight:600;">⬇ Import from WowCow</button>
+            <button class="btn btn-sm btn-green" onclick="showAddProductModal()">+ Add Product</button>
+          </div>
+        </div>
+        <div id="products-low-stock-banner" style="display:none;"></div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>Product Catalog</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Image</th><th>Name</th><th>SKU</th><th>Prices by Role</th><th>Stock</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="products-tbody"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ORDERS TAB -->
+      <div id="tab-orders" style="display:none;">
+        <div class="page-header">
+          <div><h1>Orders</h1><p>All orders across the platform</p></div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>All Orders</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Order #</th><th>Date</th><th>Placed By</th><th>Store</th><th>Items</th><th>Total</th><th>Invoice</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="orders-tbody"><tr><td colspan="9" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- INVENTORY TAB -->
+      <div id="tab-inventory" style="display:none;">
+        <div class="page-header">
+          <div><h1>Inventory</h1><p>Product stock levels across all stores</p></div>
+        </div>
+        <div id="inventory-content"><div class="loading" style="padding:40px;text-align:center;">Loading inventory...</div></div>
+      </div>
+
+      <!-- Commissions & Payouts Tab -->
+      <div id="tab-commissions" style="display:none;">
+        <div class="page-header">
+          <div><h1>Commissions & Payouts</h1><p>Track all DSD commissions and approve payout requests</p></div>
+        </div>
+
+        <div style="margin-bottom:28px;">
+          <div class="table-toolbar"><h2>Pending Payout Requests</h2></div>
+          <div id="payout-requests-list"><div class="loading">Loading...</div></div>
+        </div>
+
+        <div>
+          <div class="table-toolbar"><h2>Recent Commission Activity</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Earner</th><th>Buyer</th><th>Level</th><th>Rate</th><th>Amount</th><th>Status</th><th>Date</th>
+              </tr></thead>
+              <tbody id="commissions-tbody"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Store Claims Tab -->
+      <div id="tab-store-claims" style="display:none;">
+        <div class="page-header">
+          <div><h1>Store Exclusivity Claims</h1><p>Review and approve rep store claims. Approved stores are exclusively locked to that rep.</p></div>
+        </div>
+        <div id="store-claims-list"><div class="loading">Loading...</div></div>
+      </div>
+
+      <div id="tab-settings" style="display:none;">
+        <div class="page-header">
+          <div><h1>Settings</h1><p>Manage notification preferences</p></div>
+        </div>
+
+        <div class="table-card" style="max-width:640px;">
+          <div class="table-toolbar">
+            <div>
+              <h2 style="margin:0 0 4px;">Notification Emails</h2>
+              <p style="font-size:13px;color:var(--text-secondary);margin:0;">Every new order and account request will be sent to all addresses listed here simultaneously.</p>
+            </div>
+          </div>
+          <div style="padding:0 24px 20px;">
+            <div id="notif-emails-list" style="margin-bottom:16px;min-height:40px;"></div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+              <div style="flex:1;min-width:200px;">
+                <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px;">Email Address</label>
+                <input type="email" id="notif-email-input" placeholder="someone@example.com"
+                  style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;"
+                  onkeydown="if(event.key==='Enter')addNotifEmail()">
+              </div>
+              <div style="width:160px;">
+                <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px;">Label (optional)</label>
+                <input type="text" id="notif-label-input" placeholder="e.g. Operations"
+                  style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;"
+                  onkeydown="if(event.key==='Enter')addNotifEmail()">
+              </div>
+              <button class="btn btn-sm btn-green" onclick="addNotifEmail()" style="height:40px;white-space:nowrap;padding:0 18px;">+ Add Email</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-card" style="max-width:640px;margin-top:20px;">
+          <div class="table-toolbar"><h2>What triggers a notification</h2></div>
+          <div style="padding:4px 4px 16px;display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg-secondary);border-radius:10px;">
+              <span style="font-size:24px;">🛒</span>
+              <div>
+                <div style="font-size:14px;font-weight:600;color:var(--text);">New Order Placed</div>
+                <div style="font-size:12px;color:var(--text-secondary);">Sent immediately when any user places an order. Includes all items, totals, and shipping address.</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg-secondary);border-radius:10px;">
+              <span style="font-size:24px;">👤</span>
+              <div>
+                <div style="font-size:14px;font-weight:600;color:var(--text);">New Account Request</div>
+                <div style="font-size:12px;color:var(--text-secondary);">Sent when a dsd, dsd, or rep submits a sign-up. Includes their name, role, and contact info.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Order Detail Modal (Admin) -->
+  <div class="modal-overlay" id="order-detail-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal" style="max-width:580px;">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Order Details</h2>
+      <div class="order-detail-body"></div>
+    </div>
+  </div>
+
+  <!-- Product Modal -->
+  <div class="modal-overlay" id="product-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal" style="max-width:580px;">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2 id="product-modal-title">Add Product</h2>
+      <form onsubmit="handleProductSubmit(event)" id="product-form">
+        <input type="hidden" id="product-id">
+        <div class="form-group"><label>Product Name</label><input type="text" id="pf-name" required placeholder="e.g. ADDY Focus Capsules 15ct"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group"><label>SKU</label><input type="text" id="pf-sku" placeholder="ADDY-CAP-15"></div>
+          <div class="form-group"><label>Stock Quantity</label><input type="number" id="pf-stock" value="0" min="0"></div>
+        </div>
+        <div class="form-group"><label>Description</label><textarea id="pf-description" rows="2" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;resize:vertical;box-sizing:border-box;" placeholder="Short product description"></textarea></div>
+
+        <div class="form-group">
+          <label>Product Image</label>
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">
+            <input type="file" id="pf-image-file" accept="image/*" onchange="handleImageUpload(this)" style="font-size:13px;flex:1;">
+          </div>
+          <input type="text" id="pf-image-url" placeholder="Or paste an image URL" oninput="updateImagePreview(this.value)" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;">
+          <div id="product-preview-wrap" style="display:none;margin-top:10px;position:relative;">
+            <img id="product-preview-img" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;" alt="Preview">
+            <button type="button" onclick="openCropModal()" style="position:absolute;bottom:8px;right:8px;background:rgba(0,0,0,0.65);color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;">✂️ Crop</button>
+          </div>
+
+<!-- ── CROP MODAL ─────────────────────────────────────────────────────── -->
+<div id="crop-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);align-items:center;justify-content:center;">
+  <div style="background:var(--bg-card);border-radius:16px;padding:24px;width:min(94vw,580px);display:flex;flex-direction:column;gap:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="margin:0;font-size:16px;color:var(--text);">✂️ Crop Image</h3>
+      <button type="button" onclick="closeCropModal()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-muted);">×</button>
+    </div>
+
+    <!-- Cropper area -->
+    <div style="height:340px;overflow:hidden;border-radius:8px;background:#111;position:relative;">
+      <img id="crop-source" style="display:block;max-width:100%;">
+    </div>
+
+    <!-- Zoom controls -->
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:12px;color:var(--text-muted);white-space:nowrap;">Zoom</span>
+      <button type="button" onclick="if(_cropperInstance)_cropperInstance.zoom(-0.15)" style="width:32px;height:32px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:18px;line-height:1;">−</button>
+      <input type="range" id="crop-zoom-slider" min="-50" max="50" value="0" oninput="cropZoomSlider(this.value)" style="flex:1;accent-color:#2563eb;">
+      <button type="button" onclick="if(_cropperInstance)_cropperInstance.zoom(0.15)" style="width:32px;height:32px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:18px;line-height:1;">+</button>
+      <button type="button" onclick="resetCropZoom()" style="padding:4px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-muted);cursor:pointer;font-size:11px;">Reset</button>
+    </div>
+
+    <!-- Ratio buttons -->
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+      <button type="button" onclick="setCropRatio(1)"     style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:13px;">1:1 Square</button>
+      <button type="button" onclick="setCropRatio(4/3)"   style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:13px;">4:3</button>
+      <button type="button" onclick="setCropRatio(16/9)"  style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:13px;">16:9</button>
+      <button type="button" onclick="setCropRatio(3/4)"   style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:13px;">3:4 Tall</button>
+      <button type="button" onclick="setCropRatio(NaN)"   style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:13px;">Free</button>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:10px;">
+      <button type="button" onclick="closeCropModal()" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);cursor:pointer;font-size:14px;">Cancel</button>
+      <button type="button" onclick="applyCrop()" style="flex:2;padding:10px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px;font-weight:600;">✓ Apply Crop</button>
+    </div>
+  </div>
+</div>
+        </div>
+
+        <div class="form-group" style="margin-bottom:8px;">
+          <label style="font-size:13px;font-weight:700;color:var(--text);">Retail Price ($) <span style="font-weight:400;color:var(--text-muted);">— what DSDs sell to stores for (drives tier pricing)</span></label>
+          <input type="number" step="0.01" min="0" id="pf-retail-price" placeholder="e.g. 10.00"
+            oninput="updateTierPricePreview()"
+            style="width:100%;padding:10px 14px;border:2px solid var(--accent);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;box-sizing:border-box;">
+        </div>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Your Cost ($) <span style="font-weight:400;">— what you paid (for profit reference only)</span></label>
+          <input type="number" step="0.01" min="0" id="pf-cost-price" placeholder="e.g. 4.00"
+            oninput="updateTierPricePreview()"
+            style="width:100%;padding:9px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;">
+        </div>
+
+        <div style="background:var(--bg-secondary);border-radius:10px;padding:16px;margin-bottom:16px;">
+          <p style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;">Tier Pricing Preview</p>
+          <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Prices are auto-calculated from cost price. Individual DSD overrides can be set per user.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 1 · 35% margin</div>
+              <div id="preview-tier1" style="font-size:16px;font-weight:800;color:var(--green);">—</div>
+              <div id="preview-tier1-profit" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
+            </div>
+            <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 2 · 30% margin</div>
+              <div id="preview-tier2" style="font-size:16px;font-weight:800;color:var(--accent);">—</div>
+              <div id="preview-tier2-profit" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
+            </div>
+            <div style="background:var(--bg-card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Tier 3 · 25% margin</div>
+              <div id="preview-tier3" style="font-size:16px;font-weight:800;color:var(--text-secondary);">—</div>
+              <div id="preview-tier3-profit" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Status</label>
+          <select id="pf-active" style="width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;">
+            <option value="1">Active</option>
+            <option value="2">Coming Soon</option>
+            <option value="0">Inactive</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-green">Save Product</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Bulk Action Bar -->
+  <div class="bulk-bar" id="bulk-bar">
+    <span class="bulk-count" id="bulk-count">0 selected</span>
+    <div class="bulk-actions">
+      <button class="btn btn-sm btn-outline" onclick="bulkExport()">Export Selected</button>
+      <button class="btn btn-sm btn-danger" onclick="bulkDelete()">Delete Selected</button>
+    </div>
+  </div>
+
+  <!-- Store Detail Modal -->
+  <div class="modal-overlay" id="store-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal"><button class="close-btn" onclick="closeModal()">&times;</button><h2>Store Details</h2><div id="modal-content"></div></div>
+  </div>
+
+  <!-- Add Store Modal -->
+  <div class="modal-overlay" id="add-store-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Add New Store</h2>
+      <form onsubmit="handleAddStore(event)" id="add-store-form">
+        <div class="form-group"><label>Store Name</label><input type="text" name="name" required></div>
+        <div class="form-group"><label>Owner Name</label><input type="text" name="owner_name" required></div>
+        <div class="form-group"><label>Email</label><input type="email" name="email" required></div>
+        <div class="form-group"><label>Address</label><input type="text" name="address"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div class="form-group"><label>City</label><input type="text" name="city"></div>
+          <div class="form-group"><label>State</label><input type="text" name="state" maxlength="2"></div>
+          <div class="form-group"><label>Zip</label><input type="text" name="zip" maxlength="5"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group"><label>Category</label><input type="text" name="category" value="General"></div>
+          <div class="form-group"><label>Monthly Revenue</label><input type="number" name="monthly_revenue" step="0.01" value="0"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div class="form-group"><label>Wholesale Price ($)</label><input type="number" name="wholesale_price" step="0.01" value="0"></div>
+          <div class="form-group"><label>Retail Price ($)</label><input type="number" name="retail_price" step="0.01" value="0"></div>
+          <div class="form-group"><label>Distribution Cost ($)</label><input type="number" name="distribution_cost" step="0.01" value="0"></div>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select name="status" style="width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;">
+            <option value="active">Active</option><option value="pending">Pending</option><option value="inactive">Inactive</option>
+          </select>
+        </div>
+        <button type="submit" class="btn">Add Store</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Create User Modal (admin/investor) -->
+  <div class="modal-overlay" id="create-user-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2 id="create-user-title">Add User</h2>
+      <p id="create-user-subtitle" style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;"></p>
+      <form onsubmit="handleCreateUser(event)">
+        <input type="hidden" name="role" id="create-user-role">
+        <div class="form-group"><label>Full Name</label><input type="text" name="name" required placeholder="Full name"></div>
+        <div class="form-group"><label>Email</label><input type="email" name="email" required placeholder="email@example.com"></div>
+        <div class="form-group"><label>Phone</label><input type="tel" name="phone" placeholder="555-0100"></div>
+        <div class="form-group"><label>Password</label><input type="password" name="password" required minlength="6" placeholder="At least 6 characters"></div>
+        <button type="submit" class="btn btn-green">Create Account</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add DSD Modal -->
+  <div class="modal-overlay" id="add-rep-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Add New DSD</h2>
+      <form onsubmit="handleAdminAddDSD(event)">
+        <div class="form-group"><label>Full Name</label><input type="text" name="name" required></div>
+        <div class="form-group"><label>Email</label><input type="email" name="email" required></div>
+        <div class="form-group"><label>Phone</label><input type="tel" name="phone"></div>
+        <div class="form-group"><label>Password</label><input type="password" name="password" required minlength="6"></div>
+        <div class="form-group"><label>Sponsor DSD ID (optional)</label><input type="number" name="sponsor_rep_id" placeholder="Leave blank if no sponsor"></div>
+        <button type="submit" class="btn btn-green">Add DSD</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Approve with Pricing Tier Modal -->
+  <div class="modal-overlay" id="approve-pricing-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:520px;">
+      <button class="close-btn" onclick="document.getElementById('approve-pricing-modal').classList.remove('active')">&times;</button>
+      <h2>Approve Account</h2>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Approving: <strong id="approve-user-name"></strong></p>
+
+      <div class="form-group">
+        <label style="font-size:13px;font-weight:600;">Assign Pricing Tier</label>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">This determines what prices they see when shopping. They will not see the tier name.</p>
+        <select id="approve-tier-select" onchange="renderTierPreview(this.value)"
+          style="width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:15px;">
+        </select>
+      </div>
+
+      <div id="approve-price-preview" style="background:var(--bg-secondary);border-radius:10px;padding:14px;margin-bottom:20px;max-height:280px;overflow-y:auto;"></div>
+
+      <div style="display:flex;gap:10px;">
+        <button id="approve-confirm-btn" class="btn btn-green" style="flex:1;" onclick="confirmApproveWithPricing()">Approve & Activate</button>
+        <button class="btn btn-outline" onclick="document.getElementById('approve-pricing-modal').classList.remove('active')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile Modal -->
+  <div class="modal-overlay" id="profile-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Change Password</h2>
+      <form onsubmit="handleChangePassword(event)">
+        <div class="form-group"><label>Current Password</label><input type="password" name="current_password" required></div>
+        <div class="form-group"><label>New Password</label><input type="password" name="new_password" required minlength="6"></div>
+        <div class="form-group"><label>Confirm New Password</label><input type="password" name="confirm_password" required minlength="6"></div>
+        <button type="submit" class="btn">Update Password</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- User Detail Modal -->
+  <div class="modal-overlay" id="user-detail-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:520px;">
+      <button class="close-btn" onclick="document.getElementById('user-detail-modal').classList.remove('active')">&times;</button>
+      <h2>User Details</h2>
+      <div id="user-detail-content"></div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/admin-products.js"></script>
+  <script>loadAdminDashboard();</script>
+</body>
+</html>
