@@ -882,8 +882,8 @@ async function loadMyStores() {
   if (!el) return;
   const stores = await apiFetch('/api/my-stores');
   if (!stores || !stores.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">🏪</div><div>No stores claimed yet.</div><div style="margin-top:8px;font-size:13px;">Click Claim a Store to get started.</div></div>'; return; }
-  el.innerHTML = stores.map(s => `
-    <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
+  el.innerHTML = `<div class="table-card">` + stores.map(s => `
+    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
       <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
       <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
     </div>`).join('');
@@ -2604,20 +2604,23 @@ async function removeNotifEmail(id) {
 let _storeMap = null;
 
 function setStoreView(view) {
-  const tableWrap = document.querySelector('#tab-stores .table-wrap') || document.querySelector('#tab-stores table')?.closest('.table-wrap');
+  // Target the stores list container - works for both WowCow and ADDY layouts
+  const listContainer = document.getElementById('stores-list-container') ||
+                        document.querySelector('#tab-stores .table-wrap') ||
+                        document.querySelector('#tab-stores .table-card');
   const tableFooter = document.getElementById('table-footer');
   const mapEl = document.getElementById('stores-map-view');
   const listBtn = document.getElementById('btn-list-view');
   const mapBtn = document.getElementById('btn-map-view');
   if (view === 'map') {
-    if (tableWrap) tableWrap.style.display = 'none';
+    if (listContainer) listContainer.style.display = 'none';
     if (tableFooter) tableFooter.style.display = 'none';
     if (mapEl) mapEl.style.display = 'block';
     if (listBtn) { listBtn.style.background='var(--bg-secondary)'; listBtn.style.color='var(--text)'; }
     if (mapBtn) { mapBtn.style.background='var(--accent)'; mapBtn.style.color='#fff'; }
     loadStoreMap();
   } else {
-    if (tableWrap) tableWrap.style.display = '';
+    if (listContainer) listContainer.style.display = '';
     if (tableFooter) tableFooter.style.display = '';
     if (mapEl) mapEl.style.display = 'none';
     if (listBtn) { listBtn.style.background='var(--accent)'; listBtn.style.color='#fff'; }
