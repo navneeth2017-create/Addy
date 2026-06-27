@@ -498,6 +498,40 @@ async function rejectStoreClaim(storeId) {
   if (result && result.success) { showToast('Store claim rejected', 'info'); loadStoreClaimsTab(); }
 }
 
+async function loadOwnershipRequestsTab() {
+  const el = document.getElementById('ownership-requests-list');
+  if (!el) return;
+  const requests = await apiFetch('/api/ownership-requests');
+  if (!requests || !requests.length) {
+    el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted);">No pending ownership requests</div>';
+    return;
+  }
+  el.innerHTML = requests.map(r => `
+    <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--bg-card);">
+      <div style="flex:1;">
+        <div style="font-weight:700;font-size:15px;color:var(--text);">${esc(r.store_name)}</div>
+        <div style="font-size:13px;color:var(--text-secondary);">${esc([r.city, r.state].filter(Boolean).join(', '))}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+          Requested by: <strong>${esc(r.requester_name||r.requester_email)}</strong>
+          ${r.current_owner_name ? ` — currently owned by <strong>${esc(r.current_owner_name)}</strong>` : ''}
+        </div>
+        ${r.message ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;font-style:italic;">"${esc(r.message)}"</div>` : ''}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-green" onclick="handleOwnershipRequest(${r.id}, true)">✓ Approve Transfer</button>
+        <button class="btn btn-sm btn-danger" onclick="handleOwnershipRequest(${r.id}, false)">Reject</button>
+      </div>
+    </div>`).join('');
+}
+
+async function handleOwnershipRequest(requestId, approved) {
+  const result = await apiFetch('/api/ownership-requests/' + requestId, { method: 'PATCH', body: JSON.stringify({ approved }) });
+  if (result && result.success) {
+    showToast(approved ? 'Ownership transferred ✓' : 'Request rejected', approved ? 'success' : 'info');
+    loadOwnershipRequestsTab();
+  }
+}
+
 // ==========================================
 // ADMIN DASHBOARD
 // ==========================================
@@ -893,12 +927,20 @@ async function loadMyStores() {
 
 function showClaimStoreModal() {
   // Reset fields each time it opens
-  ['cs-search','cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email'].forEach(id => {
+  ['cs-search','cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.value = ''; el.readOnly = false; }
   });
   const results = document.getElementById('wc-store-results');
   if (results) results.style.display = 'none';
+  // Reset submit button back to default claim mode
+  const btn = document.getElementById('cs-submit-btn');
+  if (btn) {
+    btn.textContent = 'Submit for Approval';
+    btn.onclick = submitStoreClaim;
+    btn.classList.add('btn-green');
+    btn.classList.remove('btn-outline');
+  }
   document.getElementById('claim-store-modal')?.classList.add('active');
 }
 
@@ -923,8 +965,13 @@ async function searchWowCowStores(query) {
       <div onclick='selectWowCowStore(${JSON.stringify(s).replace(/'/g,"&apos;")})'
         style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
         onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
-        <div style="font-weight:600;color:var(--text);">${esc(s.name)}</div>
-        <div style="color:var(--text-muted);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <div>
+            <div style="font-weight:600;color:var(--text);">${esc(s.name)}</div>
+            <div style="color:var(--text-muted);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div>
+          </div>
+          ${s.already_claimed ? '<span style="font-size:10px;font-weight:700;color:var(--red);background:rgba(220,38,38,0.1);padding:2px 8px;border-radius:10px;white-space:nowrap;">Already Claimed</span>' : ''}
+        </div>
       </div>`).join('');
   }, 350); // debounce
 }
@@ -935,26 +982,63 @@ function selectWowCowStore(store) {
   document.getElementById('cs-city').value = store.city || '';
   document.getElementById('cs-state').value = store.state || '';
   document.getElementById('cs-zip').value = store.zip || '';
+  document.getElementById('cs-store-id').value = store.already_claimed ? store.id : (store.source === 'addy' ? store.id : '');
   const results = document.getElementById('wc-store-results');
   if (results) results.style.display = 'none';
   document.getElementById('cs-name').readOnly = true;
   document.getElementById('cs-address').readOnly = true;
+
+  const btn = document.getElementById('cs-submit-btn');
+  if (store.already_claimed) {
+    btn.textContent = 'Request Ownership Transfer';
+    btn.onclick = () => requestOwnership(store.id);
+    btn.classList.remove('btn-green');
+    btn.classList.add('btn-outline');
+  } else {
+    btn.textContent = 'Submit for Approval';
+    btn.onclick = submitStoreClaim;
+    btn.classList.add('btn-green');
+    btn.classList.remove('btn-outline');
+  }
+}
+
+async function requestOwnership(storeId) {
+  const result = await apiFetch('/api/stores/' + storeId + '/request-ownership', { method: 'POST', body: JSON.stringify({}) });
+  if (result && result.success) {
+    showToast('Ownership request submitted ✓ — admin will review', 'success');
+    document.getElementById('claim-store-modal')?.classList.remove('active');
+    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  } else if (result && result.error) {
+    showToast(result.error, 'error');
+  }
 }
 
 async function submitStoreClaim() {
   const name = document.getElementById('cs-name')?.value?.trim();
   if (!name) { showToast('Store name is required', 'error'); return; }
+  const storeId = document.getElementById('cs-store-id')?.value;
   const result = await apiFetch('/api/stores/claim', { method: 'POST', body: JSON.stringify({
     name, address: document.getElementById('cs-address')?.value?.trim(),
     city: document.getElementById('cs-city')?.value?.trim(), state: document.getElementById('cs-state')?.value?.trim(),
     zip: document.getElementById('cs-zip')?.value?.trim(), phone: document.getElementById('cs-phone')?.value?.trim(),
     email: document.getElementById('cs-email')?.value?.trim(),
+    store_id: storeId ? parseInt(storeId) : null,
   })});
   if (result && result.success) {
     showToast('Store submitted for approval ✓', 'success');
     document.getElementById('claim-store-modal')?.classList.remove('active');
-    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
     loadMyStores();
+  } else if (result && result.alreadyClaimed) {
+    showToast(result.error, 'error');
+    // Switch to ownership request mode
+    const btn = document.getElementById('cs-submit-btn');
+    btn.textContent = 'Request Ownership Transfer';
+    btn.onclick = () => requestOwnership(result.storeId);
+    btn.classList.remove('btn-green');
+    btn.classList.add('btn-outline');
+  } else if (result && result.error) {
+    showToast(result.error, 'error');
   }
 }
 
@@ -1324,7 +1408,7 @@ function switchTab(tab, btn) {
   if (tab === 'reps') loadAdminDSDs();
   if (tab === 'users') loadUsersTab();
   if (tab === 'commissions') loadCommissionsTab();
-  if (tab === 'store-claims') loadStoreClaimsTab();
+  if (tab === 'store-claims') { loadStoreClaimsTab(); loadOwnershipRequestsTab(); }
   if (tab === 'products') loadProductsTab();
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();

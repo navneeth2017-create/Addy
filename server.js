@@ -181,6 +181,17 @@ async function migrate() {
   // which wiped real onboarding data (you can have real stores before any
   // orders exist). Never auto-delete data based on heuristics like this again.
 
+  // ── Ownership transfer requests table ────────────────────────────────────────
+  await q(`CREATE TABLE IF NOT EXISTS ownership_requests (
+    id SERIAL PRIMARY KEY,
+    store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    current_owner_id INTEGER REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
   // Create production admin account if it doesn't exist
   // ── Demo + Admin accounts ─────────────────────────────────────────────────
   const demoAccounts = [
@@ -1814,14 +1825,34 @@ app.patch('/api/inventory/:store_id/:product_id', authenticate, async (req, res)
 
 // ── SEARCH WOWCOW STORES (for ADDY claim modal) ─────────────────────────────
 app.get('/api/wowcow-stores/search', authenticate, async (req, res) => {
+  // Searches BOTH the WowCow network (public.stores) AND ADDY's own stores table,
+  // so reps see existing claims and can request ownership instead of creating duplicates.
   try {
     const { q } = req.query;
     if (!q || q.length < 2) return res.json([]);
-    const stores = await all(
+
+    // ADDY's own stores first — these have real-time claim status (exclusive_rep_id)
+    const ownStores = await all(
+      `SELECT id, name, address, city, state, zip, category, exclusive_rep_id,
+              (exclusive_rep_id IS NOT NULL) as already_claimed
+       FROM stores WHERE LOWER(name) LIKE LOWER($1) OR LOWER(city) LIKE LOWER($1) LIMIT 10`,
+      [`%${q}%`]
+    );
+
+    // WowCow network stores not yet in ADDY at all
+    const wcStores = await all(
       "SELECT id, name, address, city, state, zip, category FROM public.stores WHERE LOWER(name) LIKE LOWER($1) OR LOWER(city) LIKE LOWER($1) LIMIT 10",
       [`%${q}%`]
     );
-    res.json(stores);
+
+    const ownNames = new Set(ownStores.map(s => s.name.toLowerCase() + '|' + (s.city||'').toLowerCase()));
+    const merged = [
+      ...ownStores.map(s => ({ ...s, source: 'addy' })),
+      ...wcStores.filter(s => !ownNames.has(s.name.toLowerCase() + '|' + (s.city||'').toLowerCase()))
+                 .map(s => ({ ...s, source: 'wowcow', already_claimed: false }))
+    ];
+
+    res.json(merged.slice(0, 10));
   } catch(e) { res.json([]); }
 });
 
@@ -2052,17 +2083,100 @@ app.patch('/api/payouts/:id/reject', authenticate, authorize('admin'), async (re
 // DSD submits a store for exclusivity approval
 app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) => {
   try {
-    const { name, address, city, state, zip, phone, email, category } = req.body;
+    const { name, address, city, state, zip, phone, email, category, store_id } = req.body;
     if (!name) return res.status(400).json({ error: 'Store name required' });
-    // Check if store already claimed
-    const existing = await one('SELECT id,exclusive_rep_id FROM stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [name, city||'']);
-    if (existing?.exclusive_rep_id) return res.status(409).json({ error: 'This store is already claimed by another rep' });
+
+    // If a specific store_id was passed (selected from network search), use that record directly
+    let existing = store_id
+      ? await one('SELECT id,exclusive_rep_id,store_approval_status FROM stores WHERE id=$1', [store_id])
+      : await one('SELECT id,exclusive_rep_id,store_approval_status FROM stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [name, city||'']);
+
+    if (existing) {
+      // Store already exists in the network
+      if (existing.exclusive_rep_id && existing.exclusive_rep_id !== req.user.id) {
+        // Already claimed by SOMEONE ELSE — block direct claim, must request ownership instead
+        return res.status(409).json({
+          error: 'This store is already claimed by another rep. Submit an ownership request instead.',
+          alreadyClaimed: true,
+          storeId: existing.id
+        });
+      }
+      if (existing.exclusive_rep_id === req.user.id) {
+        return res.status(409).json({ error: 'You already have a pending or approved claim on this store.' });
+      }
+      // Store exists but unclaimed — claim it directly (no duplicate row created)
+      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='pending' WHERE id=$2", [req.user.id, existing.id]);
+      await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
+      return res.json({ success: true, id: existing.id, message: 'Store submitted for approval' });
+    }
+
+    // Brand new store — create it
     const store = await one(
       "INSERT INTO stores (name,address,city,state,zip,phone,email,category,store_approval_status,exclusive_rep_id,monthly_revenue,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,0,'active') RETURNING id",
       [name, address||'', city||'', state||'', zip||'', phone||'', email||'', category||'General', req.user.id]
     );
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
     res.json({ success: true, id: store.id, message: 'Store submitted for approval' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Request ownership transfer of an already-claimed store ───────────────────
+app.post('/api/stores/:id/request-ownership', authenticate, authorize('dsd'), async (req, res) => {
+  try {
+    const store = await one('SELECT id, name, exclusive_rep_id FROM stores WHERE id=$1', [req.params.id]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (!store.exclusive_rep_id) return res.status(400).json({ error: 'This store is not currently claimed — you can claim it directly instead' });
+    if (store.exclusive_rep_id === req.user.id) return res.status(400).json({ error: 'You already own this store' });
+
+    const existingReq = await one(
+      "SELECT id FROM ownership_requests WHERE store_id=$1 AND requester_id=$2 AND status='pending'",
+      [req.params.id, req.user.id]
+    );
+    if (existingReq) return res.status(409).json({ error: 'You already have a pending request for this store' });
+
+    await q(
+      'INSERT INTO ownership_requests (store_id, requester_id, current_owner_id, message) VALUES ($1,$2,$3,$4)',
+      [req.params.id, req.user.id, store.exclusive_rep_id, req.body.message || '']
+    );
+    await logActivity('requested_ownership', `${store.name} requested by rep #${req.user.id}`, req.user.email);
+    res.json({ success: true, message: 'Ownership request submitted for admin review' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: list pending ownership requests ────────────────────────────────────
+app.get('/api/ownership-requests', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const requests = await all(`
+      SELECT orq.id, orq.store_id, orq.status, orq.message, orq.created_at,
+             s.name as store_name, s.city, s.state,
+             ru.name as requester_name, ru.email as requester_email,
+             cu.name as current_owner_name, cu.email as current_owner_email
+      FROM ownership_requests orq
+      JOIN stores s ON s.id = orq.store_id
+      JOIN users ru ON ru.id = orq.requester_id
+      LEFT JOIN users cu ON cu.id = orq.current_owner_id
+      WHERE orq.status='pending'
+      ORDER BY orq.created_at DESC
+    `);
+    res.json(requests);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: approve/reject an ownership request ────────────────────────────────
+app.patch('/api/ownership-requests/:id', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { approved } = req.body;
+    const request = await one('SELECT * FROM ownership_requests WHERE id=$1', [req.params.id]);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+
+    if (approved) {
+      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved' WHERE id=$2", [request.requester_id, request.store_id]);
+      await q("UPDATE ownership_requests SET status='approved' WHERE id=$1", [req.params.id]);
+    } else {
+      await q("UPDATE ownership_requests SET status='rejected' WHERE id=$1", [req.params.id]);
+    }
+    await logActivity(approved ? 'approved_ownership_transfer' : 'rejected_ownership_transfer', `request #${req.params.id}`, req.user.email);
+    res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
