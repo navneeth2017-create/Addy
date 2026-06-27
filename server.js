@@ -907,22 +907,37 @@ app.get('/api/users/:id/pricing', authenticate, authorize('admin'), async (req, 
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Set per-user product pricing
+// Set per-user pricing — handles TWO use cases on the same route:
+// 1. { product_id, price } — set/clear ONE product's custom price (per-product editor)
+// 2. { tier, custom_prices, custom_margin_pct } — change a DSD's whole tier (Change Tier modal)
 app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { product_id, price } = req.body;
-    if (!product_id) return res.status(400).json({ error: 'product_id required' });
-    if (price === null || price === undefined || price === '') {
-      // Remove custom price — revert to default
-      await q('DELETE FROM product_prices WHERE user_id=$1 AND product_id=$2', [req.params.id, product_id]);
-    } else {
-      await q(
-        "INSERT INTO product_prices (product_id, user_id, role, price) VALUES ($1,$2,'dsd',$3) ON CONFLICT (product_id, user_id, role) DO UPDATE SET price=EXCLUDED.price",
-        [product_id, req.params.id, parseFloat(price)]
-      );
+    const { product_id, price, tier, custom_prices, custom_margin_pct } = req.body || {};
+
+    if (product_id) {
+      // Use case 1: single product custom price
+      if (price === null || price === undefined || price === '') {
+        await q('DELETE FROM product_prices WHERE user_id=$1 AND product_id=$2', [req.params.id, product_id]);
+      } else {
+        await q(
+          "INSERT INTO product_prices (product_id, user_id, role, price) VALUES ($1,$2,'dsd',$3) ON CONFLICT (product_id, user_id, role) DO UPDATE SET price=EXCLUDED.price",
+          [product_id, req.params.id, parseFloat(price)]
+        );
+      }
+      return res.json({ success: true });
     }
-    res.json({ success: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+
+    if (tier !== undefined && tier !== null) {
+      // Use case 2: change overall tier (recalculates all product prices)
+      const user = await one('SELECT * FROM users WHERE id=$1', [req.params.id]);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
+      await logActivity('pricing_updated', user.name||user.email, req.user.email);
+      return res.json({ success: true });
+    }
+
+    return res.status(400).json({ error: 'Provide either product_id+price or tier' });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 // Admin reset a user's password
@@ -979,18 +994,6 @@ async function applyPricingTier(userId, tierVal, customPrices, customMarginPct) 
     await q("INSERT INTO product_prices (product_id,user_id,role,price) VALUES ($1,$2,'dsd',$3)", [p.id, userId, price]);
   }
 }
-
-app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const user = await one('SELECT * FROM users WHERE id=$1', [req.params.id]);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const { tier, custom_prices, custom_margin_pct } = req.body || {};
-    if (!tier && tier !== 0) return res.status(400).json({ error: 'Tier is required' });
-    await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
-    await logActivity('pricing_updated', user.name||user.email, req.user.email);
-    res.json({ success: true });
-  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
-});
 
 app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req, res) => {
   try {

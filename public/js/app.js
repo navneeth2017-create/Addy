@@ -1884,29 +1884,8 @@ function filterStores(val) {
   renderDSDTable(filtered);
 }
 
-function showEnrollModal() {
-  document.getElementById('enroll-modal').classList.add('active');
-}
-
-async function handleEnrollDSD(e) {
-  e.preventDefault();
-  const form = e.target;
-  const body = {
-    name: form.name.value.trim(),
-    email: form.email.value.trim(),
-    phone: form.phone.value.trim(),
-    password: form.password.value
-  };
-  const result = await apiFetch('/api/reps/enroll', { method: 'POST', body: JSON.stringify(body) });
-  if (result && result.success) {
-    showToast(`${body.name} enrolled as rep!`, 'success');
-    closeModal();
-    form.reset();
-    loadDSDDashboard();
-  } else if (result && result.error) {
-    showToast(result.error, 'error');
-  }
-}
+// (Removed: showEnrollModal/handleEnrollDSD — dead code, never wired to any UI button,
+// and called a since-removed endpoint that used the broken 'rep' role system.)
 
 // ==========================================
 // ADMIN: USERS TAB
