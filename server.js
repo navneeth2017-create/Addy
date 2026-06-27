@@ -1,4 +1,5 @@
 const express = require('express');
+const { startBackupScheduler } = require('./backup_module');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -379,8 +380,8 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
 
     await logActivity('signup_request', `${name} (DSD)`, email.toLowerCase());
 
-    // Email notification
-    const roleLabel = role === 'dsd' ? 'DSD' : role === 'dsd' ? 'DSD' : 'DSD';
+    // Email notification (ADDY only has DSD signups — no role selector)
+    const roleLabel = 'DSD';
     await sendNotification(
       `👤 New Account Request — ${name} (${roleLabel})`,
       `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
@@ -394,8 +395,7 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Email</td><td style="padding:6px 0;font-size:13px;">${email.toLowerCase()}</td></tr>
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Phone</td><td style="padding:6px 0;font-size:13px;">${phone || '—'}</td></tr>
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Role</td><td style="padding:6px 0;font-size:13px;"><strong>${roleLabel}</strong></td></tr>
-            ${role === 'dsd' ? `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Store</td><td style="padding:6px 0;font-size:13px;">${store_name || '—'}</td></tr>
-            <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Location</td><td style="padding:6px 0;font-size:13px;">${city || ''} ${state || ''}</td></tr>` : ''}
+            ${referredById ? `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Referred By</td><td style="padding:6px 0;font-size:13px;">${referral_code||''}</td></tr>` : ''}
           </table>
           <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px 18px;font-size:13px;color:#1d4ed8;">
             Log in to your admin dashboard → Pending Approvals to approve or deny this request.
@@ -656,6 +656,15 @@ app.get('/api/stores/pending-claims', authenticate, authorize('admin'), async (r
   try {
     const stores = await all(
       "SELECT s.*, u.name as rep_name, u.email as rep_email FROM stores s JOIN users u ON u.id=s.exclusive_rep_id WHERE s.store_approval_status='pending' ORDER BY s.id DESC"
+    );
+    res.json(stores);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const stores = await all(
+      "SELECT id, name, address, city, state, zip, category, store_approval_status, exclusive_rep_id FROM stores WHERE store_approval_status='approved' ORDER BY name"
     );
     res.json(stores);
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1905,14 +1914,6 @@ app.patch('/api/stores/:id/approve-claim', authenticate, authorize('admin'), asy
 });
 
 // Map data endpoint — returns all approved stores with geocodable addresses
-app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const stores = await all(
-      "SELECT id, name, address, city, state, zip, category, store_approval_status, exclusive_rep_id FROM stores WHERE store_approval_status='approved' ORDER BY name"
-    );
-    res.json(stores);
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
 
 // ── IMPORT PRODUCTS FROM WOWCOW ──────────────────────────────────────────────
 app.post('/api/products/import-from-wowcow', authenticate, authorize('admin'), async (req, res) => {
@@ -1972,6 +1973,13 @@ app.post('/api/commissions/recalculate/:orderId', authenticate, authorize('admin
     const newCommissions = await all('SELECT * FROM commissions WHERE order_id=$1', [order.id]);
     res.json({ success: true, commissions: newCommissions, message: `Recalculated ${newCommissions.length} commission(s)` });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── MANUAL BACKUP TRIGGER ────────────────────────────────────────────────────
+app.post('/api/admin/backup-now', authenticate, authorize('admin'), async (req, res) => {
+  res.json({ success: true, message: 'Backup started — check server logs' });
+  const { runBackup } = require('./backup_module');
+  runBackup(pool, 'addy', 'addy').catch(console.error);
 });
 
 // ── ADDY DSD TIER & COMMISSION ENDPOINTS ──────────────────────────────────────
@@ -2116,7 +2124,11 @@ app.get('/api/my-stores', authenticate, authorize('dsd'), async (req, res) => {
 // ── START ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 migrate().then(() => {
-  app.listen(PORT, '0.0.0.0', () => console.log(`⚡ ADDY running on port ${PORT}`));
+  
+// Start nightly backup scheduler
+startBackupScheduler(pool, 'addy', 'addy');
+
+app.listen(PORT, '0.0.0.0', () => console.log(`⚡ ADDY running on port ${PORT}`));
 }).catch(err => {
   console.error('❌ Failed to start:', err);
   process.exit(1);

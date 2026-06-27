@@ -306,10 +306,16 @@ function showCheckout() {
 
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
   const shipping = subtotal >= 350 ? 0 : 35;
-  const total = subtotal + shipping;
+  const isCard = _selectedPayment === 'card';
+  const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
+  const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
 
   document.getElementById('co-subtotal').textContent = `$${subtotal.toFixed(2)}`;
   document.getElementById('co-shipping').textContent = shipping === 0 ? 'FREE' : `$${shipping.toFixed(2)}`;
+  const feeRow = document.getElementById('co-fee-row');
+  if (feeRow) feeRow.style.display = processingFee > 0 ? 'flex' : 'none';
+  const feeEl = document.getElementById('co-fee');
+  if (feeEl) feeEl.textContent = `$${processingFee.toFixed(2)}`;
   document.getElementById('co-total').textContent = `$${total.toFixed(2)}`;
 
   document.getElementById('checkout-items').innerHTML = items.map(i => `
@@ -369,6 +375,22 @@ async function initPayment() {
   }
 }
 
+function updateCheckoutTotals() {
+  const items = _cart.items || [];
+  if (!items.length) return;
+  const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
+  const shipping = subtotal >= 350 ? 0 : 35;
+  const isCard = _selectedPayment === 'card';
+  const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
+  const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
+  document.getElementById('co-shipping').textContent = shipping === 0 ? 'FREE' : `$${shipping.toFixed(2)}`;
+  const feeRow = document.getElementById('co-fee-row');
+  if (feeRow) feeRow.style.display = processingFee > 0 ? 'flex' : 'none';
+  const feeEl = document.getElementById('co-fee');
+  if (feeEl) feeEl.textContent = `$${processingFee.toFixed(2)}`;
+  document.getElementById('co-total').textContent = `$${total.toFixed(2)}`;
+}
+
 function selectPayment(method) {
   if (method === 'card' && !_stripeActive) return;
   _selectedPayment = method;
@@ -388,6 +410,7 @@ function selectPayment(method) {
   } else {
     cardWrap.style.display = 'none';
   }
+  updateCheckoutTotals();
 }
 
 async function placeOrder() {
@@ -406,7 +429,8 @@ async function placeOrder() {
     if (_selectedPayment === 'card' && _stripeActive && _stripeCardElement) {
       const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
       const shipping = subtotal >= 350 ? 0 : 35;
-      const totalCents = Math.round((subtotal + shipping) * 100);
+      const processingFee = Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100;
+      const totalCents = Math.round((subtotal + shipping + processingFee) * 100);
       const intentRes = await apiFetch('/api/payment/intent', { method: 'POST', body: JSON.stringify({ amount_cents: totalCents }) });
       if (!intentRes?.clientSecret) { showToast('Card payment error. Please try invoice instead.', 'error'); return; }
 

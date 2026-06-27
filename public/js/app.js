@@ -882,8 +882,8 @@ async function loadMyStores() {
   if (!el) return;
   const stores = await apiFetch('/api/my-stores');
   if (!stores || !stores.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">🏪</div><div>No stores claimed yet.</div><div style="margin-top:8px;font-size:13px;">Click Claim a Store to get started.</div></div>'; return; }
-  el.innerHTML = stores.map(s => `
-    <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
+  el.innerHTML = `<div class="table-card">` + stores.map(s => `
+    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
       <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
       <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
     </div>`).join('');
@@ -891,7 +891,55 @@ async function loadMyStores() {
   if (statEl) statEl.textContent = stores.filter(s => s.store_approval_status==='approved').length;
 }
 
-function showClaimStoreModal() { document.getElementById('claim-store-modal')?.classList.add('active'); }
+function showClaimStoreModal() {
+  // Reset fields each time it opens
+  ['cs-search','cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; el.readOnly = false; }
+  });
+  const results = document.getElementById('wc-store-results');
+  if (results) results.style.display = 'none';
+  document.getElementById('claim-store-modal')?.classList.add('active');
+}
+
+let _wcSearchTimeout = null;
+async function searchWowCowStores(query) {
+  clearTimeout(_wcSearchTimeout);
+  const el = document.getElementById('wc-store-results');
+  if (!query || query.trim().length < 2) {
+    if (el) el.style.display = 'none';
+    return;
+  }
+  _wcSearchTimeout = setTimeout(async () => {
+    const results = await apiFetch('/api/wowcow-stores/search?q=' + encodeURIComponent(query.trim()));
+    if (!el) return;
+    if (!results || !results.length) {
+      el.innerHTML = '<div style="padding:10px 12px;color:var(--text-muted);font-size:13px;">No matching stores — fill in details below to create new</div>';
+      el.style.display = 'block';
+      return;
+    }
+    el.style.display = 'block';
+    el.innerHTML = results.map(s => `
+      <div onclick='selectWowCowStore(${JSON.stringify(s).replace(/'/g,"&apos;")})'
+        style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
+        onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
+        <div style="font-weight:600;color:var(--text);">${esc(s.name)}</div>
+        <div style="color:var(--text-muted);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div>
+      </div>`).join('');
+  }, 350); // debounce
+}
+
+function selectWowCowStore(store) {
+  document.getElementById('cs-name').value = store.name || '';
+  document.getElementById('cs-address').value = store.address || '';
+  document.getElementById('cs-city').value = store.city || '';
+  document.getElementById('cs-state').value = store.state || '';
+  document.getElementById('cs-zip').value = store.zip || '';
+  const results = document.getElementById('wc-store-results');
+  if (results) results.style.display = 'none';
+  document.getElementById('cs-name').readOnly = true;
+  document.getElementById('cs-address').readOnly = true;
+}
 
 async function submitStoreClaim() {
   const name = document.getElementById('cs-name')?.value?.trim();
@@ -2597,5 +2645,82 @@ async function removeNotifEmail(id) {
   if (result && result.success) {
     showToast('Email removed', 'info');
     loadNotifEmails();
+  }
+}
+
+// ── STORE MAP VIEW ────────────────────────────────────────────────────────────
+let _storeMap = null;
+
+function setStoreView(view) {
+  // Target the stores list container - works for both WowCow and ADDY layouts
+  const listContainer = document.getElementById('stores-list-container') ||
+                        document.querySelector('#tab-stores .table-wrap') ||
+                        document.querySelector('#tab-stores .table-card');
+  const tableFooter = document.getElementById('table-footer');
+  const mapEl = document.getElementById('stores-map-view');
+  const listBtn = document.getElementById('btn-list-view');
+  const mapBtn = document.getElementById('btn-map-view');
+  if (view === 'map') {
+    if (listContainer) listContainer.style.display = 'none';
+    if (tableFooter) tableFooter.style.display = 'none';
+    if (mapEl) mapEl.style.display = 'block';
+    if (listBtn) { listBtn.style.background='var(--bg-secondary)'; listBtn.style.color='var(--text)'; }
+    if (mapBtn) { mapBtn.style.background='var(--accent)'; mapBtn.style.color='#fff'; }
+    loadStoreMap();
+  } else {
+    if (listContainer) listContainer.style.display = '';
+    if (tableFooter) tableFooter.style.display = '';
+    if (mapEl) mapEl.style.display = 'none';
+    if (listBtn) { listBtn.style.background='var(--accent)'; listBtn.style.color='#fff'; }
+    if (mapBtn) { mapBtn.style.background='var(--bg-secondary)'; mapBtn.style.color='var(--text)'; }
+  }
+}
+
+async function loadStoreMap() {
+  const mapEl = document.getElementById('stores-map');
+  if (!mapEl) return;
+  if (!window.L) {
+    await new Promise((res, rej) => {
+      const css = document.createElement('link'); css.rel='stylesheet';
+      css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(css);
+      const s = document.createElement('script');
+      s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      s.onload=res; s.onerror=rej; document.head.appendChild(s);
+    });
+  }
+  if (_storeMap) { _storeMap.remove(); _storeMap=null; }
+  _storeMap = L.map('stores-map').setView([39.5,-98.35],4);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {attribution:'© OpenStreetMap contributors'}).addTo(_storeMap);
+  const stores = await apiFetch('/api/stores/map-data');
+  if (!stores || !stores.length) {
+    const info = L.control({position:'topright'});
+    info.onAdd = () => { const d=L.DomUtil.create('div'); d.style.cssText='background:#fff;padding:8px 14px;border-radius:8px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.15);'; d.textContent='No stores yet'; return d; };
+    info.addTo(_storeMap); return;
+  }
+  for (const store of stores) {
+    const parts = [store.address,store.city,store.state,'USA'].filter(Boolean);
+    if (parts.length < 2) continue;
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(parts.join(', '))+'&format=json&limit=1',{headers:{'User-Agent':'ADDY-DSD/1.0'}});
+      const data = await r.json();
+      if (data && data[0]) {
+        L.marker([parseFloat(data[0].lat),parseFloat(data[0].lon)]).addTo(_storeMap)
+          .bindPopup('<strong>'+store.name+'</strong><br>'+[store.address,store.city,store.state].filter(Boolean).join(', '));
+      }
+      await new Promise(r=>setTimeout(r,1100));
+    } catch(e){}
+  }
+}
+
+
+async function triggerBackup() {
+  const status = document.getElementById('backup-status');
+  if (status) status.textContent = 'Starting backup...';
+  const result = await apiFetch('/api/admin/backup-now', { method: 'POST' });
+  if (result && result.success) {
+    if (status) status.textContent = '✓ Backup running — check Railway logs for progress';
+    showToast('Backup started ✓', 'success');
   }
 }

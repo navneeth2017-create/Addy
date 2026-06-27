@@ -72,6 +72,7 @@
           </div>
         </div>
 
+        <div id="stores-list-container">
         <div class="stats-grid">
           <div class="stat-card"><div class="stat-label">Total Stores</div><div class="stat-value" id="stat-total">--</div></div>
           <div class="stat-card"><div class="stat-label">Total Monthly Revenue</div><div class="stat-value revenue" id="stat-revenue">--</div></div>
@@ -133,6 +134,7 @@
           <div id="stores-map-view" style="display:none;padding:8px 0;">
             <div id="stores-map" style="height:520px;border-radius:10px;border:1px solid var(--border);"></div>
           </div>
+        </div><!-- end stores-list-container -->
         </div>
       </div>
 
@@ -249,7 +251,10 @@
         <div class="page-header">
           <div><h1>Inventory</h1><p>Product stock levels across all stores</p></div>
         </div>
-        <div id="inventory-content"><div class="loading" style="padding:40px;text-align:center;">Loading inventory...</div></div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>Stock Levels</h2></div>
+          <div id="inventory-content" style="padding:0;"><div style="padding:40px;text-align:center;color:var(--text-muted);">Loading inventory...</div></div>
+        </div>
       </div>
 
       <!-- Commissions & Payouts Tab -->
@@ -287,6 +292,16 @@
       <div id="tab-settings" style="display:none;">
         <div class="page-header">
           <div><h1>Settings</h1><p>Manage notification preferences</p></div>
+        </div>
+
+        <!-- Backup Section -->
+        <div class="table-card" style="max-width:640px;margin-bottom:24px;">
+          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">Database Backup</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Runs automatically every night at 3am UTC. Keeps 7 daily + 4 weekly backups.</p></div></div>
+          <div style="padding:16px 24px;">
+            <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px;">Requires B2_KEY_ID, B2_APP_KEY and B2_BUCKET_ID env vars set in Railway.</p>
+            <button class="btn btn-green" onclick="triggerBackup()" style="font-size:13px;">▶ Run Backup Now</button>
+            <span id="backup-status" style="margin-left:12px;font-size:13px;color:var(--text-muted);"></span>
+          </div>
         </div>
 
         <div class="table-card" style="max-width:640px;">
