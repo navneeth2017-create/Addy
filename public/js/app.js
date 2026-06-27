@@ -1626,20 +1626,21 @@ async function checkLowStockBadge() {
 // ADMIN: REPS
 // ==========================================
 async function loadAdminDSDs() {
-  const reps = await apiFetch('/api/reps');
+  const dsds = await apiFetch('/api/reps');
   const tbody = document.getElementById('reps-tbody');
-  if (!reps || reps.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No reps yet</td></tr>';
+  if (!dsds || dsds.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No DSDs yet</td></tr>';
     return;
   }
-  tbody.innerHTML = reps.map(r => `
+  const tierLabel = t => t === 1 ? 'Tier 1' : t === 2 ? 'Tier 2' : t === 3 ? 'Tier 3' : '—';
+  tbody.innerHTML = dsds.map(r => `
     <tr>
       <td>${esc(r.name)}</td>
       <td>${esc(r.email)}</td>
+      <td><span style="font-size:12px;font-weight:600;color:var(--accent);">${tierLabel(r.tier)}</span></td>
       <td>${r.sponsor_name ? esc(r.sponsor_name) : '<span style="color:var(--text-muted)">None</span>'}</td>
       <td>${r.store_count}</td>
-      <td class="revenue-cell">${formatCurrency(r.store_revenue)}</td>
-      <td class="revenue-cell">${formatCurrency(r.store_revenue * r.commission_rate)}</td>
+      <td class="revenue-cell">${formatCurrency(r.commission_balance || 0)}</td>
       <td><span class="status-badge ${r.status}">${r.status}</span></td>
     </tr>
   `).join('');

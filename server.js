@@ -1072,105 +1072,53 @@ app.patch('/api/users/:id/reject', authenticate, authorize('admin'), async (req,
 });
 
 // ── REPS ──────────────────────────────────────────────────────────────────────
-app.get('/api/reps', authenticate, async (req, res) => {
+app.get('/api/reps', authenticate, authorize('admin'), async (req, res) => {
+  // Returns all DSDs using the REAL data model: users.tier, users.referred_by, users.commission_balance
   try {
-    const { role, id: userId } = req.user;
-    if (role === 'rep') {
-      const rep = await one('SELECT r.*,u.name,u.email,u.phone FROM reps r JOIN users u ON u.id=r.user_id WHERE r.user_id=$1', [userId]);
-      if (!rep) return res.json({ rep: null });
-      const storeCount = (await one('SELECT COUNT(*) as count FROM rep_store_assignments WHERE rep_id=$1', [rep.id])).count;
-      const stores = await all(
-        'SELECT s.id,s.name,s.monthly_revenue,s.category,s.city,s.state FROM stores s JOIN rep_store_assignments rsa ON rsa.store_id=s.id WHERE rsa.rep_id=$1',
-        [rep.id]
-      );
-      const storeRevenue = stores.reduce((a,s)=>a+parseFloat(s.monthly_revenue),0);
-      const myCommission = storeRevenue * parseFloat(rep.commission_rate);
-      const downline = await all(
-        `SELECT r.id,r.commission_rate,u.name,u.email,
-                (SELECT COUNT(*) FROM rep_store_assignments WHERE rep_id=r.id) as store_count,
-                COALESCE((SELECT SUM(s2.monthly_revenue) FROM stores s2 JOIN rep_store_assignments rsa2 ON rsa2.store_id=s2.id WHERE rsa2.rep_id=r.id),0) as store_revenue
-         FROM reps r JOIN users u ON u.id=r.user_id WHERE r.sponsor_id=$1`,
-        [rep.id]
-      );
-      const sponsorCommission = downline.reduce((a,d)=>a+(parseFloat(d.store_revenue)*parseFloat(d.commission_rate)*0.05),0);
-      return res.json({ rep, storeCount, stores, storeRevenue, myCommission, downline, sponsorCommission, totalEarnings: myCommission+sponsorCommission });
-    }
-    if (role === 'admin') {
-      const reps = await all(
-        `SELECT r.id,r.sponsor_id,r.commission_rate,u.id as user_id,u.name,u.email,u.phone,u.status,
-                su.name as sponsor_name,
-                (SELECT COUNT(*) FROM rep_store_assignments WHERE rep_id=r.id) as store_count,
-                COALESCE((SELECT SUM(s.monthly_revenue) FROM stores s JOIN rep_store_assignments rsa ON rsa.store_id=s.id WHERE rsa.rep_id=r.id),0) as store_revenue
-         FROM reps r JOIN users u ON u.id=r.user_id
-         LEFT JOIN reps sr ON sr.id=r.sponsor_id LEFT JOIN users su ON su.id=sr.user_id`
-      );
-      return res.json(reps);
-    }
-    res.status(403).json({ error: 'Access denied' });
+    const dsds = await all(
+      `SELECT u.id as user_id, u.name, u.email, u.phone, u.status, u.tier, u.pricing_tier,
+              u.commission_balance,
+              su.name as sponsor_name, su.id as sponsor_id,
+              (SELECT COUNT(*) FROM owner_stores os WHERE os.owner_id=u.id) as store_count
+       FROM users u
+       LEFT JOIN users su ON su.id = u.referred_by
+       WHERE u.role='dsd'
+       ORDER BY u.name`
+    );
+    res.json(dsds);
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
-app.post('/api/reps/enroll', authenticate, authorize('rep'), async (req, res) => {
+
+app.post('/api/reps', authenticate, authorize('admin'), async (req, res) => {
+  // Admin-added DSD: created directly as active (no approval step needed), default Tier 3.
+  // sponsor_rep_id is treated as the sponsor's USER id (links via referred_by, same chain used by commissions).
   try {
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, sponsor_rep_id } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
     const existing = await one('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (existing) return res.status(409).json({ error: 'Email already in use' });
-    const sponsorDSD = await one('SELECT id FROM reps WHERE user_id=$1', [req.user.id]);
-    if (!sponsorDSD) return res.status(400).json({ error: 'Sponsor rep not found' });
-    const client = await pool.connect();
-    let newUserId;
-    try {
-      await client.query('BEGIN');
-      const ur = await client.query(
-        `INSERT INTO users (email,password_hash,role,name,phone,status) VALUES ($1,$2,'rep',$3,$4,'active') RETURNING id`,
-        [email.toLowerCase(), bcrypt.hashSync(password,10), name, phone||'']
-      );
-      newUserId = ur.rows[0].id;
-      await client.query('INSERT INTO reps (user_id,sponsor_id,commission_rate) VALUES ($1,$2,0.10)', [newUserId, sponsorDSD.id]);
-      await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
-    await logActivity('enrolled_rep', name, req.user.email);
-    res.status(201).json({ success: true, userId: newUserId });
-  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
-});
 
-app.post('/api/reps', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const { name, email, password, phone, sponsor_rep_id } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
-    const existing = await one('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
-    if (existing) return res.status(409).json({ error: 'Email already in use' });
-    const client = await pool.connect();
-    let newUserId;
-    try {
-      await client.query('BEGIN');
-      const ur = await client.query(
-        `INSERT INTO users (email,password_hash,role,name,phone,status) VALUES ($1,$2,'rep',$3,$4,'active') RETURNING id`,
-        [email.toLowerCase(), bcrypt.hashSync(password,10), name, phone||'']
-      );
-      newUserId = ur.rows[0].id;
-      await client.query('INSERT INTO reps (user_id,sponsor_id,commission_rate) VALUES ($1,$2,0.10)', [newUserId, sponsor_rep_id||null]);
-      await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
-    await logActivity('created_rep', name, req.user.email);
-    res.status(201).json({ success: true, userId: newUserId });
-  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
-});
-
-app.post('/api/reps/:id/stores', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const { store_ids } = req.body;
-    if (!store_ids || !Array.isArray(store_ids)) return res.status(400).json({ error: 'store_ids array required' });
-    for (const sid of store_ids) {
-      await q('INSERT INTO rep_store_assignments (rep_id,store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [req.params.id, sid]);
+    let sponsorId = null;
+    if (sponsor_rep_id) {
+      const sponsor = await one("SELECT id FROM users WHERE id=$1 AND role='dsd'", [sponsor_rep_id]);
+      if (!sponsor) return res.status(400).json({ error: 'Sponsor DSD not found' });
+      sponsorId = sponsor.id;
     }
-    res.json({ success: true });
+
+    const hash = bcrypt.hashSync(password, 10);
+    const ur = await one(
+      `INSERT INTO users (email,password_hash,role,name,phone,status,tier,referred_by)
+       VALUES ($1,$2,'dsd',$3,$4,'active',3,$5) RETURNING id`,
+      [email.toLowerCase(), hash, name, phone||'', sponsorId]
+    );
+
+    await logActivity('created_dsd', name, req.user.email);
+    res.status(201).json({ success: true, userId: ur.id });
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
+
 
 // ── DISTRIBUTOR ───────────────────────────────────────────────────────────────
 app.get('/api/dsd/stores', authenticate, authorize('dsd'), async (req, res) => {
@@ -1927,25 +1875,50 @@ app.post('/api/products/import-from-wowcow', authenticate, authorize('admin'), a
       return res.json({ success: true, imported: 0, skipped: 0, message: 'No active products found on WowCow' });
     }
 
-    let imported = 0, skipped = 0;
+    let imported = 0, skipped = 0, priceMatched = 0, backfilled = 0;
     for (const p of wowcowProducts) {
+      // Pull WowCow's store_owner base price (role='store_owner', user_id IS NULL) and back-calculate MSRP.
+      // WowCow's store_owner price = 50% of MSRP, so MSRP = store_owner_price × 2.
+      // ADDY's retail_price IS the MSRP — it drives Tier 1/2/3 pricing (65%/70%/75%).
+      let retailPrice = 0;
+      try {
+        const wcPrice = await one(
+          "SELECT price FROM public.product_prices WHERE product_id=$1 AND role='store_owner' AND user_id IS NULL",
+          [p.id]
+        );
+        if (wcPrice) retailPrice = Math.round(parseFloat(wcPrice.price) * 2 * 100) / 100;
+      } catch(e) { console.log('Price lookup skipped for', p.name, e.message); }
+
       // Check if already imported (match by SKU or name)
       const existing = await one(
-        'SELECT id FROM products WHERE sku=$1 OR LOWER(name)=LOWER($2)',
+        'SELECT id, retail_price FROM products WHERE sku=$1 OR LOWER(name)=LOWER($2)',
         [p.sku || '', p.name]
       );
-      if (existing) { skipped++; continue; }
 
-      // Import with inactive status and no pricing — admin sets cost price before activating
+      if (existing) {
+        // Already imported — backfill price if it currently has none and WowCow now has one
+        if (parseFloat(existing.retail_price || 0) === 0 && retailPrice > 0) {
+          await q('UPDATE products SET retail_price=$1 WHERE id=$2', [retailPrice, existing.id]);
+          backfilled++;
+        }
+        skipped++;
+        continue;
+      }
+
+      // New product — import as INACTIVE so admin can review before DSDs see it
       await q(
-        'INSERT INTO products (name,description,image_url,sku,stock,cost_price,active) VALUES ($1,$2,$3,$4,0,0,0)',
-        [p.name, p.description || '', p.image_url || '', p.sku || '']
+        'INSERT INTO products (name,description,image_url,sku,stock,cost_price,retail_price,active) VALUES ($1,$2,$3,$4,0,0,$5,0)',
+        [p.name, p.description || '', p.image_url || '', p.sku || '', retailPrice]
       );
       imported++;
+      if (retailPrice > 0) priceMatched++;
     }
 
-    await logActivity('imported_products', `${imported} products imported from WowCow`, req.user.email);
-    res.json({ success: true, imported, skipped, message: `Imported ${imported} product${imported !== 1 ? 's' : ''} — set cost prices and activate to make available to DSDs` });
+    await logActivity('imported_products', `${imported} new, ${backfilled} price-backfilled from WowCow`, req.user.email);
+    res.json({
+      success: true, imported, skipped, priceMatched, backfilled,
+      message: `Imported ${imported} new product${imported !== 1 ? 's' : ''}${backfilled > 0 ? `, backfilled pricing on ${backfilled} existing product${backfilled !== 1 ? 's' : ''}` : ''}. Review and activate to make available to DSDs.`
+    });
   } catch(e) {
     console.error('Import error:', e.message);
     res.status(500).json({ error: 'Import failed: ' + e.message });

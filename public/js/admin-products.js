@@ -13,7 +13,7 @@ const PRODUCT_TIERS = [
 let _preorderRefreshInterval = null;
 
 async function importFromWowCow() {
-  if (!confirm('Import all active products from WowCow?\n\nThey will be added as INACTIVE with no pricing set. You can set cost prices and activate them before DSDs can see them.')) return;
+  if (!confirm('Import all active products from WowCow?\n\nPricing will be matched automatically from WowCow\'s wholesale price (MSRP). Products import as INACTIVE so you can review before activating for DSDs.')) return;
 
   const btn = event.target;
   btn.disabled = true;
