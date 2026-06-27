@@ -176,23 +176,10 @@ async function migrate() {
     console.log('  ✓ Invoice backfill complete');
   }
 
-  // ── One-time cleanup: remove all seeded demo stores ──────────────────────────
-  const storeCount = await one('SELECT COUNT(*) as c FROM stores');
-  const userCount  = await one('SELECT COUNT(*) as c FROM users');
-  // If stores exist but no real orders, they are demo stores — wipe them
-  const orderCount = await one('SELECT COUNT(*) as c FROM orders');
-  if (parseInt(storeCount?.c) > 0 && parseInt(orderCount?.c) === 0) {
-    console.log(`🧹 Removing ${storeCount.c} demo stores...`);
-    await q('DELETE FROM store_notes');
-    await q('DELETE FROM store_inventory');
-    await q('DELETE FROM rep_store_assignments');
-    await q('DELETE FROM dsd_stores');
-    await q('DELETE FROM owner_stores');
-    await q('DELETE FROM carts');
-    await q('UPDATE users SET store_id=NULL');
-    await q('DELETE FROM stores');
-    console.log('✅ Demo stores removed');
-  }
+  // NOTE: removed a destructive "demo store cleanup" that used to run here on
+  // every server boot — it deleted ALL stores whenever order count was 0,
+  // which wiped real onboarding data (you can have real stores before any
+  // orders exist). Never auto-delete data based on heuristics like this again.
 
   // Create production admin account if it doesn't exist
   // ── Demo + Admin accounts ─────────────────────────────────────────────────

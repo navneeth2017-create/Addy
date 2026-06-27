@@ -130,11 +130,12 @@
             </table>
           </div>
           <div class="table-footer" id="table-footer"></div>
-          <!-- Map View (hidden by default, toggled by setStoreView) -->
-          <div id="stores-map-view" style="display:none;padding:8px 0;">
-            <div id="stores-map" style="height:520px;border-radius:10px;border:1px solid var(--border);"></div>
-          </div>
+        </div>
         </div><!-- end stores-list-container -->
+
+        <!-- Map View (hidden by default, toggled by setStoreView) — sibling of stores-list-container, NOT nested inside it -->
+        <div id="stores-map-view" style="display:none;padding:8px 0;">
+          <div id="stores-map" style="height:520px;border-radius:10px;border:1px solid var(--border);"></div>
         </div>
       </div>
 
