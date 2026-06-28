@@ -36,6 +36,7 @@
       <div class="user-info">
         <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"></button>
         <button id="push-bell-btn" onclick="togglePushNotifications()" title="Order notifications" style="background:none;border:1px solid var(--border);border-radius:8px;padding:5px 9px;cursor:pointer;font-size:17px;line-height:1;transition:all 0.2s;">🔔</button>
+        <button class="btn-logout" onclick="showFeedbackModal()" title="Suggest a feature or report an issue">💡 Feedback</button>
         <button class="btn-logout" onclick="showProfile()">Profile</button>
         <span class="role-badge" id="user-role">Admin</span>
         <button class="btn-logout" onclick="logout()">Sign Out</button>
@@ -298,6 +299,12 @@
       <div id="tab-settings" style="display:none;">
         <div class="page-header">
           <div><h1>Settings</h1><p>Manage notification preferences</p></div>
+        </div>
+
+        <!-- Feedback Section -->
+        <div class="table-card" style="margin-bottom:24px;">
+          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">💡 User Feedback & Feature Requests</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Submitted by DSDs from their dashboard</p></div></div>
+          <div id="feedback-list" style="padding:0 24px 20px;"><div class="loading">Loading...</div></div>
         </div>
 
         <!-- Backup Section -->
@@ -615,5 +622,17 @@
   <script src="/js/app.js"></script>
   <script src="/js/admin-products.js"></script>
   <script>loadAdminDashboard();</script>
+  <!-- Feedback Modal -->
+  <div class="modal-overlay" id="feedback-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:480px;">
+      <button class="close-btn" onclick="document.getElementById('feedback-modal').classList.remove('active')">&times;</button>
+      <h2>💡 Suggest a Feature or Report an Issue</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Got an idea to improve ADDY, or found something that's not working right?</p>
+      <textarea id="feedback-message" rows="5" placeholder="Tell us what's on your mind..."
+        style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;resize:vertical;margin-bottom:14px;"></textarea>
+      <button class="btn btn-green" onclick="submitFeedback()" style="width:100%;">Submit Feedback</button>
+    </div>
+  </div>
+
 </body>
 </html>

@@ -14,6 +14,7 @@
       <div class="logo-mark" id="logo-container"><a href="/dashboard-dsd.html" style="display:flex;align-items:center;text-decoration:none;"><img src="/images/addy-logo.svg" alt="ADDY" style="height:52px;width:auto;object-fit:contain;"></a></div>
       <div class="user-info">
         <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"></button>
+        <button class="btn-logout" onclick="showFeedbackModal()" title="Suggest a feature or report an issue">💡 Feedback</button>
         <button class="btn-logout" onclick="showProfile()">Profile</button>
         <span class="role-badge" id="user-role">DSD</span>
         <a href="/shop.html" style="padding:7px 16px;background:#2563eb;color:#fff;border-radius:7px;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;">🛒 Shop</a><button class="btn-logout" onclick="logout()">Sign Out</button>
@@ -186,5 +187,17 @@
 
   <script src="/js/app.js"></script>
   <script>loadDSDDashboard();</script>
+  <!-- Feedback Modal -->
+  <div class="modal-overlay" id="feedback-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:480px;">
+      <button class="close-btn" onclick="document.getElementById('feedback-modal').classList.remove('active')">&times;</button>
+      <h2>💡 Suggest a Feature or Report an Issue</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Got an idea to improve ADDY, or found something that's not working right? Let us know — admin reviews every submission.</p>
+      <textarea id="feedback-message" rows="5" placeholder="Tell us what's on your mind..."
+        style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;resize:vertical;margin-bottom:14px;"></textarea>
+      <button class="btn btn-green" onclick="submitFeedback()" style="width:100%;">Submit Feedback</button>
+    </div>
+  </div>
+
 </body>
 </html>

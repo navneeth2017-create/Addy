@@ -181,6 +181,15 @@ async function migrate() {
   // which wiped real onboarding data (you can have real stores before any
   // orders exist). Never auto-delete data based on heuristics like this again.
 
+  // ── Feedback / feature request box ───────────────────────────────────────────
+  await q(`CREATE TABLE IF NOT EXISTS feedback (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewed','planned','done','declined')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
   // ── Ownership transfer requests table ────────────────────────────────────────
   await q(`CREATE TABLE IF NOT EXISTS ownership_requests (
     id SERIAL PRIMARY KEY,
@@ -1825,6 +1834,46 @@ app.patch('/api/inventory/:store_id/:product_id', authenticate, async (req, res)
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
+
+// ── FEEDBACK / FEATURE REQUESTS ───────────────────────────────────────────────
+app.post('/api/feedback', authenticate, async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message || !message.trim()) return res.status(400).json({ error: 'Please enter a message' });
+    if (message.length > 2000) return res.status(400).json({ error: 'Message is too long (max 2000 characters)' });
+    await q('INSERT INTO feedback (user_id, message) VALUES ($1,$2)', [req.user.id, message.trim()]);
+    await logActivity('submitted_feedback', req.user.name || req.user.email, req.user.email);
+    res.json({ success: true, message: 'Thanks! Your feedback has been submitted.' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/feedback', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const items = await all(`
+      SELECT f.id, f.message, f.status, f.created_at, u.name, u.email
+      FROM feedback f LEFT JOIN users u ON u.id = f.user_id
+      ORDER BY f.created_at DESC
+    `);
+    res.json(items);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/feedback/:id', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { status } = req.body;
+    const valid = ['new','reviewed','planned','done','declined'];
+    if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    await q('UPDATE feedback SET status=$1 WHERE id=$2', [status, req.params.id]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/feedback/:id', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    await q('DELETE FROM feedback WHERE id=$1', [req.params.id]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── SEARCH WOWCOW STORES (for ADDY claim modal) ─────────────────────────────
 app.get('/api/wowcow-stores/search', authenticate, async (req, res) => {

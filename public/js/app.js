@@ -1412,7 +1412,7 @@ function switchTab(tab, btn) {
   if (tab === 'products') loadProductsTab();
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();
-  if (tab === 'settings') loadNotifEmails();
+  if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); }
 }
 
 // ==========================================
@@ -2710,6 +2710,70 @@ async function removeNotifEmail(id) {
     showToast('Email removed', 'info');
     loadNotifEmails();
   }
+}
+
+
+// ── FEEDBACK / FEATURE REQUESTS ──────────────────────────────────────────────
+function showFeedbackModal() {
+  const el = document.getElementById('feedback-message');
+  if (el) el.value = '';
+  document.getElementById('feedback-modal')?.classList.add('active');
+}
+
+async function submitFeedback() {
+  const message = document.getElementById('feedback-message')?.value?.trim();
+  if (!message) { showToast('Please enter a message', 'error'); return; }
+  const result = await apiFetch('/api/feedback', { method: 'POST', body: JSON.stringify({ message }) });
+  if (result && result.success) {
+    showToast(result.message || 'Feedback submitted ✓', 'success');
+    document.getElementById('feedback-modal')?.classList.remove('active');
+    document.getElementById('feedback-message').value = '';
+  } else if (result && result.error) {
+    showToast(result.error, 'error');
+  }
+}
+
+// Admin: load and manage feedback submissions
+async function loadFeedbackList() {
+  const el = document.getElementById('feedback-list');
+  if (!el) return;
+  const items = await apiFetch('/api/feedback');
+  if (!items || !items.length) {
+    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);">No feedback submitted yet</div>';
+    return;
+  }
+  const statusColors = { new: '#2563eb', reviewed: '#d97706', planned: '#7c3aed', done: '#16a34a', declined: '#64748b' };
+  el.innerHTML = items.map(f => `
+    <div style="display:flex;gap:16px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--border);">
+      <div style="flex:1;">
+        <div style="font-size:14px;color:var(--text);line-height:1.5;margin-bottom:6px;">${esc(f.message)}</div>
+        <div style="font-size:12px;color:var(--text-muted);">
+          ${esc(f.name || f.email || 'Unknown user')} · ${new Date(f.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <select onchange="updateFeedbackStatus(${f.id}, this.value)"
+          style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:${statusColors[f.status]||'var(--text)'};font-size:12px;font-weight:600;cursor:pointer;">
+          <option value="new" ${f.status==='new'?'selected':''}>New</option>
+          <option value="reviewed" ${f.status==='reviewed'?'selected':''}>Reviewed</option>
+          <option value="planned" ${f.status==='planned'?'selected':''}>Planned</option>
+          <option value="done" ${f.status==='done'?'selected':''}>Done</option>
+          <option value="declined" ${f.status==='declined'?'selected':''}>Declined</option>
+        </select>
+        <button class="btn btn-sm btn-danger" onclick="deleteFeedback(${f.id})" title="Delete">🗑</button>
+      </div>
+    </div>`).join('');
+}
+
+async function updateFeedbackStatus(id, status) {
+  const result = await apiFetch('/api/feedback/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
+  if (result && result.success) showToast('Status updated ✓', 'success');
+}
+
+async function deleteFeedback(id) {
+  if (!confirm('Delete this feedback item?')) return;
+  const result = await apiFetch('/api/feedback/' + id, { method: 'DELETE' });
+  if (result && result.success) { showToast('Deleted', 'info'); loadFeedbackList(); }
 }
 
 // ── STORE MAP VIEW ────────────────────────────────────────────────────────────
