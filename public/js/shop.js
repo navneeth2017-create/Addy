@@ -24,6 +24,8 @@ async function initShop() {
   const invoiceOption = document.getElementById('pay-invoice');
   if (invoiceOption && !_canPayInvoice) {
     invoiceOption.style.display = 'none';
+    // Center the remaining Card option since it's now the only choice
+    document.getElementById('payment-options-wrap')?.classList.add('single-option');
   }
 
   // Set dashboard link
