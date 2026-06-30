@@ -3,6 +3,7 @@
 let _products = [];
 let _cart = { items: [], total: 0 };
 let _role = '';
+let _canPayInvoice = false;
 let _userId = null;
 let _currentStoreId = null;
 let _selectedPayment = 'card';
@@ -16,6 +17,14 @@ async function initShop() {
   if (!me) { window.location.href = '/login.html'; return; }
   _role = me.role;
   _userId = me.id;
+  _canPayInvoice = !!me.can_pay_invoice;
+
+  // Hide Invoice/Net-30 payment option entirely for accounts not approved for it.
+  // Actual default-selection logic happens in initPayment() once Stripe's state is known.
+  const invoiceOption = document.getElementById('pay-invoice');
+  if (invoiceOption && !_canPayInvoice) {
+    invoiceOption.style.display = 'none';
+  }
 
   // Set dashboard link
   const roleMap = { admin: 'admin', investor: 'investor', dsd: 'owner', dsd: 'dsd', rep: 'rep' };
@@ -357,6 +366,8 @@ async function initPayment() {
       _stripeActive = true;
       const cardSub = document.getElementById('card-option-sub');
       if (cardSub) cardSub.textContent = 'Pay now securely';
+      // Card is always available when Stripe is active — make it the explicit default
+      selectPayment('card');
     } else {
       // Stripe not configured — disable card option
       const payCard = document.getElementById('pay-card');
@@ -367,11 +378,15 @@ async function initPayment() {
         const cardSub = document.getElementById('card-option-sub');
         if (cardSub) cardSub.textContent = 'Coming soon';
       }
-      // Auto-select invoice
-      selectPayment('invoice');
+      if (_canPayInvoice) {
+        selectPayment('invoice');
+      } else {
+        const wrap = document.getElementById('payment-options-wrap');
+        if (wrap) wrap.insertAdjacentHTML('afterend', '<p style="color:#dc2626;font-size:13px;margin-top:8px;">No payment method is currently available on your account. Please contact support.</p>');
+      }
     }
   } catch(e) {
-    selectPayment('invoice');
+    if (_canPayInvoice) selectPayment('invoice');
   }
 }
 

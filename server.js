@@ -201,6 +201,9 @@ async function migrate() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
 
+  // ── Per-user invoice payment permission ──────────────────────────────────────
+  await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS can_pay_invoice BOOLEAN NOT NULL DEFAULT false');
+
   // Create production admin account if it doesn't exist
   // ── Demo + Admin accounts ─────────────────────────────────────────────────
   const demoAccounts = [
@@ -451,12 +454,17 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
-app.get('/api/me', authenticate, (req, res) => res.json(req.user));
+app.get('/api/me', authenticate, async (req, res) => {
+  try {
+    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier FROM users WHERE id=$1', [req.user.id]);
+    res.json(user || req.user);
+  } catch(e) { res.json(req.user); }
+});
 
 app.get('/api/profile', authenticate, async (req, res) => {
   try {
     const user = await one(
-      'SELECT id,name,email,role,phone,status,tier,commission_balance,referred_by,stripe_connect_id FROM users WHERE id=$1',
+      'SELECT id,name,email,role,phone,status,tier,commission_balance,referred_by,stripe_connect_id,can_pay_invoice FROM users WHERE id=$1',
       [req.user.id]
     );
     res.json(user);
@@ -855,7 +863,7 @@ app.post('/api/users', authenticate, authorize('admin'), async (req, res) => {
 });
 
 app.get('/api/users', authenticate, authorize('admin'), async (req, res) => {
-  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier FROM users ORDER BY role,name')); }
+  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,can_pay_invoice FROM users ORDER BY role,name')); }
   catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
@@ -921,7 +929,7 @@ app.get('/api/users/:id/pricing', authenticate, authorize('admin'), async (req, 
 // 2. { tier, custom_prices, custom_margin_pct } — change a DSD's whole tier (Change Tier modal)
 app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { product_id, price, tier, custom_prices, custom_margin_pct } = req.body || {};
+    const { product_id, price, tier, custom_prices, custom_margin_pct, can_pay_invoice } = req.body || {};
 
     if (product_id) {
       // Use case 1: single product custom price
@@ -941,6 +949,7 @@ app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req
       const user = await one('SELECT * FROM users WHERE id=$1', [req.params.id]);
       if (!user) return res.status(404).json({ error: 'User not found' });
       await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
+      await q('UPDATE users SET can_pay_invoice=$1 WHERE id=$2', [!!can_pay_invoice, req.params.id]);
       await logActivity('pricing_updated', user.name||user.email, req.user.email);
       return res.json({ success: true });
     }
@@ -1010,8 +1019,9 @@ app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req
     if (!user) return res.status(404).json({ error: 'User not found' });
     await q("UPDATE users SET status='active' WHERE id=$1", [req.params.id]);
     if (user.store_id) await q("UPDATE stores SET status='active' WHERE id=$1", [user.store_id]);
-    const { tier, custom_prices, custom_margin_pct } = req.body || {};
+    const { tier, custom_prices, custom_margin_pct, can_pay_invoice } = req.body || {};
     if (tier) await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
+    await q('UPDATE users SET can_pay_invoice=$1 WHERE id=$2', [!!can_pay_invoice, req.params.id]);
     await logActivity('approved', user.name||user.email, req.user.email);
 
     // Send approval email to user
@@ -1609,6 +1619,14 @@ app.post('/api/orders', authenticate, async (req, res) => {
     if (!payment_method) return res.status(400).json({ error: 'Payment method required' });
     if (!shipping_address || !shipping_city || !shipping_state || !shipping_zip) return res.status(400).json({ error: 'Complete shipping address required' });
 
+    // Server-side enforcement: only users explicitly granted invoice access can pay this way
+    if (payment_method === 'invoice') {
+      const buyerCheck = await one('SELECT can_pay_invoice FROM users WHERE id=$1', [userId]);
+      if (!buyerCheck?.can_pay_invoice) {
+        return res.status(403).json({ error: 'Invoice payment is not enabled for your account. Please pay by card.' });
+      }
+    }
+
     const cart = store_id
       ? await one('SELECT * FROM carts WHERE user_id=$1 AND store_id=$2', [userId, store_id])
       : await one('SELECT * FROM carts WHERE user_id=$1 AND store_id IS NULL', [userId]);
@@ -1723,7 +1741,9 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
     if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     const order = await one('SELECT * FROM orders WHERE id=$1', [req.params.id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
+    const buyer = await one('SELECT email, name FROM users WHERE id=$1', [order.user_id]);
     await q('UPDATE orders SET status=$1 WHERE id=$2', [status, req.params.id]);
+
     if (status === 'cancelled') {
       await q("UPDATE invoices SET payment_status='cancelled' WHERE order_id=$1", [req.params.id]);
       await q("UPDATE orders SET payment_status='cancelled' WHERE id=$1", [req.params.id]);
@@ -1734,7 +1754,22 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
         await q('UPDATE users SET commission_balance=GREATEST(0, commission_balance-$1) WHERE id=$2', [c.amount, c.earner_id]);
       }
       await q('DELETE FROM commissions WHERE order_id=$1', [req.params.id]);
+
+      // ── Auto-refund via Stripe if this order was paid by card ──────────────────
+      if (order.payment_method === 'card' && order.payment_status === 'paid') {
+        try {
+          const invoice = await one('SELECT stripe_payment_intent_id FROM invoices WHERE order_id=$1', [req.params.id]);
+          if (invoice?.stripe_payment_intent_id) {
+            await stripe.refunds.create({ payment_intent: invoice.stripe_payment_intent_id });
+            await logActivity('refunded_order', `Order #${req.params.id} — $${order.total}`, req.user.email);
+            console.log(`✅ Refunded order #${req.params.id} via Stripe`);
+          }
+        } catch(refundErr) {
+          console.error(`❌ Refund failed for order #${req.params.id}:`, refundErr.message);
+        }
+      }
     }
+
     if (status === 'delivered' && order.status !== 'delivered' && order.store_id) {
       const items = await all('SELECT * FROM order_items WHERE order_id=$1', [req.params.id]);
       for (const item of items) {
@@ -1745,6 +1780,33 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
         );
       }
     }
+
+    // ── Order status email to the DSD/buyer (shipped / delivered / cancelled) ──
+    if (resend && buyer?.email && ['shipped','delivered','cancelled'].includes(status)) {
+      const statusCopy = {
+        shipped: { subject: 'Your order has shipped! 📦', heading: 'On its way!', body: `Your order #${req.params.id} has shipped and is on its way to you.` },
+        delivered: { subject: 'Your order was delivered ✅', heading: 'Delivered!', body: `Your order #${req.params.id} has been marked as delivered. We hope you love it!` },
+        cancelled: { subject: 'Your order was cancelled', heading: 'Order Cancelled', body: `Your order #${req.params.id} has been cancelled.${order.payment_method === 'card' && order.payment_status === 'paid' ? ' If you paid by card, your refund has been processed and should appear in 5-10 business days.' : ''}` }
+      };
+      const copy = statusCopy[status];
+      try {
+        await resend.emails.send({
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          to: [buyer.email],
+          subject: copy.subject,
+          html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px;">
+            <div style="background:#1e3a8a;border-radius:12px;padding:24px;text-align:center;margin-bottom:28px;">
+              <p style="color:rgba(255,255,255,0.7);font-size:12px;font-weight:700;letter-spacing:3px;text-transform:uppercase;margin:0 0 8px;">ADDY Distribution</p>
+              <h1 style="color:#fff;font-size:24px;font-weight:800;margin:0;">${copy.heading}</h1>
+            </div>
+            <p style="font-size:15px;color:#334155;line-height:1.6;">Hi ${buyer.name || 'there'},</p>
+            <p style="font-size:15px;color:#334155;line-height:1.6;">${copy.body}</p>
+            <p style="font-size:13px;color:#94a3b8;margin-top:28px;">Log in to your dashboard to view full order details.</p>
+          </div>`
+        });
+      } catch(emailErr) { console.log('Status email skipped:', emailErr.message); }
+    }
+
     res.json({ success: true });
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
@@ -1834,6 +1896,57 @@ app.patch('/api/inventory/:store_id/:product_id', authenticate, async (req, res)
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
+
+// ── ACTIVITY LOG ──────────────────────────────────────────────────────────────
+app.get('/api/activity-log', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const logs = await all('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 200');
+    res.json(logs);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── EXPORT ORDERS / COMMISSIONS AS CSV ───────────────────────────────────────
+app.get('/api/export/orders-csv', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const orders = await all(`
+      SELECT o.id, o.created_at, u.name as dsd_name, u.email, o.status, o.payment_method, o.payment_status,
+             o.subtotal, o.shipping_cost, o.total
+      FROM orders o
+      LEFT JOIN users u ON u.id = o.user_id
+      ORDER BY o.created_at DESC
+    `);
+    const headers = ['Order ID','Date','DSD','Email','Status','Payment Method','Payment Status','Subtotal','Shipping','Total'];
+    const rows = orders.map(o => [
+      o.id, new Date(o.created_at).toLocaleDateString('en-US'), o.dsd_name||'', o.email||'',
+      o.status, o.payment_method, o.payment_status, o.subtotal, o.shipping_cost, o.total
+    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(','));
+    res.setHeader('Content-Type','text/csv');
+    res.setHeader('Content-Disposition','attachment; filename=addy-orders.csv');
+    res.send([headers.join(','), ...rows].join('\n'));
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Export failed' }); }
+});
+
+app.get('/api/export/commissions-csv', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const commissions = await all(`
+      SELECT c.id, c.created_at, c.amount, c.rate, c.level, c.status,
+             eu.name as earner_name, eu.email as earner_email,
+             bu.name as buyer_name
+      FROM commissions c
+      LEFT JOIN users eu ON eu.id = c.earner_id
+      LEFT JOIN users bu ON bu.id = c.buyer_id
+      ORDER BY c.created_at DESC
+    `);
+    const headers = ['Commission ID','Date','Earner','Earner Email','Buyer','Level','Rate','Amount','Status'];
+    const rows = commissions.map(c => [
+      c.id, new Date(c.created_at).toLocaleDateString('en-US'), c.earner_name||'', c.earner_email||'',
+      c.buyer_name||'', c.level, c.rate, c.amount, c.status
+    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(','));
+    res.setHeader('Content-Type','text/csv');
+    res.setHeader('Content-Disposition','attachment; filename=addy-commissions.csv');
+    res.send([headers.join(','), ...rows].join('\n'));
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Export failed' }); }
+});
 
 // ── FEEDBACK / FEATURE REQUESTS ───────────────────────────────────────────────
 app.post('/api/feedback', authenticate, async (req, res) => {

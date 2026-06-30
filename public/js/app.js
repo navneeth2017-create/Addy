@@ -1413,6 +1413,7 @@ function switchTab(tab, btn) {
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();
   if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); }
+  if (tab === 'activity') loadActivityLog();
 }
 
 // ==========================================
@@ -1457,6 +1458,8 @@ let _approveTargetUserId = null;
 let _approveProducts = [];
 
 async function showApprovePricingModal(userId, userName, userRole) {
+  const invoiceCheckbox0 = document.getElementById('approve-can-pay-invoice');
+  if (invoiceCheckbox0) invoiceCheckbox0.checked = false; // new approvals default to card-only
   _approveTargetUserId = userId;
 
   // Load products to show custom price inputs if needed
@@ -1552,6 +1555,11 @@ async function showChangeTierModal(userId, userName) {
   // Update button text for this context
   document.getElementById('approve-confirm-btn').textContent = 'Save Pricing';
 
+  // Pre-fill invoice permission checkbox from this user's current setting
+  const existingUser = (window._adminUsers || []).find(u => u.id === userId);
+  const invoiceCheckbox = document.getElementById('approve-can-pay-invoice');
+  if (invoiceCheckbox) invoiceCheckbox.checked = !!existingUser?.can_pay_invoice;
+
   const tierSelect = document.getElementById('approve-tier-select');
   tierSelect.innerHTML = PRICING_TIERS.map(t =>
     `<option value="${t.value}">${t.label}</option>`
@@ -1571,7 +1579,8 @@ async function confirmApproveWithPricing() {
   btn.textContent = 'Saving...';
 
   const customPct = tier === 'custom' ? parseFloat(document.getElementById('custom-margin-pct')?.value || 0) : null;
-  let pricingPayload = { tier: tier === 'custom' ? 3 : parseInt(tier), custom_margin_pct: customPct };
+  const canPayInvoice = document.getElementById('approve-can-pay-invoice')?.checked || false;
+  let pricingPayload = { tier: tier === 'custom' ? 3 : parseInt(tier), custom_margin_pct: customPct, can_pay_invoice: canPayInvoice };
 
   if (tier === 'custom') {
     const customPrices = {};
@@ -1920,6 +1929,7 @@ async function loadUsersTab() {
           ? `<span style="display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:var(--accent-bg);color:var(--accent);">${tierLabels[u.pricing_tier] || u.pricing_tier}</span>`
           : `<span style="font-size:12px;color:var(--text-muted);">—</span>`
         }
+        ${u.can_pay_invoice ? `<span style="display:inline-block;margin-left:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(217,119,6,0.12);color:#d97706;" title="Can pay by Invoice/Net-30">📄 Invoice</span>` : ''}
       </td>
       <td onclick="event.stopPropagation()">
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -2774,6 +2784,46 @@ async function deleteFeedback(id) {
   if (!confirm('Delete this feedback item?')) return;
   const result = await apiFetch('/api/feedback/' + id, { method: 'DELETE' });
   if (result && result.success) { showToast('Deleted', 'info'); loadFeedbackList(); }
+}
+
+
+// ── ACTIVITY LOG ──────────────────────────────────────────────────────────────
+async function loadActivityLog() {
+  const el = document.getElementById('activity-log-list');
+  if (!el) return;
+  const logs = await apiFetch('/api/activity-log');
+  if (!logs || !logs.length) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No activity recorded yet</div>';
+    return;
+  }
+  const actionLabels = {
+    approved_store_claim: '✅ Approved store claim', rejected_store_claim: '❌ Rejected store claim',
+    claimed_store: '🏪 Store claimed', requested_ownership: '🔄 Ownership requested',
+    approved_ownership_transfer: '✅ Ownership transferred', rejected_ownership_transfer: '❌ Ownership request rejected',
+    created_dsd: '➕ DSD added by admin', refunded_order: '💳 Refunded order',
+    submitted_feedback: '💡 Feedback submitted', imported_products: '⬇ Imported products',
+    pricing_updated: '💲 Pricing updated',
+  };
+  el.innerHTML = `<div style="max-height:600px;overflow-y:auto;">` + logs.map(log => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 24px;border-bottom:1px solid var(--border);">
+      <div>
+        <div style="font-size:14px;color:var(--text);font-weight:600;">${esc(actionLabels[log.action] || log.action)}</div>
+        ${log.target_name ? `<div style="font-size:13px;color:var(--text-secondary);margin-top:2px;">${esc(log.target_name)}</div>` : ''}
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">by ${esc(log.user_email)}</div>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);white-space:nowrap;">${new Date(log.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
+    </div>`).join('') + `</div>`;
+}
+
+// ── CSV EXPORTS ───────────────────────────────────────────────────────────────
+function exportOrdersCSV() {
+  const token = localStorage.getItem('addy_token');
+  window.open(`/api/export/orders-csv?token=${token}`, '_blank');
+}
+
+function exportCommissionsCSV() {
+  const token = localStorage.getItem('addy_token');
+  window.open(`/api/export/commissions-csv?token=${token}`, '_blank');
 }
 
 // ── STORE MAP VIEW ────────────────────────────────────────────────────────────
