@@ -1948,6 +1948,45 @@ app.get('/api/export/commissions-csv', authenticate, authorize('admin'), async (
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Export failed' }); }
 });
 
+// ── ADMIN: VIEW AS (impersonation, read-aware) ───────────────────────────────
+app.post('/api/admin/impersonate/:userId', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const target = await one('SELECT id,email,role,store_id,name FROM users WHERE id=$1', [req.params.userId]);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role === 'admin') return res.status(403).json({ error: 'Cannot view as another admin' });
+    if (target.status === 'inactive') return res.status(400).json({ error: 'Cannot view as an inactive account' });
+
+    const token = jwt.sign(
+      { id: target.id, email: target.email, role: target.role, store_id: target.store_id,
+        impersonating: true, admin_id: req.user.id, admin_email: req.user.email },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    await logActivity('admin_view_as', target.name || target.email, req.user.email);
+    res.json({ success: true, token, role: target.role, name: target.name || target.email });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── DATABASE SIZE ─────────────────────────────────────────────────────────────
+app.get('/api/admin/db-size', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const result = await one(`
+      SELECT pg_size_pretty(pg_database_size(current_database())) as total_size,
+             pg_database_size(current_database()) as total_bytes
+    `);
+    const tableSizes = await all(`
+      SELECT relname as table_name,
+             pg_size_pretty(pg_total_relation_size(relid)) as size,
+             pg_total_relation_size(relid) as bytes
+      FROM pg_catalog.pg_statio_user_tables
+      ORDER BY pg_total_relation_size(relid) DESC
+      LIMIT 8
+    `);
+    res.json({ total_size: result.total_size, total_bytes: result.total_bytes, top_tables: tableSizes });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── FEEDBACK / FEATURE REQUESTS ───────────────────────────────────────────────
 app.post('/api/feedback', authenticate, async (req, res) => {
   try {

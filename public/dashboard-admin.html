@@ -319,6 +319,17 @@
           <div id="feedback-list" style="padding:0 24px 20px;"><div class="loading">Loading...</div></div>
         </div>
 
+        <!-- Database Size Section -->
+        <div class="table-card" style="max-width:640px;margin-bottom:24px;">
+          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">Database Size</h2></div></div>
+          <div style="padding:16px 24px;">
+            <div id="db-size-content">
+              <div class="loading" style="padding:8px 0;">Loading...</div>
+            </div>
+            <button class="btn btn-outline" onclick="loadDbSize()" style="font-size:13px;margin-top:12px;">↻ Refresh</button>
+          </div>
+        </div>
+
         <!-- Backup Section -->
         <div class="table-card" style="max-width:640px;margin-bottom:24px;">
           <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">Database Backup</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Runs automatically every night at 3am UTC. Keeps 7 daily + 4 weekly backups.</p></div></div>

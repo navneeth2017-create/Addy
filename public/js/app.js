@@ -70,8 +70,53 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
 }
 
-function getToken() { return localStorage.getItem('addy_token'); }
-function getRole() { return localStorage.getItem('addy_role'); }
+// ── VIEW AS (admin preview) — session-isolated to the tab it was opened in ───
+(function captureImpersonationToken() {
+  const params = new URLSearchParams(window.location.search);
+  const t = params.get('t');
+  if (!t) return;
+  try {
+    const payload = JSON.parse(atob(t.split('.')[1]));
+    if (payload.impersonating) {
+      sessionStorage.setItem('addy_preview_token', t);
+      sessionStorage.setItem('addy_preview_role', payload.role);
+      sessionStorage.setItem('addy_preview_admin_email', payload.admin_email || '');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  } catch(e) { /* not a valid token, ignore */ }
+})();
+
+function isImpersonating() { return !!sessionStorage.getItem('addy_preview_token'); }
+
+async function viewAsUser(userId) {
+  const result = await apiFetch('/api/admin/impersonate/' + userId, { method: 'POST' });
+  if (!result || !result.success) return;
+  const roleFileMap = { dsd: 'dsd', investor: 'dsd', rep: 'dsd' };
+  const file = roleFileMap[result.role] || 'dsd';
+  window.open(`/dashboard-${file}.html?t=${result.token}`, '_blank');
+}
+function getToken() { return sessionStorage.getItem('addy_preview_token') || localStorage.getItem('addy_token'); }
+function getRole() { return sessionStorage.getItem('addy_preview_role') || localStorage.getItem('addy_role'); }
+
+function exitPreview() {
+  sessionStorage.removeItem('addy_preview_token');
+  sessionStorage.removeItem('addy_preview_role');
+  sessionStorage.removeItem('addy_preview_admin_email');
+  window.close();
+  setTimeout(() => { window.location.href = '/login.html'; }, 200);
+}
+
+function renderImpersonationBanner() {
+  if (!isImpersonating()) return;
+  const adminEmail = sessionStorage.getItem('addy_preview_admin_email') || 'admin';
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:sticky;top:0;z-index:9999;background:#7c3aed;color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:center;gap:16px;font-size:13px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,0.15);';
+  banner.innerHTML = `
+    <span>👀 Admin Preview — viewing as this account (logged in as ${adminEmail})</span>
+    <button onclick="exitPreview()" style="background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);color:#fff;padding:4px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Exit Preview</button>
+  `;
+  document.body.insertBefore(banner, document.body.firstChild);
+}
 
 function logout() {
   localStorage.removeItem('addy_token');
@@ -541,6 +586,7 @@ let selectedStores = new Set();
 
 async function loadAdminDashboard() {
   if (!requireAuth(['admin'])) return;
+  renderImpersonationBanner();
   window._userRole = 'admin';
   initTheme();
   initSessionTimeout();
@@ -1412,7 +1458,7 @@ function switchTab(tab, btn) {
   if (tab === 'products') loadProductsTab();
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();
-  if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); }
+  if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); loadDbSize(); }
   if (tab === 'activity') loadActivityLog();
 }
 
@@ -1825,6 +1871,7 @@ let _allDistStores = [];
 
 async function loadDSDDashboard() {
   if (!requireAuth(['dsd'])) return;
+  renderImpersonationBanner();
   // Load user profile to show tier and commission balance
   const profile = await apiFetch('/api/profile');
   if (profile) {
@@ -1933,6 +1980,10 @@ async function loadUsersTab() {
       </td>
       <td onclick="event.stopPropagation()">
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${u.role !== 'admin' && u.status === 'active'
+            ? `<button class="btn btn-sm btn-outline" onclick="viewAsUser(${u.id})" title="Preview their dashboard">👀 View As</button>`
+            : ''
+          }
           ${u.status === 'active'
             ? `<button class="btn btn-sm btn-danger" onclick="toggleUserStatus(${u.id}, 'inactive', this)">Deactivate</button>`
             : `<button class="btn btn-sm btn-green" onclick="toggleUserStatus(${u.id}, 'active', this)">Activate</button>`
@@ -2824,6 +2875,38 @@ function exportOrdersCSV() {
 function exportCommissionsCSV() {
   const token = localStorage.getItem('addy_token');
   window.open(`/api/export/commissions-csv?token=${token}`, '_blank');
+}
+
+
+// ── DATABASE SIZE ─────────────────────────────────────────────────────────────
+async function loadDbSize() {
+  const el = document.getElementById('db-size-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading" style="padding:8px 0;">Loading...</div>';
+  const data = await apiFetch('/api/admin/db-size');
+  if (!data || !data.total_size) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">Could not load database size</div>';
+    return;
+  }
+  const gbUsed = data.total_bytes / (1024*1024*1024);
+  const percentOfGb = Math.min((gbUsed / 1).toFixed(1) * 100, 999);
+  const barColor = gbUsed < 0.5 ? '#16a34a' : gbUsed < 0.8 ? '#d97706' : '#dc2626';
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:14px;">
+      <span style="font-size:28px;font-weight:800;color:var(--text);">${data.total_size}</span>
+      <span style="font-size:13px;color:var(--text-muted);">total database size</span>
+    </div>
+    <div style="height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden;margin-bottom:16px;">
+      <div style="height:100%;width:${Math.min(percentOfGb,100)}%;background:${barColor};border-radius:4px;"></div>
+    </div>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:8px;">Largest Tables</div>
+    ${(data.top_tables||[]).map(t => `
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;">
+        <span style="color:var(--text-secondary);">${esc(t.table_name)}</span>
+        <span style="color:var(--text);font-weight:600;">${esc(t.size)}</span>
+      </div>`).join('')}
+  `;
 }
 
 // ── STORE MAP VIEW ────────────────────────────────────────────────────────────
