@@ -15,6 +15,7 @@ async function initShop() {
 
   const me = await apiFetch('/api/me');
   if (!me) { window.location.href = '/login.html'; return; }
+  try {
   _role = me.role;
   _userId = me.id;
   _canPayInvoice = !!me.can_pay_invoice;
@@ -67,6 +68,11 @@ async function initShop() {
   await loadProducts();
   await loadCart();
   updateShoppingForBanner();
+  } catch(initErr) {
+    console.error('Shop init error:', initErr.message);
+    const grid = document.getElementById('products-grid');
+    if (grid) grid.innerHTML = '<p style="color:var(--text-muted);font-size:14px;padding:32px;">Something went wrong loading the shop. Please refresh the page.</p>';
+  }
 
 function updateShoppingForBanner() {
   const banner = document.getElementById('shopping-for-banner');
@@ -98,15 +104,17 @@ function renderProducts() {
     return;
   }
   grid.innerHTML = _products.map((p, i) => {
+    try {
     const isComingSoon = p.active === 2;
-    const price = p.my_price !== null && p.my_price !== undefined ? `$${parseFloat(p.my_price).toFixed(2)}` : 'No price set';
-    const hasPrice = p.my_price !== null && p.my_price !== undefined;
-    const stockClass = p.stock < 20 ? 'low' : '';
+    const price = p.my_price !== null && p.my_price !== undefined ? `$${parseFloat(p.my_price || 0).toFixed(2)}` : 'No price set';
+    const hasPrice = p.my_price !== null && p.my_price !== undefined && !isNaN(parseFloat(p.my_price));
+    const stockClass = (p.stock || 0) < 20 ? 'low' : '';
+    const safeImgUrl = (p.image_url || '').trim();
 
-    const imgContent = p.image_url
-      ? `<img class="product-img" src="${p.image_url}" alt="${esc(p.name)}" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')">`
+    const imgContent = safeImgUrl
+      ? `<img class="product-img" src="${safeImgUrl}" alt="${esc(p.name || '')}" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.remove('loaded');this.style.display='none';">`
       : '';
-    const fallback = `<div class="product-img-placeholder"><span>💊</span><p>${esc(p.name)}</p></div>`;
+    const fallback = `<div class="product-img-placeholder"><span>📦</span><p>${esc(p.name || 'Product')}</p></div>`;
     const comingSoonOverlay = isComingSoon ? `
       <div class="coming-soon-overlay">
         <span style="font-size:28px;">🔜</span>
@@ -145,6 +153,10 @@ function renderProducts() {
         </div>
       </div>
     `;
+    } catch(productErr) {
+      console.error('Error rendering product:', p?.id, productErr?.message);
+      return `<div class="product-card" style="display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--text-muted);font-size:13px;padding:16px;">Unable to display product</div>`;
+    }
   }).join('');
 }
 
