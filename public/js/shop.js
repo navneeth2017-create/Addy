@@ -328,7 +328,8 @@ function showCheckout() {
   if (!items.length) return;
 
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-  const shipping = subtotal >= 350 ? 0 : 35;
+  const allFreeShipping = items.length > 0 && items.every(i => _products.find(p => p.id === i.product_id)?.free_shipping);
+  const shipping = (subtotal >= 350 || allFreeShipping) ? 0 : 35;
   const isCard = _selectedPayment === 'card';
   const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
   const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
@@ -408,7 +409,8 @@ function updateCheckoutTotals() {
   const items = _cart.items || [];
   if (!items.length) return;
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-  const shipping = subtotal >= 350 ? 0 : 35;
+  const allFreeShipping = items.length > 0 && items.every(i => _products.find(p => p.id === i.product_id)?.free_shipping);
+  const shipping = (subtotal >= 350 || allFreeShipping) ? 0 : 35;
   const isCard = _selectedPayment === 'card';
   const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
   const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;

@@ -204,6 +204,35 @@ async function migrate() {
   // ── Per-user invoice payment permission ──────────────────────────────────────
   await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS can_pay_invoice BOOLEAN NOT NULL DEFAULT false');
 
+  // ── pricing_tier on users (stores the tier label e.g. 'tier_1', 'custom_15pct') ──
+  await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS pricing_tier TEXT DEFAULT NULL');
+
+  // ── Store table optional fields (phone, store number) ───────────────────────
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT ''`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_number TEXT DEFAULT ''`);
+  // Relax NOT NULL on owner_name and email so partial store data is accepted
+  try { await q('ALTER TABLE stores ALTER COLUMN owner_name DROP NOT NULL'); } catch(e) {}
+  try { await q('ALTER TABLE stores ALTER COLUMN email DROP NOT NULL'); } catch(e) {}
+  try { await q('ALTER TABLE stores ALTER COLUMN address DROP NOT NULL'); } catch(e) {}
+  try { await q('ALTER TABLE stores ALTER COLUMN city DROP NOT NULL'); } catch(e) {}
+  try { await q('ALTER TABLE stores ALTER COLUMN state DROP NOT NULL'); } catch(e) {}
+  try { await q('ALTER TABLE stores ALTER COLUMN zip DROP NOT NULL'); } catch(e) {}
+
+  // ── Free shipping flag on products ──────────────────────────────────────────
+  await q(`ALTER TABLE products ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN NOT NULL DEFAULT false`);
+
+  // ── Demo product (10 cents, no shipping) — admin deactivates when not needed ──
+  await q(`INSERT INTO products (name, description, sku, stock, active, free_shipping)
+    VALUES ('Test Order — $0.10', 'Demo product for testing checkout. Deactivate from Products tab when not needed.', 'DEMO-001', 9999, 1, true)
+    ON CONFLICT (sku) DO NOTHING`);
+  const demoProduct = await one("SELECT id FROM products WHERE sku='DEMO-001'");
+  if (demoProduct) {
+    // ADDY prices products via retail_price on the products table (not product_prices like WowCow)
+    // Tier pricing multiplies off retail_price, so $0.10 retail = $0.065 for Tier 1, etc.
+    // Set directly to $0.10 so it's cheap at any tier
+    await q("UPDATE products SET retail_price=0.10, cost_price=0.10 WHERE id=$1", [demoProduct.id]);
+  }
+
   // Create production admin account if it doesn't exist
   // ── Demo + Admin accounts ─────────────────────────────────────────────────
   const demoAccounts = [
@@ -695,13 +724,14 @@ app.get('/api/stores/:id', authenticate, authorize('admin'), async (req, res) =>
 
 app.post('/api/stores', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { name, owner_name, email, address, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status } = req.body;
-    if (!name || !owner_name || !email) return res.status(400).json({ error: 'Name, owner, and email are required' });
+    const { name, owner_name, email, address, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number } = req.body;
+    if (!name) return res.status(400).json({ error: 'Store name is required' });
     const result = await one(
-      `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-      [name,owner_name,email,address||'',city||'',state||'',zip||'',category||'General',
-       monthly_revenue||0,wholesale_price||0,retail_price||0,distribution_cost||0,status||'active']
+      `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [name, owner_name||'', email||'', address||'', city||'', state||'', zip||'',
+       category||'General', monthly_revenue||0, wholesale_price||0, retail_price||0,
+       distribution_cost||0, status||'active', phone||'', store_number||'']
     );
     await logActivity('created', name, req.user.email);
     res.status(201).json(result);
@@ -1632,14 +1662,15 @@ app.post('/api/orders', authenticate, async (req, res) => {
       : await one('SELECT * FROM carts WHERE user_id=$1 AND store_id IS NULL', [userId]);
     if (!cart) return res.status(400).json({ error: 'Cart not found' });
 
-    const items = await all('SELECT ci.*,p.name,p.stock FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1', [cart.id]);
+    const items = await all('SELECT ci.*,p.name,p.stock,p.free_shipping FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1', [cart.id]);
     if (!items.length) return res.status(400).json({ error: 'Cart is empty' });
     for (const item of items) {
       if (item.stock < item.quantity) return res.status(400).json({ error: `Insufficient stock for ${item.name}` });
     }
 
     const subtotal = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
-    const shipping_cost = subtotal >= 350 ? 0 : 35;
+    const allFreeShipping = items.every(i => i.free_shipping);
+    const shipping_cost = (subtotal >= 350 || allFreeShipping) ? 0 : 35;
     // Stripe fee passthrough: customer pays fee so we receive full amount
     // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
     const processing_fee = payment_method === 'card'
@@ -2316,8 +2347,8 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
 
     // Brand new store — create it
     const store = await one(
-      "INSERT INTO stores (name,address,city,state,zip,phone,email,category,store_approval_status,exclusive_rep_id,monthly_revenue,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,0,'active') RETURNING id",
-      [name, address||'', city||'', state||'', zip||'', phone||'', email||'', category||'General', req.user.id]
+      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,store_approval_status,exclusive_rep_id,monthly_revenue,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,0,'active') RETURNING id",
+      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', req.user.id]
     );
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
     res.json({ success: true, id: store.id, message: 'Store submitted for approval' });
