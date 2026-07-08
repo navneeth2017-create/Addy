@@ -294,6 +294,11 @@
         <div id="store-claims-list"><div class="loading">Loading...</div></div>
 
         <div class="page-header" style="margin-top:32px;">
+          <div><h1>Flagged Claim Conflicts <span id="flagged-badge" style="display:none;background:#d97706;color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></h1><p>Stores re-claimed by a different rep than before — auto-approved, but needs you to sort out who's actually working it.</p></div>
+        </div>
+        <div id="flagged-claims-list"><div class="loading">Loading...</div></div>
+
+        <div class="page-header" style="margin-top:32px;">
           <div><h1>Ownership Transfer Requests</h1><p>Reps requesting to take over a store already claimed by someone else.</p></div>
         </div>
         <div id="ownership-requests-list"><div class="loading">Loading...</div></div>
@@ -311,6 +316,16 @@
       <div id="tab-settings" style="display:none;">
         <div class="page-header">
           <div><h1>Settings</h1><p>Manage notification preferences</p></div>
+        </div>
+
+        <!-- Email Diagnostics -->
+        <div class="table-card" style="max-width:640px;margin-bottom:24px;">
+          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">📧 Test Email Delivery</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">If signup/approval emails aren't arriving, send a test to see the real error.</p></div></div>
+          <div style="padding:0 24px 20px;display:flex;gap:8px;align-items:center;">
+            <input type="email" id="test-email-address" placeholder="Send test to (defaults to your email)" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:13px;">
+            <button class="btn btn-sm" onclick="sendTestEmail()">Send Test</button>
+          </div>
+          <div id="test-email-result" style="padding:0 24px 20px;font-size:13px;"></div>
         </div>
 
         <!-- Feedback Section -->
@@ -537,6 +552,7 @@
         <div class="form-group"><label>Owner Name</label><input type="text" name="owner_name" required></div>
         <div class="form-group"><label>Email</label><input type="email" name="email" required></div>
         <div class="form-group"><label>Address</label><input type="text" name="address"></div>
+        <div class="form-group"><label>Unit / Suite / Plaza #</label><input type="text" name="address_line2"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
           <div class="form-group"><label>City</label><input type="text" name="city"></div>
           <div class="form-group"><label>State</label><input type="text" name="state" maxlength="2"></div>
@@ -550,6 +566,13 @@
           <div class="form-group"><label>Wholesale Price ($)</label><input type="number" name="wholesale_price" step="0.01" value="0"></div>
           <div class="form-group"><label>Retail Price ($)</label><input type="number" name="retail_price" step="0.01" value="0"></div>
           <div class="form-group"><label>Distribution Cost ($)</label><input type="number" name="distribution_cost" step="0.01" value="0"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;align-items:end;">
+          <div class="form-group"><label>Tax Resale Cert #</label><input type="text" name="tax_resale_cert"></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:6px;padding-bottom:10px;">
+            <input type="checkbox" name="tax_exempt" id="add-store-tax-exempt" style="width:16px;height:16px;">
+            <label for="add-store-tax-exempt" style="margin:0;font-size:13px;">Tax-exempt</label>
+          </div>
         </div>
         <div class="form-group">
           <label>Status</label>

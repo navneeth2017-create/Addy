@@ -518,19 +518,57 @@ async function loadStoreClaimsTab() {
   const claims = await apiFetch('/api/stores/pending-claims');
   const badge = document.getElementById('claims-badge');
   if (badge) { badge.textContent = (claims||[]).length; badge.style.display = (claims||[]).length ? 'inline' : 'none'; }
-  if (!claims || !claims.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No pending store claims</div>'; return; }
-  el.innerHTML = claims.map(s => `
-    <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--bg-card);">
-      <div style="flex:1;">
-        <div style="font-weight:700;font-size:15px;color:var(--text);">${esc(s.name)}</div>
-        <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state,s.zip].filter(Boolean).join(', '))}</div>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Claimed by: <strong>${esc(s.rep_name||s.rep_email)}</strong></div>
+  if (!claims || !claims.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No pending store claims</div>'; }
+  else {
+    el.innerHTML = claims.map(s => `
+      <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--bg-card);">
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:15px;color:var(--text);">${esc(s.name)}</div>
+          <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address, s.address_line2, s.city, s.state, s.zip].filter(Boolean).join(', '))}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Claimed by: <strong>${esc(s.rep_name||s.rep_email)}</strong></div>
+          ${s.tax_resale_cert || s.tax_exempt ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Tax: ${s.tax_exempt ? '<strong>Resale/tax-exempt</strong>' : ''}${s.tax_resale_cert ? ' · Cert# ' + esc(s.tax_resale_cert) : ''}</div>` : ''}
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm btn-green" onclick="approveStoreClaim(${s.id})">✓ Approve</button>
+          <button class="btn btn-sm btn-danger" onclick="rejectStoreClaim(${s.id})">Reject</button>
+        </div>
+      </div>`).join('');
+  }
+  loadFlaggedClaimsTab();
+}
+
+async function loadFlaggedClaimsTab() {
+  const el = document.getElementById('flagged-claims-list');
+  if (!el) return;
+  const claims = await apiFetch('/api/stores/flagged-claims');
+  const badge = document.getElementById('flagged-badge');
+  if (badge) { badge.textContent = (claims||[]).length; badge.style.display = (claims||[]).length ? 'inline' : 'none'; }
+  if (!claims || !claims.length) { el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">No flagged claim conflicts</div>'; return; }
+  el.innerHTML = claims.map(s => {
+    const daysSinceClaimed = s.claimed_at ? Math.floor((Date.now() - new Date(s.claimed_at)) / 86400000) : null;
+    const photosMissing = !s.storefront_photo_url || !s.display_photo_url;
+    const photoOverdue = photosMissing && daysSinceClaimed !== null && daysSinceClaimed > 30;
+    return `
+    <div style="padding:16px;border:1px solid rgba(217,119,6,0.4);border-radius:12px;margin-bottom:10px;background:rgba(217,119,6,0.06);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:15px;color:var(--text);">🚩 ${esc(s.name)}</div>
+          <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address, s.address_line2, s.city, s.state, s.zip].filter(Boolean).join(', '))}</div>
+          <div style="font-size:12px;margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;">
+            <span style="color:var(--text-muted);">Current rep:</span><span><strong>${esc(s.rep_name||s.rep_email)}</strong> · ${esc(s.rep_email)}${s.rep_phone ? ' · ' + esc(s.rep_phone) : ''}</span>
+            <span style="color:var(--text-muted);">Previous rep:</span><span><strong>${esc(s.previous_rep_name||s.previous_rep_email||'—')}</strong>${s.previous_rep_email ? ' · ' + esc(s.previous_rep_email) : ''}${s.previous_rep_phone ? ' · ' + esc(s.previous_rep_phone) : ''}</span>
+          </div>
+          ${photosMissing ? `<div style="font-size:12px;margin-top:8px;color:${photoOverdue ? 'var(--red)' : 'var(--text-muted)'};">${photoOverdue ? '⚠️ Photos overdue' : '📷 Photos not yet uploaded'}${daysSinceClaimed !== null ? ` (claimed ${daysSinceClaimed}d ago)` : ''}</div>` : '<div style="font-size:12px;margin-top:8px;color:var(--green);">✓ Photos uploaded</div>'}
+        </div>
+        <button class="btn btn-sm btn-outline" onclick="resolveFlaggedClaim(${s.id})">Mark Resolved</button>
       </div>
-      <div style="display:flex;gap:8px;">
-        <button class="btn btn-sm btn-green" onclick="approveStoreClaim(${s.id})">✓ Approve</button>
-        <button class="btn btn-sm btn-danger" onclick="rejectStoreClaim(${s.id})">Reject</button>
-      </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+async function resolveFlaggedClaim(storeId) {
+  const result = await apiFetch('/api/stores/' + storeId + '/resolve-flag', { method: 'PATCH', body: JSON.stringify({}) });
+  if (result && result.success) { showToast('Flag resolved', 'success'); loadFlaggedClaimsTab(); }
 }
 
 async function approveStoreClaim(storeId) {
@@ -654,7 +692,8 @@ async function showStoreDetail(id) {
     <div class="detail-row"><span class="detail-label">Store Name</span><span class="detail-value">${esc(store.name)}</span></div>
     <div class="detail-row"><span class="detail-label">Owner</span><span class="detail-value">${esc(store.owner_name)}</span></div>
     <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value">${esc(store.email)}</span></div>
-    <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${esc(store.address)}, ${esc(store.city)}, ${esc(store.state)} ${esc(store.zip)}</span></div>
+    <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${esc(store.address)}${store.address_line2 ? ', ' + esc(store.address_line2) : ''}, ${esc(store.city)}, ${esc(store.state)} ${esc(store.zip)}</span></div>
+    ${store.tax_resale_cert || store.tax_exempt ? `<div class="detail-row"><span class="detail-label">Tax</span><span class="detail-value">${store.tax_exempt ? 'Resale/tax-exempt' : ''}${store.tax_resale_cert ? ' · Cert# ' + esc(store.tax_resale_cert) : ''}</span></div>` : ''}
     <div class="detail-row"><span class="detail-label">Category</span><span class="detail-value">${esc(store.category)}</span></div>
     <div class="detail-row"><span class="detail-label">Revenue</span><span class="detail-value revenue">${formatCurrency(store.monthly_revenue)}/mo</span></div>
     <div class="detail-row">
@@ -806,9 +845,10 @@ async function handleAddStore(e) {
   const form = e.target;
   const body = {
     name: form.name.value, owner_name: form.owner_name.value, email: form.email.value,
-    address: form.address.value, city: form.city.value, state: form.state.value,
+    address: form.address.value, address_line2: form.address_line2.value, city: form.city.value, state: form.state.value,
     zip: form.zip.value, category: form.category.value,
-    monthly_revenue: parseFloat(form.monthly_revenue.value) || 0, status: form.status.value || 'active'
+    monthly_revenue: parseFloat(form.monthly_revenue.value) || 0, status: form.status.value || 'active',
+    tax_resale_cert: form.tax_resale_cert.value, tax_exempt: form.tax_exempt.checked
   };
   const result = await apiFetch('/api/stores', { method: 'POST', body: JSON.stringify(body) });
   if (result && result.id) {
@@ -962,13 +1002,63 @@ async function loadMyStores() {
   if (!el) return;
   const stores = await apiFetch('/api/my-stores');
   if (!stores || !stores.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">🏪</div><div>No stores claimed yet.</div><div style="margin-top:8px;font-size:13px;">Click Claim a Store to get started.</div></div>'; return; }
-  el.innerHTML = `<div class="table-card">` + stores.map(s => `
-    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
-      <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
-      <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
-    </div>`).join('');
+  el.innerHTML = `<div class="table-card">` + stores.map(s => {
+    const daysSinceClaimed = s.claimed_at ? Math.floor((Date.now() - new Date(s.claimed_at)) / 86400000) : null;
+    const photosMissing = !s.storefront_photo_url || !s.display_photo_url;
+    const daysLeft = daysSinceClaimed !== null ? 30 - daysSinceClaimed : null;
+    const overdue = photosMissing && daysLeft !== null && daysLeft < 0;
+    return `
+    <div style="padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address, s.address_line2, s.city, s.state].filter(Boolean).join(', '))}</div></div>
+        <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
+      </div>
+      ${s.claim_flagged ? `<div style="margin-top:10px;font-size:12px;color:#b45309;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.3);border-radius:6px;padding:8px 12px;">🚩 This claim was flagged (store had a prior claimant) — contact admin@addydsds.com if you haven't already.</div>` : ''}
+      ${photosMissing ? `
+        <div style="margin-top:10px;padding:10px 12px;border-radius:6px;background:${overdue ? 'rgba(220,38,38,0.08)' : 'var(--bg-input)'};border:1px solid ${overdue ? 'rgba(220,38,38,0.3)' : 'var(--border)'};">
+          <div style="font-size:12px;font-weight:600;color:${overdue ? 'var(--red)' : 'var(--text)'};margin-bottom:8px;">
+            📷 ${overdue ? 'Storefront + display photos overdue' : `Storefront + display photos required${daysLeft !== null ? ` (${daysLeft} day${daysLeft===1?'':'s'} left)` : ''}`}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <label style="font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--bg-card);">
+              ${s.storefront_photo_url ? '✓ Storefront photo' : 'Upload storefront photo'}
+              <input type="file" accept="image/*" style="display:none;" onchange="uploadStorePhoto(${s.id}, 'storefront_photo', this)">
+            </label>
+            <label style="font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--bg-card);">
+              ${s.display_photo_url ? '✓ Display photo' : 'Upload display photo'}
+              <input type="file" accept="image/*" style="display:none;" onchange="uploadStorePhoto(${s.id}, 'display_photo', this)">
+            </label>
+          </div>
+        </div>
+      ` : `<div style="margin-top:10px;font-size:12px;color:var(--green);">✓ Photos on file</div>`}
+    </div>`;
+  }).join('');
   const statEl = document.getElementById('stat-my-stores');
   if (statEl) statEl.textContent = stores.filter(s => s.store_approval_status==='approved').length;
+}
+
+async function uploadStorePhoto(storeId, fieldName, inputEl) {
+  const file = inputEl.files?.[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append(fieldName, file);
+  try {
+    const token = getToken();
+    const res = await fetch('/api/stores/' + storeId + '/photos', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: formData,
+    });
+    const result = await res.json();
+    if (res.ok && result.success) {
+      showToast('Photo uploaded ✓', 'success');
+      loadMyStores();
+    } else {
+      showToast(result.error || 'Upload failed', 'error');
+    }
+  } catch(e) {
+    showToast('Upload failed: ' + e.message, 'error');
+  }
 }
 
 function showClaimStoreModal() {
@@ -1034,18 +1124,20 @@ function selectWowCowStore(store) {
   document.getElementById('cs-name').readOnly = true;
   document.getElementById('cs-address').readOnly = true;
 
+  // Claiming an already-claimed store now always succeeds (auto-approved),
+  // but the claimant should know upfront it'll be flagged for admin review.
   const btn = document.getElementById('cs-submit-btn');
+  const warningEl = document.getElementById('cs-already-claimed-warning');
   if (store.already_claimed) {
-    btn.textContent = 'Request Ownership Transfer';
-    btn.onclick = () => requestOwnership(store.id);
-    btn.classList.remove('btn-green');
-    btn.classList.add('btn-outline');
+    if (warningEl) warningEl.style.display = 'block';
+    btn.textContent = 'Claim Anyway (will be flagged)';
   } else {
+    if (warningEl) warningEl.style.display = 'none';
     btn.textContent = 'Submit for Approval';
-    btn.onclick = submitStoreClaim;
-    btn.classList.add('btn-green');
-    btn.classList.remove('btn-outline');
   }
+  btn.onclick = submitStoreClaim;
+  btn.classList.add('btn-green');
+  btn.classList.remove('btn-outline');
 }
 
 async function requestOwnership(storeId) {
@@ -1065,24 +1157,27 @@ async function submitStoreClaim() {
   const storeId = document.getElementById('cs-store-id')?.value;
   const result = await apiFetch('/api/stores/claim', { method: 'POST', body: JSON.stringify({
     name, address: document.getElementById('cs-address')?.value?.trim(),
+    address_line2: document.getElementById('cs-address2')?.value?.trim(),
     city: document.getElementById('cs-city')?.value?.trim(), state: document.getElementById('cs-state')?.value?.trim(),
     zip: document.getElementById('cs-zip')?.value?.trim(), phone: document.getElementById('cs-phone')?.value?.trim(),
     email: document.getElementById('cs-email')?.value?.trim(),
+    tax_resale_cert: document.getElementById('cs-tax-cert')?.value?.trim(),
+    tax_exempt: document.getElementById('cs-tax-exempt')?.checked || false,
     store_id: storeId ? parseInt(storeId) : null,
   })});
   if (result && result.success) {
-    showToast('Store submitted for approval ✓', 'success');
     document.getElementById('claim-store-modal')?.classList.remove('active');
-    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    ['cs-name','cs-address','cs-address2','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id','cs-tax-cert'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    const checkboxEl = document.getElementById('cs-tax-exempt');
+    if (checkboxEl) checkboxEl.checked = false;
+    if (result.flagged) {
+      // Important enough that a 3-second toast isn't reliable — use a
+      // blocking alert so the claimant can't miss the "contact admin" ask.
+      alert('Claim approved — but ' + result.message);
+    } else {
+      showToast('Store submitted for approval ✓', 'success');
+    }
     loadMyStores();
-  } else if (result && result.alreadyClaimed) {
-    showToast(result.error, 'error');
-    // Switch to ownership request mode
-    const btn = document.getElementById('cs-submit-btn');
-    btn.textContent = 'Request Ownership Transfer';
-    btn.onclick = () => requestOwnership(result.storeId);
-    btn.classList.remove('btn-green');
-    btn.classList.add('btn-outline');
   } else if (result && result.error) {
     showToast(result.error, 'error');
   }
@@ -1155,7 +1250,7 @@ function ownerLoadStore(store, networkAvg) {
   if (emailEl) emailEl.textContent = store.email;
   
   const addressEl = document.getElementById('store-address');
-  if (addressEl) addressEl.textContent = `${store.address}, ${store.city}, ${store.state} ${store.zip}`;
+  if (addressEl) addressEl.textContent = `${store.address}${store.address_line2 ? ', ' + store.address_line2 : ''}, ${store.city}, ${store.state} ${store.zip}`;
   
   const categoryEl = document.getElementById('store-category');
   if (categoryEl) categoryEl.textContent = store.category;
@@ -2284,6 +2379,7 @@ function renderOrderDetailModal(o, isAdmin) {
       <p style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;">Shipping Address</p>
       <p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_name||'')}</p>
       <p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_address||'')}</p>
+      ${o.shipping_address_line2 ? `<p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_address_line2)}</p>` : ''}
       <p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_city||'')}${o.shipping_city?', ':''}${esc(o.shipping_state||'')} ${esc(o.shipping_zip||'')}</p>
     </div>
 
@@ -2985,3 +3081,16 @@ async function triggerBackup() {
     showToast('Backup started ✓', 'success');
   }
 }
+
+async function sendTestEmail() {
+  const to = document.getElementById('test-email-address')?.value?.trim();
+  const resultEl = document.getElementById('test-email-result');
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Sending...</span>';
+  const result = await apiFetch('/api/admin/test-email', { method: 'POST', body: JSON.stringify(to ? { to } : {}) });
+  if (result && result.success) {
+    resultEl.innerHTML = '<span style="color:var(--green);">✓ ' + esc(result.message) + '</span>';
+  } else {
+    resultEl.innerHTML = '<div style="color:var(--red);">✗ ' + esc(result?.error || 'Unknown error') + '</div>' + (result?.hint ? '<div style="color:var(--text-muted);margin-top:4px;">' + esc(result.hint) + '</div>' : '');
+  }
+}
+

@@ -124,12 +124,16 @@
               <div id="wc-store-results" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.15);"></div>
             </div>
             <p style="font-size:11px;color:var(--text-muted);margin:0;line-height:1.5;">
-              If a store already exists in the system, it cannot be claimed directly by another rep —
-              you'll be able to submit an ownership request for admin review instead.
+              If a store already exists in the system, you can still claim it — it'll be approved
+              right away, but flagged for admin review since another rep already has it.
             </p>
+            <div id="cs-already-claimed-warning" style="display:none;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.3);border-radius:8px;padding:10px 14px;font-size:12px;color:#b45309;">
+              ⚠️ This store is already claimed by another rep. You can still claim it — it'll be approved, but flagged so admin can sort out the conflict.
+            </div>
             <div style="text-align:center;font-size:11px;color:var(--text-muted);">— or fill in manually below —</div>
             <input type="text" id="cs-name" placeholder="Store name *" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
-            <input type="text" id="cs-address" placeholder="Address" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <input type="text" id="cs-address" placeholder="Street address" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <input type="text" id="cs-address2" placeholder="Unit, suite, plaza # (optional)" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
             <div style="display:grid;grid-template-columns:1fr 80px 100px;gap:8px;">
               <input type="text" id="cs-city" placeholder="City" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
               <input type="text" id="cs-state" placeholder="State" maxlength="2" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
@@ -137,6 +141,14 @@
             </div>
             <input type="tel" id="cs-phone" placeholder="Store phone" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
             <input type="email" id="cs-email" placeholder="Store email" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
+              <p style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">Tax reseller info</p>
+              <input type="text" id="cs-tax-cert" placeholder="Resale certificate / tax ID number" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;margin-bottom:8px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;">
+                <input type="checkbox" id="cs-tax-exempt" style="width:16px;height:16px;">
+                This store purchases tax-exempt (resale)
+              </label>
+            </div>
             <input type="hidden" id="cs-store-id" value="">
             <button class="btn btn-green" id="cs-submit-btn" onclick="submitStoreClaim()" style="margin-top:4px;">Submit for Approval</button>
           </div>

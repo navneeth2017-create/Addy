@@ -353,6 +353,7 @@ function showCheckout() {
   if (_storeAddress) {
     document.getElementById('ship-name').value = _storeAddress.owner_name || _storeAddress.name || '';
     document.getElementById('ship-address').value = _storeAddress.address || '';
+    document.getElementById('ship-address2').value = _storeAddress.address_line2 || '';
     document.getElementById('ship-city').value = _storeAddress.city || '';
     document.getElementById('ship-state').value = _storeAddress.state || '';
     document.getElementById('ship-zip').value = _storeAddress.zip || '';
@@ -360,6 +361,7 @@ function showCheckout() {
     // Clear for reps ordering for themselves
     document.getElementById('ship-name').value = '';
     document.getElementById('ship-address').value = '';
+    document.getElementById('ship-address2').value = '';
     document.getElementById('ship-city').value = '';
     document.getElementById('ship-state').value = '';
     document.getElementById('ship-zip').value = '';
@@ -482,7 +484,7 @@ async function placeOrder() {
       payment_method: _selectedPayment,
       stripe_payment_intent_id: stripePaymentIntentId,
       shipping_name: document.getElementById('ship-name').value.trim(),
-      shipping_address: addr, shipping_city: city, shipping_state: state, shipping_zip: zip,
+      shipping_address: addr, shipping_address_line2: document.getElementById('ship-address2')?.value?.trim() || '', shipping_city: city, shipping_state: state, shipping_zip: zip,
       notes: document.getElementById('order-notes').value.trim()
     };
 

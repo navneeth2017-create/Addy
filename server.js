@@ -65,6 +65,39 @@ const stripe = process.env.STRIPE_SECRET_KEY ? Stripe(process.env.STRIPE_SECRET_
 if (stripe) console.log('💳 Stripe payment processing enabled');
 else console.log('📄 Invoice-only mode (add STRIPE_SECRET_KEY to enable card payments)');
 
+// ── CLOUDINARY (store photo uploads — storefront + display photo) ───────────
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
+const cloudinaryConfigured = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+if (cloudinaryConfigured) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+  console.log('📷 Cloudinary photo uploads enabled');
+} else {
+  console.log('⚠️  Cloudinary not configured — store photo uploads disabled until CLOUDINARY_* env vars are set');
+}
+// Memory storage — files are streamed straight to Cloudinary, never touch
+// Railway's disk (which is ephemeral and would lose files on every deploy).
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB per photo
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed'));
+    cb(null, true);
+  },
+});
+function uploadToCloudinary(buffer, folder) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'image' }, (err, result) => {
+      if (err) reject(err); else resolve(result);
+    });
+    stream.end(buffer);
+  });
+}
+
 // ── WEB PUSH NOTIFICATIONS ────────────────────────────────────────────────────
 const webpush = require('web-push');
 const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BDgZsDCilhapnLmxI8TIFc5KiZLPmdnLwaW7kluTozXvDqo237jLLiKaWac86rtM0ZDymkCr-KpatLntmYvXM5c';
@@ -220,6 +253,32 @@ async function migrate() {
 
   // ── Free shipping flag on products ──────────────────────────────────────────
   await q(`ALTER TABLE products ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN NOT NULL DEFAULT false`);
+
+  // ── Store claim detail: address unit/plaza#, tax reseller info ──────────────
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS address_line2 TEXT DEFAULT ''`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS tax_resale_cert TEXT DEFAULT ''`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS tax_exempt BOOLEAN NOT NULL DEFAULT false`);
+
+  // ── Store claim conflict flagging (auto-approve re-claims, flag for admin) ──
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS claim_flagged BOOLEAN NOT NULL DEFAULT false`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS previous_rep_id INTEGER REFERENCES users(id)`);
+  // Backfill claimed_at for existing claims so they don't all appear to have
+  // been claimed "just now" — without this, every already-claimed store
+  // would suddenly show as having 30 days from today, or worse, if we
+  // defaulted to something in the past, would show as instantly overdue.
+  // Using each store's own creation isn't available (no created_at on
+  // stores), so we backfill to NOW() once, which is the fairest starting
+  // point for a rule that didn't exist before today.
+  await q(`UPDATE stores SET claimed_at = NOW() WHERE exclusive_rep_id IS NOT NULL AND claimed_at IS NULL`);
+
+  // ── Mandatory storefront/display photos (required within 30 days of claim) ──
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS storefront_photo_url TEXT`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS display_photo_url TEXT`);
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_uploaded_at TIMESTAMPTZ`);
+
+  // ── Order shipping address unit/plaza# (separate from stores — orders keep their own address snapshot at checkout time) ──
+  await q(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_address_line2 TEXT DEFAULT ''`);
 
   // ── Demo product (10 cents, no shipping) — admin deactivates when not needed ──
   await q(`INSERT INTO products (name, description, sku, stock, active, free_shipping)
@@ -705,6 +764,35 @@ app.get('/api/stores/pending-claims', authenticate, authorize('admin'), async (r
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Flagged claims: auto-approved because the store was already claimed by
+// someone else when re-claimed. These bypass the pending queue entirely
+// (they're already store_approval_status='approved'), so they need their
+// own view — otherwise a flagged conflict is invisible to admin.
+app.get('/api/stores/flagged-claims', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const stores = await all(
+      `SELECT s.*, u.name as rep_name, u.email as rep_email, u.phone as rep_phone,
+              pu.name as previous_rep_name, pu.email as previous_rep_email, pu.phone as previous_rep_phone
+       FROM stores s
+       JOIN users u ON u.id = s.exclusive_rep_id
+       LEFT JOIN users pu ON pu.id = s.previous_rep_id
+       WHERE s.claim_flagged = true
+       ORDER BY s.id DESC`
+    );
+    res.json(stores);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin resolves a flagged claim (contacted both reps, sorted it out) —
+// clears the flag without changing ownership.
+app.patch('/api/stores/:id/resolve-flag', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    await q('UPDATE stores SET claim_flagged=false WHERE id=$1', [req.params.id]);
+    await logActivity('resolved_claim_flag', `store #${req.params.id}`, req.user.email);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, res) => {
   try {
     const stores = await all(
@@ -724,14 +812,14 @@ app.get('/api/stores/:id', authenticate, authorize('admin'), async (req, res) =>
 
 app.post('/api/stores', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { name, owner_name, email, address, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number } = req.body;
+    const { name, owner_name, email, address, address_line2, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number, tax_resale_cert, tax_exempt } = req.body;
     if (!name) return res.status(400).json({ error: 'Store name is required' });
     const result = await one(
-      `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [name, owner_name||'', email||'', address||'', city||'', state||'', zip||'',
+      `INSERT INTO stores (name,owner_name,email,address,address_line2,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number,tax_resale_cert,tax_exempt)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+      [name, owner_name||'', email||'', address||'', address_line2||'', city||'', state||'', zip||'',
        category||'General', monthly_revenue||0, wholesale_price||0, retail_price||0,
-       distribution_cost||0, status||'active', phone||'', store_number||'']
+       distribution_cost||0, status||'active', phone||'', store_number||'', tax_resale_cert||'', !!tax_exempt]
     );
     await logActivity('created', name, req.user.email);
     res.status(201).json(result);
@@ -746,7 +834,7 @@ app.patch('/api/stores/:id', authenticate, async (req, res) => {
     if (role === 'investor') return res.status(403).json({ error: 'Access denied' });
     const store = await one('SELECT * FROM stores WHERE id=$1', [id]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
-    const allowed = ['name','owner_name','email','address','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status'];
+    const allowed = ['name','owner_name','email','address','address_line2','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status','tax_resale_cert','tax_exempt'];
     const updates = [], params = [];
     let pi = 1;
     for (const field of allowed) {
@@ -866,8 +954,8 @@ app.get('/api/export/csv', authenticate, authorize('admin'), async (req, res) =>
     if (state) { conditions.push(`state=$${pi}`); params.push(state); pi++; }
     if (status) { conditions.push(`status=$${pi}`); params.push(status); pi++; }
     const stores = await all(`SELECT * FROM stores${conditions.length?' WHERE '+conditions.join(' AND '):''} ORDER BY name`, params);
-    const headers = ['Name','Owner','Email','Address','City','State','Zip','Category','Monthly Revenue','Wholesale Price','Retail Price','Distribution Cost','Status'];
-    const rows = stores.map(s => [s.name,s.owner_name,s.email,s.address,s.city,s.state,s.zip,s.category,s.monthly_revenue,s.wholesale_price,s.retail_price,s.distribution_cost,s.status].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+    const headers = ['Name','Owner','Email','Address','Unit/Suite','City','State','Zip','Category','Monthly Revenue','Wholesale Price','Retail Price','Distribution Cost','Status','Tax Resale Cert','Tax Exempt'];
+    const rows = stores.map(s => [s.name,s.owner_name,s.email,s.address,s.address_line2,s.city,s.state,s.zip,s.category,s.monthly_revenue,s.wholesale_price,s.retail_price,s.distribution_cost,s.status,s.tax_resale_cert,s.tax_exempt?'Yes':'No'].map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(','));
     res.setHeader('Content-Type','text/csv');
     res.setHeader('Content-Disposition','attachment; filename=addy-stores.csv');
     res.send([headers.join(','),...rows].join('\n'));
@@ -1490,7 +1578,7 @@ app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
               <div class="party-detail">
                 ${order.user_email}<br>
                 ${order.user_phone ? order.user_phone + '<br>' : ''}
-                ${order.shipping_address}<br>
+                ${order.shipping_address}${order.shipping_address_line2 ? ', ' + order.shipping_address_line2 : ''}<br>
                 ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}
               </div>
             </div>
@@ -1645,7 +1733,7 @@ app.delete('/api/cart', authenticate, async (req, res) => {
 app.post('/api/orders', authenticate, async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const { store_id, payment_method, shipping_name, shipping_address, shipping_city, shipping_state, shipping_zip, notes } = req.body;
+    const { store_id, payment_method, shipping_name, shipping_address, shipping_address_line2, shipping_city, shipping_state, shipping_zip, notes } = req.body;
     if (!payment_method) return res.status(400).json({ error: 'Payment method required' });
     if (!shipping_address || !shipping_city || !shipping_state || !shipping_zip) return res.status(400).json({ error: 'Complete shipping address required' });
 
@@ -1684,10 +1772,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
     try {
       await client.query('BEGIN');
       const or = await client.query(
-        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_address_line2,shipping_city,shipping_state,shipping_zip,notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
         [userId, store_id||null, payment_method, payment_status, subtotal, shipping_cost, processing_fee, total,
-         shipping_name||'', shipping_address, shipping_city, shipping_state, shipping_zip, notes||'']
+         shipping_name||'', shipping_address, shipping_address_line2||'', shipping_city, shipping_state, shipping_zip, notes||'']
       );
       order = or.rows[0];
       for (const item of items) {
@@ -1729,7 +1817,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Order #</td><td style="padding:6px 0;font-weight:700;font-size:13px;">#${order.id}</td></tr>
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Placed by</td><td style="padding:6px 0;font-size:13px;">${req.user.email}</td></tr>
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Payment</td><td style="padding:6px 0;font-size:13px;">${order.payment_method === 'invoice' ? 'Invoice / Net-30' : 'Credit Card'}</td></tr>
-            <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Ship to</td><td style="padding:6px 0;font-size:13px;">${order.shipping_address}, ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}</td></tr>
+            <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Ship to</td><td style="padding:6px 0;font-size:13px;">${order.shipping_address}${order.shipping_address_line2 ? ', ' + order.shipping_address_line2 : ''}, ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}</td></tr>
           </table>
           <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
             <thead><tr style="background:#f8fafc;"><th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;">Product</th><th style="padding:8px 12px;text-align:center;font-size:12px;color:#64748b;">Qty</th><th style="padding:8px 12px;text-align:right;font-size:12px;color:#64748b;">Amount</th></tr></thead>
@@ -2318,7 +2406,7 @@ app.patch('/api/payouts/:id/reject', authenticate, authorize('admin'), async (re
 // DSD submits a store for exclusivity approval
 app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) => {
   try {
-    const { name, address, city, state, zip, phone, email, category, store_id } = req.body;
+    const { name, address, address_line2, city, state, zip, phone, email, category, store_id, tax_resale_cert, tax_exempt } = req.body;
     if (!name) return res.status(400).json({ error: 'Store name required' });
 
     // If a specific store_id was passed (selected from network search), use that record directly
@@ -2327,28 +2415,64 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
       : await one('SELECT id,exclusive_rep_id,store_approval_status FROM stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [name, city||'']);
 
     if (existing) {
-      // Store already exists in the network
-      if (existing.exclusive_rep_id && existing.exclusive_rep_id !== req.user.id) {
-        // Already claimed by SOMEONE ELSE — block direct claim, must request ownership instead
-        return res.status(409).json({
-          error: 'This store is already claimed by another rep. Submit an ownership request instead.',
-          alreadyClaimed: true,
-          storeId: existing.id
-        });
-      }
       if (existing.exclusive_rep_id === req.user.id) {
         return res.status(409).json({ error: 'You already have a pending or approved claim on this store.' });
       }
+
+      if (existing.exclusive_rep_id) {
+        // Already claimed by SOMEONE ELSE — per updated policy, auto-approve
+        // the new claim immediately rather than blocking it, but flag it so
+        // admin can see the conflict and both DSDs can be put in touch.
+        // The previous claimant isn't removed from history — previous_rep_id
+        // preserves who to reach out to.
+        await q(
+          `UPDATE stores SET
+             exclusive_rep_id=$1, previous_rep_id=$2, store_approval_status='approved',
+             claim_flagged=true, claimed_at=NOW(),
+             address_line2=COALESCE($3, address_line2),
+             tax_resale_cert=COALESCE($4, tax_resale_cert),
+             tax_exempt=COALESCE($5, tax_exempt)
+           WHERE id=$6`,
+          [req.user.id, existing.exclusive_rep_id, address_line2, tax_resale_cert, tax_exempt === undefined ? null : !!tax_exempt, existing.id]
+        );
+        await logActivity('claimed_store_flagged', `${name} by rep #${req.user.id} (previously claimed by rep #${existing.exclusive_rep_id})`, req.user.email);
+        await sendNotification(
+          `🚩 Flagged store claim — ${name}`,
+          `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
+            <h2 style="color:#b45309;">Store claim conflict</h2>
+            <p><strong>${name}</strong> was already claimed by a different DSD, and has now been re-claimed and auto-approved for a new DSD.</p>
+            <p>Both DSDs may need to be contacted to sort out who's actually working this store. See the flagged claims list in your admin dashboard.</p>
+          </div>`
+        );
+        return res.json({
+          success: true,
+          id: existing.id,
+          flagged: true,
+          message: "This store was already claimed by another rep. Your claim has been approved for now, but it's been flagged for admin review — please contact admin@addydsds.com to sort out the conflict."
+        });
+      }
+
       // Store exists but unclaimed — claim it directly (no duplicate row created)
-      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='pending' WHERE id=$2", [req.user.id, existing.id]);
+      await q(
+        `UPDATE stores SET
+           exclusive_rep_id=$1, store_approval_status='pending', claimed_at=NOW(),
+           address_line2=COALESCE($2, address_line2),
+           tax_resale_cert=COALESCE($3, tax_resale_cert),
+           tax_exempt=COALESCE($4, tax_exempt)
+         WHERE id=$5`,
+        [req.user.id, address_line2, tax_resale_cert, tax_exempt === undefined ? null : !!tax_exempt, existing.id]
+      );
       await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
       return res.json({ success: true, id: existing.id, message: 'Store submitted for approval' });
     }
 
     // Brand new store — create it
     const store = await one(
-      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,store_approval_status,exclusive_rep_id,monthly_revenue,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,0,'active') RETURNING id",
-      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', req.user.id]
+      `INSERT INTO stores (name,owner_name,address,address_line2,city,state,zip,phone,email,store_number,category,
+                            store_approval_status,exclusive_rep_id,monthly_revenue,status,claimed_at,tax_resale_cert,tax_exempt)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,0,'active',NOW(),$13,$14) RETURNING id`,
+      [name, req.body.owner_name||'N/A', address||'', address_line2||'', city||'', state||'', zip||'N/A', phone||'', email||'',
+       req.body.store_number||'', category||'General', req.user.id, tax_resale_cert||'', !!tax_exempt]
     );
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
     res.json({ success: true, id: store.id, message: 'Store submitted for approval' });
@@ -2379,6 +2503,40 @@ app.post('/api/stores/:id/request-ownership', authenticate, authorize('dsd'), as
 });
 
 // ── Admin: list pending ownership requests ────────────────────────────────────
+// ── Notification diagnostics (admin) ──────────────────────────────────────────
+// Sends a real test email and returns the ACTUAL error if it fails, instead
+// of the normal silent-fail-and-console.error-only pattern used everywhere
+// else. Use this to find out exactly why notifications aren't arriving —
+// domain not verified in Resend, bad API key, etc — without digging through
+// Railway logs.
+app.post('/api/admin/test-email', authenticate, authorize('admin'), async (req, res) => {
+  if (!resend) {
+    return res.status(400).json({
+      error: 'RESEND_API_KEY is not set (or not reaching this process). Check your Railway environment variables and redeploy — Railway sometimes needs a manual redeploy after an env var change to pick it up.'
+    });
+  }
+  const to = req.body?.to || req.user.email;
+  const fromAddress = (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim();
+  try {
+    const result = await resend.emails.send({
+      from: fromAddress,
+      to: [to],
+      subject: 'ADDY test email — if you got this, it works ✓',
+      html: `<div style="font-family:sans-serif;padding:24px;"><p>This is a test email sent from your admin dashboard.</p><p>Sent from: ${fromAddress}</p><p>Sent at: ${new Date().toISOString()}</p></div>`
+    });
+    res.json({ success: true, message: `Test email sent to ${to}. Check your inbox (and spam folder).`, resendId: result?.data?.id || result?.id || null });
+  } catch(e) {
+    // This is the actual Resend API error — the thing that's been getting
+    // silently swallowed everywhere else in this file.
+    res.status(500).json({
+      error: `Resend API rejected the send: ${e.message}`,
+      hint: e.message?.toLowerCase().includes('domain') || e.message?.toLowerCase().includes('verif')
+        ? 'This looks like a domain verification issue. Check that the domain in your "from" address is verified under Domains in your Resend dashboard.'
+        : 'Check your RESEND_API_KEY is valid and the "from" address domain is verified in Resend.'
+    });
+  }
+});
+
 app.get('/api/ownership-requests', authenticate, authorize('admin'), async (req, res) => {
   try {
     const requests = await all(`
@@ -2413,6 +2571,50 @@ app.patch('/api/ownership-requests/:id', authenticate, authorize('admin'), async
     await logActivity(approved ? 'approved_ownership_transfer' : 'rejected_ownership_transfer', `request #${req.params.id}`, req.user.email);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Store photo upload (storefront + display, mandatory within 30 days) ─────
+app.post('/api/stores/:id/photos', authenticate, authorize('dsd'), photoUpload.fields([
+  { name: 'storefront_photo', maxCount: 1 },
+  { name: 'display_photo', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    if (!cloudinaryConfigured) {
+      return res.status(503).json({ error: 'Photo uploads are not configured yet — contact admin' });
+    }
+    const store = await one('SELECT id, exclusive_rep_id FROM stores WHERE id=$1', [req.params.id]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (store.exclusive_rep_id !== req.user.id) {
+      return res.status(403).json({ error: 'You can only upload photos for stores you have claimed' });
+    }
+
+    const updates = {};
+    if (req.files?.storefront_photo?.[0]) {
+      const result = await uploadToCloudinary(req.files.storefront_photo[0].buffer, 'addy/storefront');
+      updates.storefront_photo_url = result.secure_url;
+    }
+    if (req.files?.display_photo?.[0]) {
+      const result = await uploadToCloudinary(req.files.display_photo[0].buffer, 'addy/display');
+      updates.display_photo_url = result.secure_url;
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No photo files were provided' });
+    }
+
+    await q(
+      `UPDATE stores SET
+         storefront_photo_url = COALESCE($1, storefront_photo_url),
+         display_photo_url = COALESCE($2, display_photo_url),
+         photos_uploaded_at = NOW()
+       WHERE id=$3`,
+      [updates.storefront_photo_url || null, updates.display_photo_url || null, req.params.id]
+    );
+    await logActivity('uploaded_store_photos', `store #${req.params.id}`, req.user.email);
+    res.json({ success: true, ...updates });
+  } catch(e) {
+    console.error('Photo upload failed:', e.message);
+    res.status(500).json({ error: e.message.includes('Only image files') ? e.message : 'Photo upload failed. Please try again.' });
+  }
 });
 
 // DSD gets their claimed stores
