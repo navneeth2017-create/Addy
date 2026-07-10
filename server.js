@@ -65,39 +65,6 @@ const stripe = process.env.STRIPE_SECRET_KEY ? Stripe(process.env.STRIPE_SECRET_
 if (stripe) console.log('💳 Stripe payment processing enabled');
 else console.log('📄 Invoice-only mode (add STRIPE_SECRET_KEY to enable card payments)');
 
-// ── CLOUDINARY (store photo uploads — storefront + display photo) ───────────
-const cloudinary = require('cloudinary').v2;
-const multer = require('multer');
-const cloudinaryConfigured = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
-if (cloudinaryConfigured) {
-  cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-  });
-  console.log('📷 Cloudinary photo uploads enabled');
-} else {
-  console.log('⚠️  Cloudinary not configured — store photo uploads disabled until CLOUDINARY_* env vars are set');
-}
-// Memory storage — files are streamed straight to Cloudinary, never touch
-// Railway's disk (which is ephemeral and would lose files on every deploy).
-const photoUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB per photo
-  fileFilter: (req, file, cb) => {
-    if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed'));
-    cb(null, true);
-  },
-});
-function uploadToCloudinary(buffer, folder) {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'image' }, (err, result) => {
-      if (err) reject(err); else resolve(result);
-    });
-    stream.end(buffer);
-  });
-}
-
 // ── WEB PUSH NOTIFICATIONS ────────────────────────────────────────────────────
 const webpush = require('web-push');
 const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BDgZsDCilhapnLmxI8TIFc5KiZLPmdnLwaW7kluTozXvDqo237jLLiKaWac86rtM0ZDymkCr-KpatLntmYvXM5c';
@@ -237,6 +204,13 @@ async function migrate() {
   // ── Per-user invoice payment permission ──────────────────────────────────────
   await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS can_pay_invoice BOOLEAN NOT NULL DEFAULT false');
 
+  // ── Child/member accounts: parent_id links a member to their parent DSD ─────
+  await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  try {
+    await q("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check");
+    await q("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('admin','dsd','member'))");
+  } catch(e) { console.log('Role constraint:', e.message); }
+
   // ── pricing_tier on users (stores the tier label e.g. 'tier_1', 'custom_15pct') ──
   await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS pricing_tier TEXT DEFAULT NULL');
 
@@ -251,34 +225,24 @@ async function migrate() {
   try { await q('ALTER TABLE stores ALTER COLUMN state DROP NOT NULL'); } catch(e) {}
   try { await q('ALTER TABLE stores ALTER COLUMN zip DROP NOT NULL'); } catch(e) {}
 
+  // ── Store photo requirements ─────────────────────────────────────────────────
+  await q(`
+    CREATE TABLE IF NOT EXISTS store_photos (
+      id          SERIAL PRIMARY KEY,
+      store_id    INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      rep_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      photo_type  TEXT NOT NULL CHECK(photo_type IN ('front','display')),
+      photo_data  TEXT NOT NULL,
+      uploaded_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(store_id, photo_type)
+    )
+  `);
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_due_at TIMESTAMPTZ");
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_complete BOOLEAN NOT NULL DEFAULT false");
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS claimed_via TEXT DEFAULT 'manual'");
+
   // ── Free shipping flag on products ──────────────────────────────────────────
   await q(`ALTER TABLE products ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN NOT NULL DEFAULT false`);
-
-  // ── Store claim detail: address unit/plaza#, tax reseller info ──────────────
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS address_line2 TEXT DEFAULT ''`);
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS tax_resale_cert TEXT DEFAULT ''`);
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS tax_exempt BOOLEAN NOT NULL DEFAULT false`);
-
-  // ── Store claim conflict flagging (auto-approve re-claims, flag for admin) ──
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`);
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS claim_flagged BOOLEAN NOT NULL DEFAULT false`);
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS previous_rep_id INTEGER REFERENCES users(id)`);
-  // Backfill claimed_at for existing claims so they don't all appear to have
-  // been claimed "just now" — without this, every already-claimed store
-  // would suddenly show as having 30 days from today, or worse, if we
-  // defaulted to something in the past, would show as instantly overdue.
-  // Using each store's own creation isn't available (no created_at on
-  // stores), so we backfill to NOW() once, which is the fairest starting
-  // point for a rule that didn't exist before today.
-  await q(`UPDATE stores SET claimed_at = NOW() WHERE exclusive_rep_id IS NOT NULL AND claimed_at IS NULL`);
-
-  // ── Mandatory storefront/display photos (required within 30 days of claim) ──
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS storefront_photo_url TEXT`);
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS display_photo_url TEXT`);
-  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_uploaded_at TIMESTAMPTZ`);
-
-  // ── Order shipping address unit/plaza# (separate from stores — orders keep their own address snapshot at checkout time) ──
-  await q(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_address_line2 TEXT DEFAULT ''`);
 
   // ── Demo product (10 cents, no shipping) — admin deactivates when not needed ──
   await q(`INSERT INTO products (name, description, sku, stock, active, free_shipping)
@@ -349,8 +313,12 @@ async function getPriceForUser(productId, userId, role) {
   const userPrice = await one('SELECT price FROM product_prices WHERE product_id=$1 AND user_id=$2', [productId, userId]);
   if (userPrice) return parseFloat(userPrice.price);
   // 2. Calculate tier-based price from retail_price
-  // DSD pays retail × (1 - margin%) so they keep their margin % when selling at retail
-  const user = await one('SELECT tier FROM users WHERE id=$1', [userId]);
+  // Members use their parent DSD's tier instead of their own
+  let user = await one('SELECT tier,role,parent_id FROM users WHERE id=$1', [userId]);
+  if (user?.role === 'member' && user?.parent_id) {
+    const parent = await one('SELECT tier FROM users WHERE id=$1', [user.parent_id]);
+    if (parent) user = { ...user, tier: parent.tier };
+  }
   const product = await one('SELECT retail_price, cost_price FROM products WHERE id=$1', [productId]);
   const tier = user?.tier || 1;
   const retail = parseFloat(product?.retail_price || 0);
@@ -428,7 +396,7 @@ function serveDashboard(allowedRoles) {
   };
 }
 app.get('/dashboard-admin.html', serveDashboard(['admin']));
-app.get('/dashboard-dsd.html', serveDashboard(['dsd', 'investor', 'rep']));
+app.get('/dashboard-dsd.html', serveDashboard(['dsd', 'investor', 'rep', 'member']));
 
 app.use(express.static(path.join(__dirname, 'public'), {
   index: 'index.html',
@@ -544,7 +512,7 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
 
 app.get('/api/me', authenticate, async (req, res) => {
   try {
-    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier FROM users WHERE id=$1', [req.user.id]);
+    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier,parent_id FROM users WHERE id=$1', [req.user.id]);
     res.json(user || req.user);
   } catch(e) { res.json(req.user); }
 });
@@ -764,35 +732,6 @@ app.get('/api/stores/pending-claims', authenticate, authorize('admin'), async (r
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Flagged claims: auto-approved because the store was already claimed by
-// someone else when re-claimed. These bypass the pending queue entirely
-// (they're already store_approval_status='approved'), so they need their
-// own view — otherwise a flagged conflict is invisible to admin.
-app.get('/api/stores/flagged-claims', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const stores = await all(
-      `SELECT s.*, u.name as rep_name, u.email as rep_email, u.phone as rep_phone,
-              pu.name as previous_rep_name, pu.email as previous_rep_email, pu.phone as previous_rep_phone
-       FROM stores s
-       JOIN users u ON u.id = s.exclusive_rep_id
-       LEFT JOIN users pu ON pu.id = s.previous_rep_id
-       WHERE s.claim_flagged = true
-       ORDER BY s.id DESC`
-    );
-    res.json(stores);
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// Admin resolves a flagged claim (contacted both reps, sorted it out) —
-// clears the flag without changing ownership.
-app.patch('/api/stores/:id/resolve-flag', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    await q('UPDATE stores SET claim_flagged=false WHERE id=$1', [req.params.id]);
-    await logActivity('resolved_claim_flag', `store #${req.params.id}`, req.user.email);
-    res.json({ success: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
 app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, res) => {
   try {
     const stores = await all(
@@ -812,14 +751,14 @@ app.get('/api/stores/:id', authenticate, authorize('admin'), async (req, res) =>
 
 app.post('/api/stores', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { name, owner_name, email, address, address_line2, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number, tax_resale_cert, tax_exempt } = req.body;
+    const { name, owner_name, email, address, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number } = req.body;
     if (!name) return res.status(400).json({ error: 'Store name is required' });
     const result = await one(
-      `INSERT INTO stores (name,owner_name,email,address,address_line2,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number,tax_resale_cert,tax_exempt)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
-      [name, owner_name||'', email||'', address||'', address_line2||'', city||'', state||'', zip||'',
+      `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [name, owner_name||'', email||'', address||'', city||'', state||'', zip||'',
        category||'General', monthly_revenue||0, wholesale_price||0, retail_price||0,
-       distribution_cost||0, status||'active', phone||'', store_number||'', tax_resale_cert||'', !!tax_exempt]
+       distribution_cost||0, status||'active', phone||'', store_number||'']
     );
     await logActivity('created', name, req.user.email);
     res.status(201).json(result);
@@ -834,7 +773,7 @@ app.patch('/api/stores/:id', authenticate, async (req, res) => {
     if (role === 'investor') return res.status(403).json({ error: 'Access denied' });
     const store = await one('SELECT * FROM stores WHERE id=$1', [id]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
-    const allowed = ['name','owner_name','email','address','address_line2','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status','tax_resale_cert','tax_exempt'];
+    const allowed = ['name','owner_name','email','address','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status'];
     const updates = [], params = [];
     let pi = 1;
     for (const field of allowed) {
@@ -954,8 +893,8 @@ app.get('/api/export/csv', authenticate, authorize('admin'), async (req, res) =>
     if (state) { conditions.push(`state=$${pi}`); params.push(state); pi++; }
     if (status) { conditions.push(`status=$${pi}`); params.push(status); pi++; }
     const stores = await all(`SELECT * FROM stores${conditions.length?' WHERE '+conditions.join(' AND '):''} ORDER BY name`, params);
-    const headers = ['Name','Owner','Email','Address','Unit/Suite','City','State','Zip','Category','Monthly Revenue','Wholesale Price','Retail Price','Distribution Cost','Status','Tax Resale Cert','Tax Exempt'];
-    const rows = stores.map(s => [s.name,s.owner_name,s.email,s.address,s.address_line2,s.city,s.state,s.zip,s.category,s.monthly_revenue,s.wholesale_price,s.retail_price,s.distribution_cost,s.status,s.tax_resale_cert,s.tax_exempt?'Yes':'No'].map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(','));
+    const headers = ['Name','Owner','Email','Address','City','State','Zip','Category','Monthly Revenue','Wholesale Price','Retail Price','Distribution Cost','Status'];
+    const rows = stores.map(s => [s.name,s.owner_name,s.email,s.address,s.city,s.state,s.zip,s.category,s.monthly_revenue,s.wholesale_price,s.retail_price,s.distribution_cost,s.status].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
     res.setHeader('Content-Type','text/csv');
     res.setHeader('Content-Disposition','attachment; filename=addy-stores.csv');
     res.send([headers.join(','),...rows].join('\n'));
@@ -1136,6 +1075,10 @@ app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req
     const user = await one('SELECT * FROM users WHERE id=$1', [req.params.id]);
     if (!user) return res.status(404).json({ error: 'User not found' });
     await q("UPDATE users SET status='active' WHERE id=$1", [req.params.id]);
+    // If member, link to parent DSD from request body
+    if (req.body?.parent_id) {
+      await q('UPDATE users SET parent_id=$1 WHERE id=$2', [req.body.parent_id, req.params.id]);
+    }
     if (user.store_id) await q("UPDATE stores SET status='active' WHERE id=$1", [user.store_id]);
     const { tier, custom_prices, custom_margin_pct, can_pay_invoice } = req.body || {};
     if (tier) await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
@@ -1578,7 +1521,7 @@ app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
               <div class="party-detail">
                 ${order.user_email}<br>
                 ${order.user_phone ? order.user_phone + '<br>' : ''}
-                ${order.shipping_address}${order.shipping_address_line2 ? ', ' + order.shipping_address_line2 : ''}<br>
+                ${order.shipping_address}<br>
                 ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}
               </div>
             </div>
@@ -1733,7 +1676,7 @@ app.delete('/api/cart', authenticate, async (req, res) => {
 app.post('/api/orders', authenticate, async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const { store_id, payment_method, shipping_name, shipping_address, shipping_address_line2, shipping_city, shipping_state, shipping_zip, notes } = req.body;
+    const { store_id, payment_method, shipping_name, shipping_address, shipping_city, shipping_state, shipping_zip, notes } = req.body;
     if (!payment_method) return res.status(400).json({ error: 'Payment method required' });
     if (!shipping_address || !shipping_city || !shipping_state || !shipping_zip) return res.status(400).json({ error: 'Complete shipping address required' });
 
@@ -1772,10 +1715,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
     try {
       await client.query('BEGIN');
       const or = await client.query(
-        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_address_line2,shipping_city,shipping_state,shipping_zip,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
         [userId, store_id||null, payment_method, payment_status, subtotal, shipping_cost, processing_fee, total,
-         shipping_name||'', shipping_address, shipping_address_line2||'', shipping_city, shipping_state, shipping_zip, notes||'']
+         shipping_name||'', shipping_address, shipping_city, shipping_state, shipping_zip, notes||'']
       );
       order = or.rows[0];
       for (const item of items) {
@@ -1791,7 +1734,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
     await logActivity('placed_order', `Order #${order.id}`, req.user.email);
 
     // Calculate and save commissions for upline reps
-    await calculateAndSaveCommissions(order.id, req.user.id, parseFloat(order.total));
+    // Members don't earn or trigger commissions
+    if (req.user.role !== 'member') {
+      await calculateAndSaveCommissions(order.id, req.user.id, parseFloat(order.total));
+    }
 
     // Auto-generate invoice
     const invoice = await createInvoiceForOrder(order.id);
@@ -1817,7 +1763,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Order #</td><td style="padding:6px 0;font-weight:700;font-size:13px;">#${order.id}</td></tr>
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Placed by</td><td style="padding:6px 0;font-size:13px;">${req.user.email}</td></tr>
             <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Payment</td><td style="padding:6px 0;font-size:13px;">${order.payment_method === 'invoice' ? 'Invoice / Net-30' : 'Credit Card'}</td></tr>
-            <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Ship to</td><td style="padding:6px 0;font-size:13px;">${order.shipping_address}${order.shipping_address_line2 ? ', ' + order.shipping_address_line2 : ''}, ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}</td></tr>
+            <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Ship to</td><td style="padding:6px 0;font-size:13px;">${order.shipping_address}, ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}</td></tr>
           </table>
           <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
             <thead><tr style="background:#f8fafc;"><th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;">Product</th><th style="padding:8px 12px;text-align:center;font-size:12px;color:#64748b;">Qty</th><th style="padding:8px 12px;text-align:right;font-size:12px;color:#64748b;">Amount</th></tr></thead>
@@ -2087,6 +2033,222 @@ app.post('/api/admin/impersonate/:userId', authenticate, authorize('admin'), asy
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── STORE PHOTO UPLOAD ────────────────────────────────────────────────────────
+// Upload a store photo (front or display) — base64 compressed image from browser
+app.post('/api/stores/:id/photos', authenticate, async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.id);
+    const { photo_type, photo_data } = req.body;
+
+    if (!['front', 'display'].includes(photo_type)) {
+      return res.status(400).json({ error: 'photo_type must be "front" or "display"' });
+    }
+    if (!photo_data || !photo_data.startsWith('data:image/')) {
+      return res.status(400).json({ error: 'photo_data must be a valid base64 image' });
+    }
+    // Size guard: ~2MB base64 limit per photo
+    if (photo_data.length > 2_800_000) {
+      return res.status(400).json({ error: 'Photo too large. Please use a smaller image.' });
+    }
+
+    // Verify this DSD owns the store (or admin)
+    const store = await one('SELECT id, exclusive_rep_id, photos_complete FROM stores WHERE id=$1', [storeId]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.user.role !== 'admin' && store.exclusive_rep_id !== req.user.id) {
+      return res.status(403).json({ error: 'You do not own this store' });
+    }
+
+    // Upsert photo (replace if already uploaded)
+    await q(
+      `INSERT INTO store_photos (store_id, rep_id, photo_type, photo_data, uploaded_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (store_id, photo_type) DO UPDATE SET photo_data=EXCLUDED.photo_data, uploaded_at=NOW(), rep_id=EXCLUDED.rep_id`,
+      [storeId, req.user.id, photo_type, photo_data]
+    );
+
+    // Check if both photos are now uploaded — if so, mark photos_complete
+    const uploadedCount = await one(
+      'SELECT COUNT(*) as cnt FROM store_photos WHERE store_id=$1', [storeId]
+    );
+    const bothDone = parseInt(uploadedCount.cnt) >= 2;
+    if (bothDone) {
+      await q('UPDATE stores SET photos_complete=true WHERE id=$1', [storeId]);
+    }
+
+    await logActivity('uploaded_store_photo', `${photo_type} photo for store #${storeId}`, req.user.email);
+    res.json({ success: true, photo_type, bothComplete: bothDone });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong uploading photo' }); }
+});
+
+// Get photo status + actual photos for a store
+app.get('/api/stores/:id/photos', authenticate, async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.id);
+    const store = await one('SELECT id, exclusive_rep_id, photos_due_at, photos_complete, claimed_via FROM stores WHERE id=$1', [storeId]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.user.role !== 'admin' && store.exclusive_rep_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const photos = await all('SELECT photo_type, uploaded_at FROM store_photos WHERE store_id=$1', [storeId]);
+    res.json({
+      photos_complete: store.photos_complete,
+      photos_due_at: store.photos_due_at,
+      claimed_via: store.claimed_via,
+      overdue: store.photos_due_at && !store.photos_complete && new Date() > new Date(store.photos_due_at),
+      uploaded: photos.map(p => p.photo_type),
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// DSD: get all stores with pending/overdue photos (for reminder banner)
+app.get('/api/my-stores/photos-pending', authenticate, async (req, res) => {
+  try {
+    const stores = await all(
+      `SELECT id, name, photos_due_at, photos_complete, claimed_via,
+              (photos_due_at IS NOT NULL AND NOT photos_complete AND photos_due_at < NOW()) as overdue,
+              (SELECT array_agg(photo_type) FROM store_photos sp WHERE sp.store_id=stores.id) as uploaded_types
+       FROM stores
+       WHERE exclusive_rep_id=$1 AND NOT photos_complete AND photos_due_at IS NOT NULL
+       ORDER BY photos_due_at ASC`,
+      [req.user.id]
+    );
+    res.json(stores);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin: view all stores with missing/overdue photos
+app.get('/api/admin/stores-photos-status', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const stores = await all(`
+      SELECT s.id, s.name, s.city, s.state, s.photos_due_at, s.photos_complete, s.claimed_via,
+             u.name as rep_name, u.email as rep_email,
+             (s.photos_due_at IS NOT NULL AND NOT s.photos_complete AND s.photos_due_at < NOW()) as overdue,
+             (SELECT array_agg(sp.photo_type) FROM store_photos sp WHERE sp.store_id=s.id) as uploaded_types
+      FROM stores s
+      LEFT JOIN users u ON u.id=s.exclusive_rep_id
+      WHERE s.photos_due_at IS NOT NULL AND NOT s.photos_complete
+      ORDER BY s.photos_due_at ASC
+    `);
+    res.json(stores);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── MEMBER (CHILD) ACCOUNT MANAGEMENT ────────────────────────────────────────
+// Admin adds a member under a specific DSD parent
+app.post('/api/members', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { name, email, password, phone, parent_id } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (!parent_id) return res.status(400).json({ error: 'Parent DSD is required' });
+
+    const parent = await one("SELECT id,name FROM users WHERE id=$1 AND role='dsd'", [parent_id]);
+    if (!parent) return res.status(400).json({ error: 'Parent DSD not found' });
+
+    const existing = await one('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
+    if (existing) return res.status(409).json({ error: 'Email already in use' });
+
+    const hash = require('bcryptjs').hashSync(password, 10);
+    const ur = await one(
+      "INSERT INTO users (email,password_hash,role,name,phone,status,parent_id) VALUES ($1,$2,'member',$3,$4,'active',$5) RETURNING id",
+      [email.toLowerCase(), hash, name, phone||'', parent_id]
+    );
+    await logActivity('created_member', `${name} under ${parent.name}`, req.user.email);
+    res.status(201).json({ success: true, userId: ur.id });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+// List members under a specific DSD parent
+app.get('/api/members', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { parent_id } = req.query;
+    const where = parent_id ? 'WHERE u.parent_id=$1' : "WHERE u.role='member'";
+    const params = parent_id ? [parent_id] : [];
+    const members = await all(
+      `SELECT u.id,u.name,u.email,u.phone,u.status,u.parent_id,
+              p.name as parent_name, p.email as parent_email
+       FROM users u LEFT JOIN users p ON p.id=u.parent_id
+       ${where} ORDER BY p.name,u.name`,
+      params
+    );
+    res.json(members);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── BULK CSV STORE IMPORT ─────────────────────────────────────────────────────
+app.post('/api/stores/bulk-import', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { rows } = req.body;
+    if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows must be an array' });
+    if (rows.length > 500) return res.status(400).json({ error: 'Maximum 500 rows per import. Please split your file.' });
+
+    // Photo deadline: >25 stores in one batch gets 60 days, otherwise 24 hours
+    const isBulkBatch = rows.length > 25;
+    const photoDeadline = isBulkBatch
+      ? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000)   // 60 days
+      : new Date(Date.now() + 24 * 60 * 60 * 1000);         // 24 hours
+    const claimedVia = isBulkBatch ? 'csv_bulk' : 'csv_small';
+
+    let created = 0, skipped = 0, errors = 0;
+    const results = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+
+      const name = (row.name || '').trim();
+      if (!name) {
+        errors++;
+        results.push({ row: rowNum, status: 'error', reason: 'Store name is required' });
+        continue;
+      }
+
+      // Warn about missing address fields (flagged, not hard-blocked)
+      const missingFields = ['address','city','state','zip'].filter(f => !(row[f]||'').trim());
+      const warning = missingFields.length > 0 ? ` (missing: ${missingFields.join(', ')})` : '';
+
+      try {
+        const exists = await one('SELECT id FROM stores WHERE LOWER(name)=LOWER($1)', [name]);
+        if (exists) {
+          skipped++;
+          results.push({ row: rowNum, status: 'skipped', reason: `"${name}" already exists` });
+          continue;
+        }
+
+        await q(
+          `INSERT INTO stores (name,owner_name,email,address,city,state,zip,phone,store_number,category,status,monthly_revenue,wholesale_price,retail_price,distribution_cost,photos_due_at,photos_complete,claimed_via)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,0,0,0,$12,false,$13)`,
+          [name, (row.owner_name||'').trim(), (row.email||'').trim(),
+           (row.address||'').trim(), (row.city||'').trim(), (row.state||'').trim(),
+           (row.zip||'').trim(), (row.phone||'').trim(), (row.store_number||'').trim(),
+           (row.category||'General').trim(), (row.status||'active').trim(),
+           photoDeadline, claimedVia]
+        );
+        created++;
+        results.push({ row: rowNum, status: 'created', note: warning || undefined });
+      } catch(rowErr) {
+        errors++;
+        results.push({ row: rowNum, status: 'error', reason: rowErr.message });
+      }
+    }
+
+    await logActivity('bulk_imported_stores', `${created} created, ${skipped} skipped, ${errors} errors (${claimedVia})`, req.user.email);
+    res.json({ created, skipped, errors, results, isBulkBatch, photoDeadlineDays: isBulkBatch ? 60 : 1 });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── EXAMPLE CSV DOWNLOAD ───────────────────────────────────────────────────────
+app.get('/api/stores/example-csv', authenticate, authorize('admin'), (req, res) => {
+  const csv = [
+    'name,owner_name,email,address,city,state,zip,phone,store_number,category',
+    '"Corner Market",John Smith,john@example.com,"123 Main St",Miami,FL,33101,(305) 555-0100,ST-001,Convenience',
+    '"Green Leaf Deli",Jane Doe,jane@example.com,"456 Oak Ave",Dallas,TX,75001,214.555.0200,,Grocery',
+  ].join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename=stores-import-example.csv');
+  res.send(csv);
+});
+
 // ── DATABASE SIZE ─────────────────────────────────────────────────────────────
 app.get('/api/admin/db-size', authenticate, authorize('admin'), async (req, res) => {
   try {
@@ -2282,7 +2444,10 @@ app.post('/api/commissions/recalculate/:orderId', authenticate, authorize('admin
     await q('DELETE FROM commissions WHERE order_id=$1', [order.id]);
 
     // Recalculate fresh
-    await calculateAndSaveCommissions(order.id, order.user_id, parseFloat(order.total));
+    const orderBuyer = await one('SELECT role FROM users WHERE id=$1', [order.user_id]);
+    if (orderBuyer?.role !== 'member') {
+      await calculateAndSaveCommissions(order.id, order.user_id, parseFloat(order.total));
+    }
 
     const newCommissions = await all('SELECT * FROM commissions WHERE order_id=$1', [order.id]);
     res.json({ success: true, commissions: newCommissions, message: `Recalculated ${newCommissions.length} commission(s)` });
@@ -2406,7 +2571,7 @@ app.patch('/api/payouts/:id/reject', authenticate, authorize('admin'), async (re
 // DSD submits a store for exclusivity approval
 app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) => {
   try {
-    const { name, address, address_line2, city, state, zip, phone, email, category, store_id, tax_resale_cert, tax_exempt } = req.body;
+    const { name, address, city, state, zip, phone, email, category, store_id } = req.body;
     if (!name) return res.status(400).json({ error: 'Store name required' });
 
     // If a specific store_id was passed (selected from network search), use that record directly
@@ -2415,67 +2580,34 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
       : await one('SELECT id,exclusive_rep_id,store_approval_status FROM stores WHERE LOWER(name)=LOWER($1) AND LOWER(city)=LOWER($2)', [name, city||'']);
 
     if (existing) {
+      // Store already exists in the network
+      if (existing.exclusive_rep_id && existing.exclusive_rep_id !== req.user.id) {
+        // Already claimed by SOMEONE ELSE — block direct claim, must request ownership instead
+        return res.status(409).json({
+          error: 'This store is already claimed by another rep. Submit an ownership request instead.',
+          alreadyClaimed: true,
+          storeId: existing.id
+        });
+      }
       if (existing.exclusive_rep_id === req.user.id) {
         return res.status(409).json({ error: 'You already have a pending or approved claim on this store.' });
       }
-
-      if (existing.exclusive_rep_id) {
-        // Already claimed by SOMEONE ELSE — per updated policy, auto-approve
-        // the new claim immediately rather than blocking it, but flag it so
-        // admin can see the conflict and both DSDs can be put in touch.
-        // The previous claimant isn't removed from history — previous_rep_id
-        // preserves who to reach out to.
-        await q(
-          `UPDATE stores SET
-             exclusive_rep_id=$1, previous_rep_id=$2, store_approval_status='approved',
-             claim_flagged=true, claimed_at=NOW(),
-             address_line2=COALESCE($3, address_line2),
-             tax_resale_cert=COALESCE($4, tax_resale_cert),
-             tax_exempt=COALESCE($5, tax_exempt)
-           WHERE id=$6`,
-          [req.user.id, existing.exclusive_rep_id, address_line2, tax_resale_cert, tax_exempt === undefined ? null : !!tax_exempt, existing.id]
-        );
-        await logActivity('claimed_store_flagged', `${name} by rep #${req.user.id} (previously claimed by rep #${existing.exclusive_rep_id})`, req.user.email);
-        await sendNotification(
-          `🚩 Flagged store claim — ${name}`,
-          `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
-            <h2 style="color:#b45309;">Store claim conflict</h2>
-            <p><strong>${name}</strong> was already claimed by a different DSD, and has now been re-claimed and auto-approved for a new DSD.</p>
-            <p>Both DSDs may need to be contacted to sort out who's actually working this store. See the flagged claims list in your admin dashboard.</p>
-          </div>`
-        );
-        return res.json({
-          success: true,
-          id: existing.id,
-          flagged: true,
-          message: "This store was already claimed by another rep. Your claim has been approved for now, but it's been flagged for admin review — please contact admin@addydsds.com to sort out the conflict."
-        });
-      }
-
-      // Store exists but unclaimed — claim it directly (no duplicate row created)
-      await q(
-        `UPDATE stores SET
-           exclusive_rep_id=$1, store_approval_status='pending', claimed_at=NOW(),
-           address_line2=COALESCE($2, address_line2),
-           tax_resale_cert=COALESCE($3, tax_resale_cert),
-           tax_exempt=COALESCE($4, tax_exempt)
-         WHERE id=$5`,
-        [req.user.id, address_line2, tax_resale_cert, tax_exempt === undefined ? null : !!tax_exempt, existing.id]
-      );
+      // Store exists but unclaimed — claim it, set 24h photo deadline
+      const photoDue = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='pending', photos_due_at=$2, photos_complete=false, claimed_via='manual' WHERE id=$3",
+        [req.user.id, photoDue, existing.id]);
       await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
-      return res.json({ success: true, id: existing.id, message: 'Store submitted for approval' });
+      return res.json({ success: true, id: existing.id, needsPhotos: true, message: 'Store submitted for approval' });
     }
 
-    // Brand new store — create it
+    // Brand new store — create it, set 24h photo deadline
+    const photoDueNew = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const store = await one(
-      `INSERT INTO stores (name,owner_name,address,address_line2,city,state,zip,phone,email,store_number,category,
-                            store_approval_status,exclusive_rep_id,monthly_revenue,status,claimed_at,tax_resale_cert,tax_exempt)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,0,'active',NOW(),$13,$14) RETURNING id`,
-      [name, req.body.owner_name||'N/A', address||'', address_line2||'', city||'', state||'', zip||'N/A', phone||'', email||'',
-       req.body.store_number||'', category||'General', req.user.id, tax_resale_cert||'', !!tax_exempt]
+      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,store_approval_status,exclusive_rep_id,monthly_revenue,status,photos_due_at,photos_complete,claimed_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,0,'active',$12,false,'manual') RETURNING id",
+      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', req.user.id, photoDueNew]
     );
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
-    res.json({ success: true, id: store.id, message: 'Store submitted for approval' });
+    res.json({ success: true, id: store.id, needsPhotos: true, message: 'Store submitted for approval' });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2503,40 +2635,6 @@ app.post('/api/stores/:id/request-ownership', authenticate, authorize('dsd'), as
 });
 
 // ── Admin: list pending ownership requests ────────────────────────────────────
-// ── Notification diagnostics (admin) ──────────────────────────────────────────
-// Sends a real test email and returns the ACTUAL error if it fails, instead
-// of the normal silent-fail-and-console.error-only pattern used everywhere
-// else. Use this to find out exactly why notifications aren't arriving —
-// domain not verified in Resend, bad API key, etc — without digging through
-// Railway logs.
-app.post('/api/admin/test-email', authenticate, authorize('admin'), async (req, res) => {
-  if (!resend) {
-    return res.status(400).json({
-      error: 'RESEND_API_KEY is not set (or not reaching this process). Check your Railway environment variables and redeploy — Railway sometimes needs a manual redeploy after an env var change to pick it up.'
-    });
-  }
-  const to = req.body?.to || req.user.email;
-  const fromAddress = (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim();
-  try {
-    const result = await resend.emails.send({
-      from: fromAddress,
-      to: [to],
-      subject: 'ADDY test email — if you got this, it works ✓',
-      html: `<div style="font-family:sans-serif;padding:24px;"><p>This is a test email sent from your admin dashboard.</p><p>Sent from: ${fromAddress}</p><p>Sent at: ${new Date().toISOString()}</p></div>`
-    });
-    res.json({ success: true, message: `Test email sent to ${to}. Check your inbox (and spam folder).`, resendId: result?.data?.id || result?.id || null });
-  } catch(e) {
-    // This is the actual Resend API error — the thing that's been getting
-    // silently swallowed everywhere else in this file.
-    res.status(500).json({
-      error: `Resend API rejected the send: ${e.message}`,
-      hint: e.message?.toLowerCase().includes('domain') || e.message?.toLowerCase().includes('verif')
-        ? 'This looks like a domain verification issue. Check that the domain in your "from" address is verified under Domains in your Resend dashboard.'
-        : 'Check your RESEND_API_KEY is valid and the "from" address domain is verified in Resend.'
-    });
-  }
-});
-
 app.get('/api/ownership-requests', authenticate, authorize('admin'), async (req, res) => {
   try {
     const requests = await all(`
@@ -2571,50 +2669,6 @@ app.patch('/api/ownership-requests/:id', authenticate, authorize('admin'), async
     await logActivity(approved ? 'approved_ownership_transfer' : 'rejected_ownership_transfer', `request #${req.params.id}`, req.user.email);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// ── Store photo upload (storefront + display, mandatory within 30 days) ─────
-app.post('/api/stores/:id/photos', authenticate, authorize('dsd'), photoUpload.fields([
-  { name: 'storefront_photo', maxCount: 1 },
-  { name: 'display_photo', maxCount: 1 },
-]), async (req, res) => {
-  try {
-    if (!cloudinaryConfigured) {
-      return res.status(503).json({ error: 'Photo uploads are not configured yet — contact admin' });
-    }
-    const store = await one('SELECT id, exclusive_rep_id FROM stores WHERE id=$1', [req.params.id]);
-    if (!store) return res.status(404).json({ error: 'Store not found' });
-    if (store.exclusive_rep_id !== req.user.id) {
-      return res.status(403).json({ error: 'You can only upload photos for stores you have claimed' });
-    }
-
-    const updates = {};
-    if (req.files?.storefront_photo?.[0]) {
-      const result = await uploadToCloudinary(req.files.storefront_photo[0].buffer, 'addy/storefront');
-      updates.storefront_photo_url = result.secure_url;
-    }
-    if (req.files?.display_photo?.[0]) {
-      const result = await uploadToCloudinary(req.files.display_photo[0].buffer, 'addy/display');
-      updates.display_photo_url = result.secure_url;
-    }
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'No photo files were provided' });
-    }
-
-    await q(
-      `UPDATE stores SET
-         storefront_photo_url = COALESCE($1, storefront_photo_url),
-         display_photo_url = COALESCE($2, display_photo_url),
-         photos_uploaded_at = NOW()
-       WHERE id=$3`,
-      [updates.storefront_photo_url || null, updates.display_photo_url || null, req.params.id]
-    );
-    await logActivity('uploaded_store_photos', `store #${req.params.id}`, req.user.email);
-    res.json({ success: true, ...updates });
-  } catch(e) {
-    console.error('Photo upload failed:', e.message);
-    res.status(500).json({ error: e.message.includes('Only image files') ? e.message : 'Photo upload failed. Please try again.' });
-  }
 });
 
 // DSD gets their claimed stores

@@ -422,8 +422,8 @@ async function handleLogin(e) {
     switch (data.role) {
       case 'admin':       window.location.href = `/dashboard-admin.html?t=${t}`; break;
       case 'investor':    window.location.href = `/dashboard-dsd.html?t=${t}`; break;
-      case 'dsd': window.location.href = `/dashboard-dsd.html?t=${t}`; break;
-      case 'dsd': window.location.href = `/dashboard-dsd.html?t=${t}`; break;
+      case 'dsd':
+      case 'member': window.location.href = `/dashboard-dsd.html?t=${t}`; break;
       case 'rep':         window.location.href = `/dashboard-dsd.html?t=${t}`; break;
       default:            window.location.href = `/dashboard-admin.html?t=${t}`;
     }
@@ -518,57 +518,19 @@ async function loadStoreClaimsTab() {
   const claims = await apiFetch('/api/stores/pending-claims');
   const badge = document.getElementById('claims-badge');
   if (badge) { badge.textContent = (claims||[]).length; badge.style.display = (claims||[]).length ? 'inline' : 'none'; }
-  if (!claims || !claims.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No pending store claims</div>'; }
-  else {
-    el.innerHTML = claims.map(s => `
-      <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--bg-card);">
-        <div style="flex:1;">
-          <div style="font-weight:700;font-size:15px;color:var(--text);">${esc(s.name)}</div>
-          <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address, s.address_line2, s.city, s.state, s.zip].filter(Boolean).join(', '))}</div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Claimed by: <strong>${esc(s.rep_name||s.rep_email)}</strong></div>
-          ${s.tax_resale_cert || s.tax_exempt ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Tax: ${s.tax_exempt ? '<strong>Resale/tax-exempt</strong>' : ''}${s.tax_resale_cert ? ' · Cert# ' + esc(s.tax_resale_cert) : ''}</div>` : ''}
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button class="btn btn-sm btn-green" onclick="approveStoreClaim(${s.id})">✓ Approve</button>
-          <button class="btn btn-sm btn-danger" onclick="rejectStoreClaim(${s.id})">Reject</button>
-        </div>
-      </div>`).join('');
-  }
-  loadFlaggedClaimsTab();
-}
-
-async function loadFlaggedClaimsTab() {
-  const el = document.getElementById('flagged-claims-list');
-  if (!el) return;
-  const claims = await apiFetch('/api/stores/flagged-claims');
-  const badge = document.getElementById('flagged-badge');
-  if (badge) { badge.textContent = (claims||[]).length; badge.style.display = (claims||[]).length ? 'inline' : 'none'; }
-  if (!claims || !claims.length) { el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">No flagged claim conflicts</div>'; return; }
-  el.innerHTML = claims.map(s => {
-    const daysSinceClaimed = s.claimed_at ? Math.floor((Date.now() - new Date(s.claimed_at)) / 86400000) : null;
-    const photosMissing = !s.storefront_photo_url || !s.display_photo_url;
-    const photoOverdue = photosMissing && daysSinceClaimed !== null && daysSinceClaimed > 30;
-    return `
-    <div style="padding:16px;border:1px solid rgba(217,119,6,0.4);border-radius:12px;margin-bottom:10px;background:rgba(217,119,6,0.06);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
-        <div style="flex:1;">
-          <div style="font-weight:700;font-size:15px;color:var(--text);">🚩 ${esc(s.name)}</div>
-          <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address, s.address_line2, s.city, s.state, s.zip].filter(Boolean).join(', '))}</div>
-          <div style="font-size:12px;margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;">
-            <span style="color:var(--text-muted);">Current rep:</span><span><strong>${esc(s.rep_name||s.rep_email)}</strong> · ${esc(s.rep_email)}${s.rep_phone ? ' · ' + esc(s.rep_phone) : ''}</span>
-            <span style="color:var(--text-muted);">Previous rep:</span><span><strong>${esc(s.previous_rep_name||s.previous_rep_email||'—')}</strong>${s.previous_rep_email ? ' · ' + esc(s.previous_rep_email) : ''}${s.previous_rep_phone ? ' · ' + esc(s.previous_rep_phone) : ''}</span>
-          </div>
-          ${photosMissing ? `<div style="font-size:12px;margin-top:8px;color:${photoOverdue ? 'var(--red)' : 'var(--text-muted)'};">${photoOverdue ? '⚠️ Photos overdue' : '📷 Photos not yet uploaded'}${daysSinceClaimed !== null ? ` (claimed ${daysSinceClaimed}d ago)` : ''}</div>` : '<div style="font-size:12px;margin-top:8px;color:var(--green);">✓ Photos uploaded</div>'}
-        </div>
-        <button class="btn btn-sm btn-outline" onclick="resolveFlaggedClaim(${s.id})">Mark Resolved</button>
+  if (!claims || !claims.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No pending store claims</div>'; return; }
+  el.innerHTML = claims.map(s => `
+    <div style="display:flex;align-items:center;gap:16px;padding:16px;border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--bg-card);">
+      <div style="flex:1;">
+        <div style="font-weight:700;font-size:15px;color:var(--text);">${esc(s.name)}</div>
+        <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state,s.zip].filter(Boolean).join(', '))}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Claimed by: <strong>${esc(s.rep_name||s.rep_email)}</strong></div>
       </div>
-    </div>`;
-  }).join('');
-}
-
-async function resolveFlaggedClaim(storeId) {
-  const result = await apiFetch('/api/stores/' + storeId + '/resolve-flag', { method: 'PATCH', body: JSON.stringify({}) });
-  if (result && result.success) { showToast('Flag resolved', 'success'); loadFlaggedClaimsTab(); }
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-green" onclick="approveStoreClaim(${s.id})">✓ Approve</button>
+        <button class="btn btn-sm btn-danger" onclick="rejectStoreClaim(${s.id})">Reject</button>
+      </div>
+    </div>`).join('');
 }
 
 async function approveStoreClaim(storeId) {
@@ -692,8 +654,7 @@ async function showStoreDetail(id) {
     <div class="detail-row"><span class="detail-label">Store Name</span><span class="detail-value">${esc(store.name)}</span></div>
     <div class="detail-row"><span class="detail-label">Owner</span><span class="detail-value">${esc(store.owner_name)}</span></div>
     <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value">${esc(store.email)}</span></div>
-    <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${esc(store.address)}${store.address_line2 ? ', ' + esc(store.address_line2) : ''}, ${esc(store.city)}, ${esc(store.state)} ${esc(store.zip)}</span></div>
-    ${store.tax_resale_cert || store.tax_exempt ? `<div class="detail-row"><span class="detail-label">Tax</span><span class="detail-value">${store.tax_exempt ? 'Resale/tax-exempt' : ''}${store.tax_resale_cert ? ' · Cert# ' + esc(store.tax_resale_cert) : ''}</span></div>` : ''}
+    <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${esc(store.address)}, ${esc(store.city)}, ${esc(store.state)} ${esc(store.zip)}</span></div>
     <div class="detail-row"><span class="detail-label">Category</span><span class="detail-value">${esc(store.category)}</span></div>
     <div class="detail-row"><span class="detail-label">Revenue</span><span class="detail-value revenue">${formatCurrency(store.monthly_revenue)}/mo</span></div>
     <div class="detail-row">
@@ -845,10 +806,9 @@ async function handleAddStore(e) {
   const form = e.target;
   const body = {
     name: form.name.value, owner_name: form.owner_name.value, email: form.email.value,
-    address: form.address.value, address_line2: form.address_line2.value, city: form.city.value, state: form.state.value,
+    address: form.address.value, city: form.city.value, state: form.state.value,
     zip: form.zip.value, category: form.category.value,
-    monthly_revenue: parseFloat(form.monthly_revenue.value) || 0, status: form.status.value || 'active',
-    tax_resale_cert: form.tax_resale_cert.value, tax_exempt: form.tax_exempt.checked
+    monthly_revenue: parseFloat(form.monthly_revenue.value) || 0, status: form.status.value || 'active'
   };
   const result = await apiFetch('/api/stores', { method: 'POST', body: JSON.stringify(body) });
   if (result && result.id) {
@@ -1002,63 +962,13 @@ async function loadMyStores() {
   if (!el) return;
   const stores = await apiFetch('/api/my-stores');
   if (!stores || !stores.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">🏪</div><div>No stores claimed yet.</div><div style="margin-top:8px;font-size:13px;">Click Claim a Store to get started.</div></div>'; return; }
-  el.innerHTML = `<div class="table-card">` + stores.map(s => {
-    const daysSinceClaimed = s.claimed_at ? Math.floor((Date.now() - new Date(s.claimed_at)) / 86400000) : null;
-    const photosMissing = !s.storefront_photo_url || !s.display_photo_url;
-    const daysLeft = daysSinceClaimed !== null ? 30 - daysSinceClaimed : null;
-    const overdue = photosMissing && daysLeft !== null && daysLeft < 0;
-    return `
-    <div style="padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
-      <div style="display:flex;align-items:center;gap:16px;">
-        <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address, s.address_line2, s.city, s.state].filter(Boolean).join(', '))}</div></div>
-        <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
-      </div>
-      ${s.claim_flagged ? `<div style="margin-top:10px;font-size:12px;color:#b45309;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.3);border-radius:6px;padding:8px 12px;">🚩 This claim was flagged (store had a prior claimant) — contact admin@addydsds.com if you haven't already.</div>` : ''}
-      ${photosMissing ? `
-        <div style="margin-top:10px;padding:10px 12px;border-radius:6px;background:${overdue ? 'rgba(220,38,38,0.08)' : 'var(--bg-input)'};border:1px solid ${overdue ? 'rgba(220,38,38,0.3)' : 'var(--border)'};">
-          <div style="font-size:12px;font-weight:600;color:${overdue ? 'var(--red)' : 'var(--text)'};margin-bottom:8px;">
-            📷 ${overdue ? 'Storefront + display photos overdue' : `Storefront + display photos required${daysLeft !== null ? ` (${daysLeft} day${daysLeft===1?'':'s'} left)` : ''}`}
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <label style="font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--bg-card);">
-              ${s.storefront_photo_url ? '✓ Storefront photo' : 'Upload storefront photo'}
-              <input type="file" accept="image/*" style="display:none;" onchange="uploadStorePhoto(${s.id}, 'storefront_photo', this)">
-            </label>
-            <label style="font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--bg-card);">
-              ${s.display_photo_url ? '✓ Display photo' : 'Upload display photo'}
-              <input type="file" accept="image/*" style="display:none;" onchange="uploadStorePhoto(${s.id}, 'display_photo', this)">
-            </label>
-          </div>
-        </div>
-      ` : `<div style="margin-top:10px;font-size:12px;color:var(--green);">✓ Photos on file</div>`}
-    </div>`;
-  }).join('');
+  el.innerHTML = `<div class="table-card">` + stores.map(s => `
+    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
+      <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
+      <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
+    </div>`).join('');
   const statEl = document.getElementById('stat-my-stores');
   if (statEl) statEl.textContent = stores.filter(s => s.store_approval_status==='approved').length;
-}
-
-async function uploadStorePhoto(storeId, fieldName, inputEl) {
-  const file = inputEl.files?.[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append(fieldName, file);
-  try {
-    const token = getToken();
-    const res = await fetch('/api/stores/' + storeId + '/photos', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token },
-      body: formData,
-    });
-    const result = await res.json();
-    if (res.ok && result.success) {
-      showToast('Photo uploaded ✓', 'success');
-      loadMyStores();
-    } else {
-      showToast(result.error || 'Upload failed', 'error');
-    }
-  } catch(e) {
-    showToast('Upload failed: ' + e.message, 'error');
-  }
 }
 
 function showClaimStoreModal() {
@@ -1124,20 +1034,18 @@ function selectWowCowStore(store) {
   document.getElementById('cs-name').readOnly = true;
   document.getElementById('cs-address').readOnly = true;
 
-  // Claiming an already-claimed store now always succeeds (auto-approved),
-  // but the claimant should know upfront it'll be flagged for admin review.
   const btn = document.getElementById('cs-submit-btn');
-  const warningEl = document.getElementById('cs-already-claimed-warning');
   if (store.already_claimed) {
-    if (warningEl) warningEl.style.display = 'block';
-    btn.textContent = 'Claim Anyway (will be flagged)';
+    btn.textContent = 'Request Ownership Transfer';
+    btn.onclick = () => requestOwnership(store.id);
+    btn.classList.remove('btn-green');
+    btn.classList.add('btn-outline');
   } else {
-    if (warningEl) warningEl.style.display = 'none';
     btn.textContent = 'Submit for Approval';
+    btn.onclick = submitStoreClaim;
+    btn.classList.add('btn-green');
+    btn.classList.remove('btn-outline');
   }
-  btn.onclick = submitStoreClaim;
-  btn.classList.add('btn-green');
-  btn.classList.remove('btn-outline');
 }
 
 async function requestOwnership(storeId) {
@@ -1157,27 +1065,28 @@ async function submitStoreClaim() {
   const storeId = document.getElementById('cs-store-id')?.value;
   const result = await apiFetch('/api/stores/claim', { method: 'POST', body: JSON.stringify({
     name, address: document.getElementById('cs-address')?.value?.trim(),
-    address_line2: document.getElementById('cs-address2')?.value?.trim(),
     city: document.getElementById('cs-city')?.value?.trim(), state: document.getElementById('cs-state')?.value?.trim(),
     zip: document.getElementById('cs-zip')?.value?.trim(), phone: document.getElementById('cs-phone')?.value?.trim(),
     email: document.getElementById('cs-email')?.value?.trim(),
-    tax_resale_cert: document.getElementById('cs-tax-cert')?.value?.trim(),
-    tax_exempt: document.getElementById('cs-tax-exempt')?.checked || false,
     store_id: storeId ? parseInt(storeId) : null,
   })});
   if (result && result.success) {
+    showToast('Store submitted for approval ✓', 'success');
     document.getElementById('claim-store-modal')?.classList.remove('active');
-    ['cs-name','cs-address','cs-address2','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id','cs-tax-cert'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
-    const checkboxEl = document.getElementById('cs-tax-exempt');
-    if (checkboxEl) checkboxEl.checked = false;
-    if (result.flagged) {
-      // Important enough that a 3-second toast isn't reliable — use a
-      // blocking alert so the claimant can't miss the "contact admin" ask.
-      alert('Claim approved — but ' + result.message);
-    } else {
-      showToast('Store submitted for approval ✓', 'success');
-    }
+    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
     loadMyStores();
+    // Immediately prompt for store photos after claiming (required within 24 hours)
+    if (result.needsPhotos) {
+      setTimeout(() => openPhotoModal(result.id, false, name), 400);
+    }
+  } else if (result && result.alreadyClaimed) {
+    showToast(result.error, 'error');
+    // Switch to ownership request mode
+    const btn = document.getElementById('cs-submit-btn');
+    btn.textContent = 'Request Ownership Transfer';
+    btn.onclick = () => requestOwnership(result.storeId);
+    btn.classList.remove('btn-green');
+    btn.classList.add('btn-outline');
   } else if (result && result.error) {
     showToast(result.error, 'error');
   }
@@ -1250,7 +1159,7 @@ function ownerLoadStore(store, networkAvg) {
   if (emailEl) emailEl.textContent = store.email;
   
   const addressEl = document.getElementById('store-address');
-  if (addressEl) addressEl.textContent = `${store.address}${store.address_line2 ? ', ' + store.address_line2 : ''}, ${store.city}, ${store.state} ${store.zip}`;
+  if (addressEl) addressEl.textContent = `${store.address}, ${store.city}, ${store.state} ${store.zip}`;
   
   const categoryEl = document.getElementById('store-category');
   if (categoryEl) categoryEl.textContent = store.category;
@@ -1965,8 +1874,10 @@ async function refreshAdminTable() {
 let _allDistStores = [];
 
 async function loadDSDDashboard() {
-  if (!requireAuth(['dsd'])) return;
+  if (!requireAuth(['dsd','member'])) return;
   renderImpersonationBanner();
+  // Check for stores with pending photos and show reminder banner
+  checkPhotoPendingBanner();
   // Load user profile to show tier and commission balance
   const profile = await apiFetch('/api/profile');
   if (profile) {
@@ -2077,6 +1988,10 @@ async function loadUsersTab() {
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${u.role !== 'admin' && u.status === 'active'
             ? `<button class="btn btn-sm btn-outline" onclick="viewAsUser(${u.id})" title="Preview their dashboard">👀 View As</button>`
+            : ''
+          }
+          ${u.role === 'dsd' && u.status === 'active'
+            ? `<button class="btn btn-sm btn-outline" onclick="showAddMemberModal(${u.id}, '${esc(u.name || u.email)}')" title="Add member employee">+ Member</button>`
             : ''
           }
           ${u.status === 'active'
@@ -2379,7 +2294,6 @@ function renderOrderDetailModal(o, isAdmin) {
       <p style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;">Shipping Address</p>
       <p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_name||'')}</p>
       <p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_address||'')}</p>
-      ${o.shipping_address_line2 ? `<p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_address_line2)}</p>` : ''}
       <p style="font-size:13px;color:var(--text-secondary);">${esc(o.shipping_city||'')}${o.shipping_city?', ':''}${esc(o.shipping_state||'')} ${esc(o.shipping_zip||'')}</p>
     </div>
 
@@ -3005,6 +2919,213 @@ async function loadDbSize() {
   `;
 }
 
+
+// ── MEMBER (CHILD) ACCOUNTS ───────────────────────────────────────────────────
+async function showAddMemberModal(parentId, parentName) {
+  const modal = document.getElementById('add-member-modal');
+  if (!modal) return;
+  document.getElementById('member-parent-id').value = parentId;
+  document.getElementById('member-parent-name').textContent = parentName;
+  ['member-name','member-email','member-phone','member-password'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  modal.classList.add('active');
+}
+
+async function submitAddMember() {
+  const name = document.getElementById('member-name')?.value?.trim();
+  const email = document.getElementById('member-email')?.value?.trim();
+  const password = document.getElementById('member-password')?.value;
+  const phone = document.getElementById('member-phone')?.value?.trim();
+  const parent_id = parseInt(document.getElementById('member-parent-id')?.value);
+  if (!name || !email || !password) { showToast('Name, email and password are required', 'error'); return; }
+  const result = await apiFetch('/api/members', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password, phone, parent_id })
+  });
+  if (result && result.success) {
+    showToast('Member account created ✓', 'success');
+    document.getElementById('add-member-modal')?.classList.remove('active');
+    loadUsersTab();
+  } else if (result?.error) {
+    showToast(result.error, 'error');
+  }
+}
+
+
+// ── STORE PHOTO UPLOAD ────────────────────────────────────────────────────────
+let _photoStoreId = null;
+let _photoIsBulk = false;
+let _photoPending = { front: null, display: null };
+let _photoUploaded = { front: false, display: false };
+
+// Called right after a store is claimed or when a store with pending photos is opened
+window.openPhotoModal = function(storeId, isBulk = false, storeName = '') {
+  _photoStoreId = storeId;
+  _photoIsBulk = isBulk;
+  _photoPending = { front: null, display: null };
+  _photoUploaded = { front: false, display: false };
+
+  const modal = document.getElementById('store-photo-modal');
+  if (!modal) return;
+
+  const subtitle = document.getElementById('photo-modal-subtitle');
+  if (subtitle) {
+    subtitle.textContent = isBulk
+      ? `You have 60 days to upload photos for ${storeName || 'this store'}.`
+      : `Upload both photos now for ${storeName || 'this store'}. Required within 24 hours.`;
+  }
+
+  // For bulk imports, show skip button; for manual claims, hide it (must do it now)
+  const skipWrap = document.getElementById('photo-skip-wrap');
+  if (skipWrap) skipWrap.style.display = isBulk ? 'block' : 'none';
+
+  // Reset previews and statuses
+  ['front','display'].forEach(type => {
+    const preview = document.getElementById(`preview-${type}`);
+    const status = document.getElementById(`${type}-status`);
+    const btn = document.getElementById(`btn-${type}`);
+    if (preview) { preview.style.display='none'; preview.src=''; }
+    if (status) status.textContent = '';
+    if (btn) btn.textContent = '📷 Take / Upload Photo';
+    const zone = document.getElementById(`photo-${type}-zone`);
+    if (zone) zone.style.borderColor = 'var(--border)';
+  });
+
+  document.getElementById('photo-modal-error').style.display = 'none';
+  document.getElementById('submit-photos-btn').disabled = true;
+  modal.style.display = 'block';
+};
+
+window.skipPhotosForNow = function() {
+  const modal = document.getElementById('store-photo-modal');
+  if (modal) modal.style.display = 'none';
+  showToast('Reminder: upload store photos within your deadline to keep this store active.', 'info');
+};
+
+window.handlePhotoSelect = function(type, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById(`${type}-status`);
+  if (status) status.textContent = 'Compressing…';
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      // Compress via Canvas — max 900px wide, JPEG quality 0.72 → ~20-40KB
+      const MAX = 900;
+      let w = img.width, h = img.height;
+      if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+
+      _photoPending[type] = dataUrl;
+
+      // Show preview
+      const preview = document.getElementById(`preview-${type}`);
+      if (preview) { preview.src = dataUrl; preview.style.display = 'block'; }
+      const zone = document.getElementById(`photo-${type}-zone`);
+      if (zone) zone.style.borderColor = 'var(--green)';
+      const btn = document.getElementById(`btn-${type}`);
+      if (btn) btn.textContent = '🔄 Replace Photo';
+      if (status) status.textContent = `✓ Ready (${Math.round(dataUrl.length / 1024)}KB)`;
+
+      // Enable submit if both photos are ready or already uploaded
+      updateSubmitBtn();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+};
+
+function updateSubmitBtn() {
+  const btn = document.getElementById('submit-photos-btn');
+  if (!btn) return;
+  const frontReady = _photoUploaded.front || !!_photoPending.front;
+  const displayReady = _photoUploaded.display || !!_photoPending.display;
+  btn.disabled = !(frontReady && displayReady);
+}
+
+window.submitStorePhotos = async function() {
+  const btn = document.getElementById('submit-photos-btn');
+  const errEl = document.getElementById('photo-modal-error');
+  btn.disabled = true;
+  btn.textContent = 'Uploading…';
+  errEl.style.display = 'none';
+
+  try {
+    for (const type of ['front', 'display']) {
+      if (!_photoPending[type]) continue; // already uploaded, skip
+      const result = await apiFetch(`/api/stores/${_photoStoreId}/photos`, {
+        method: 'POST',
+        body: JSON.stringify({ photo_type: type, photo_data: _photoPending[type] })
+      });
+      if (!result || !result.success) throw new Error(result?.error || `Failed to upload ${type} photo`);
+      _photoUploaded[type] = true;
+      _photoPending[type] = null;
+    }
+
+    // Both uploaded
+    const modal = document.getElementById('store-photo-modal');
+    if (modal) modal.style.display = 'none';
+    showToast('✓ Store photos uploaded successfully!', 'success');
+
+    // Refresh stores list to remove reminder
+    if (typeof loadDSDStores === 'function') loadDSDStores();
+    checkPhotoPendingBanner(); // re-check banner
+
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Submit Photos';
+  }
+};
+
+// ── PHOTO REMINDER BANNER (for bulk/overdue stores) ───────────────────────────
+async function checkPhotoPendingBanner() {
+  const pending = await apiFetch('/api/my-stores/photos-pending');
+  if (!pending || pending.length === 0) return;
+
+  const overdue = pending.filter(s => s.overdue);
+  const upcoming = pending.filter(s => !s.overdue);
+
+  const existing = document.getElementById('photo-reminder-banner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'photo-reminder-banner';
+  banner.style.cssText = `
+    background:#dc2626;color:#fff;padding:12px 20px;
+    display:flex;align-items:center;justify-content:space-between;
+    gap:16px;font-size:13px;font-weight:600;`;
+
+  let msg = '';
+  if (overdue.length > 0) {
+    msg = `⚠️ ${overdue.length} store${overdue.length>1?'s':''} ha${overdue.length>1?'ve':'s'} OVERDUE photos — upload now to keep your account in good standing.`;
+  } else {
+    msg = `📸 ${upcoming.length} store${upcoming.length>1?'s':''} still need${upcoming.length>1?'':'s'} photos — deadline: ${new Date(upcoming[0].photos_due_at).toLocaleDateString()}.`;
+  }
+
+  banner.innerHTML = `
+    <span>${msg}</span>
+    <div style="display:flex;gap:8px;flex-shrink:0;">
+      <button onclick="openPhotoModal(${pending[0].id},${pending[0].claimed_via==='csv_bulk'},'${pending[0].name?.replace(/'/g,"\'")}')"
+        style="background:#fff;color:#dc2626;border:none;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
+        Upload Now
+      </button>
+      <button onclick="this.closest('#photo-reminder-banner').style.display='none'"
+        style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:6px 10px;border-radius:6px;cursor:pointer;">✕</button>
+    </div>`;
+
+  // Insert at top of dashboard (after any existing impersonation banner)
+  const mainContent = document.querySelector('.dashboard') || document.body;
+  mainContent.insertBefore(banner, mainContent.firstChild);
+}
+
 // ── STORE MAP VIEW ────────────────────────────────────────────────────────────
 let _storeMap = null;
 
@@ -3081,16 +3202,3 @@ async function triggerBackup() {
     showToast('Backup started ✓', 'success');
   }
 }
-
-async function sendTestEmail() {
-  const to = document.getElementById('test-email-address')?.value?.trim();
-  const resultEl = document.getElementById('test-email-result');
-  resultEl.innerHTML = '<span style="color:var(--text-muted);">Sending...</span>';
-  const result = await apiFetch('/api/admin/test-email', { method: 'POST', body: JSON.stringify(to ? { to } : {}) });
-  if (result && result.success) {
-    resultEl.innerHTML = '<span style="color:var(--green);">✓ ' + esc(result.message) + '</span>';
-  } else {
-    resultEl.innerHTML = '<div style="color:var(--red);">✗ ' + esc(result?.error || 'Unknown error') + '</div>' + (result?.hint ? '<div style="color:var(--text-muted);margin-top:4px;">' + esc(result.hint) + '</div>' : '');
-  }
-}
-

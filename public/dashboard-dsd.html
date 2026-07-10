@@ -124,16 +124,12 @@
               <div id="wc-store-results" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.15);"></div>
             </div>
             <p style="font-size:11px;color:var(--text-muted);margin:0;line-height:1.5;">
-              If a store already exists in the system, you can still claim it — it'll be approved
-              right away, but flagged for admin review since another rep already has it.
+              If a store already exists in the system, it cannot be claimed directly by another rep —
+              you'll be able to submit an ownership request for admin review instead.
             </p>
-            <div id="cs-already-claimed-warning" style="display:none;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.3);border-radius:8px;padding:10px 14px;font-size:12px;color:#b45309;">
-              ⚠️ This store is already claimed by another rep. You can still claim it — it'll be approved, but flagged so admin can sort out the conflict.
-            </div>
             <div style="text-align:center;font-size:11px;color:var(--text-muted);">— or fill in manually below —</div>
             <input type="text" id="cs-name" placeholder="Store name *" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
-            <input type="text" id="cs-address" placeholder="Street address" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
-            <input type="text" id="cs-address2" placeholder="Unit, suite, plaza # (optional)" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <input type="text" id="cs-address" placeholder="Address" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
             <div style="display:grid;grid-template-columns:1fr 80px 100px;gap:8px;">
               <input type="text" id="cs-city" placeholder="City" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
               <input type="text" id="cs-state" placeholder="State" maxlength="2" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
@@ -141,14 +137,6 @@
             </div>
             <input type="tel" id="cs-phone" placeholder="Store phone" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
             <input type="email" id="cs-email" placeholder="Store email" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
-            <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
-              <p style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">Tax reseller info</p>
-              <input type="text" id="cs-tax-cert" placeholder="Resale certificate / tax ID number" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;margin-bottom:8px;">
-              <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;">
-                <input type="checkbox" id="cs-tax-exempt" style="width:16px;height:16px;">
-                This store purchases tax-exempt (resale)
-              </label>
-            </div>
             <input type="hidden" id="cs-store-id" value="">
             <button class="btn btn-green" id="cs-submit-btn" onclick="submitStoreClaim()" style="margin-top:4px;">Submit for Approval</button>
           </div>
@@ -198,6 +186,55 @@
   </div>
 
   <script src="/js/app.js"></script>
+  <!-- Store Photo Upload Modal (required after claiming) -->
+  <div id="store-photo-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);overflow-y:auto;">
+    <div style="background:var(--bg-card);border-radius:16px;max-width:520px;margin:40px auto;padding:32px;position:relative;">
+      <!-- No X button — must complete or dismiss is blocked for manual claims -->
+      <div style="text-align:center;margin-bottom:24px;">
+        <div style="font-size:40px;margin-bottom:12px;">📸</div>
+        <h2 style="margin:0 0 8px;">Store Photos Required</h2>
+        <p id="photo-modal-subtitle" style="color:var(--text-muted);font-size:14px;margin:0;"></p>
+      </div>
+
+      <!-- Front of Store -->
+      <div style="margin-bottom:24px;padding:20px;border:2px dashed var(--border);border-radius:12px;text-align:center;" id="photo-front-zone">
+        <div style="font-size:28px;margin-bottom:8px;">🏪</div>
+        <div style="font-weight:700;margin-bottom:4px;">Front of Store</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Photo of the exterior / storefront signage</div>
+        <img id="preview-front" style="display:none;width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:12px;">
+        <div id="front-status" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></div>
+        <label style="cursor:pointer;" for="input-front">
+          <span id="btn-front" class="btn btn-outline" style="font-size:13px;">📷 Take / Upload Photo</span>
+        </label>
+        <input type="file" id="input-front" accept="image/*" capture="environment" style="display:none;" onchange="handlePhotoSelect('front', this)">
+      </div>
+
+      <!-- Product Display -->
+      <div style="margin-bottom:24px;padding:20px;border:2px dashed var(--border);border-radius:12px;text-align:center;" id="photo-display-zone">
+        <div style="font-size:28px;margin-bottom:8px;">🛍️</div>
+        <div style="font-weight:700;margin-bottom:4px;">Product Display</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Photo showing where ADDY products are displayed in the store</div>
+        <img id="preview-display" style="display:none;width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:12px;">
+        <div id="display-status" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></div>
+        <label style="cursor:pointer;" for="input-display">
+          <span id="btn-display" class="btn btn-outline" style="font-size:13px;">📷 Take / Upload Photo</span>
+        </label>
+        <input type="file" id="input-display" accept="image/*" capture="environment" style="display:none;" onchange="handlePhotoSelect('display', this)">
+      </div>
+
+      <div id="photo-modal-error" style="display:none;color:var(--red);font-size:13px;margin-bottom:12px;text-align:center;"></div>
+
+      <button id="submit-photos-btn" class="btn btn-green" onclick="submitStorePhotos()" style="width:100%;font-size:15px;padding:14px;" disabled>
+        Submit Photos
+      </button>
+      <div id="photo-skip-wrap" style="text-align:center;margin-top:12px;display:none;">
+        <button onclick="skipPhotosForNow()" style="background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;text-decoration:underline;">
+          I'll do this later (you have 60 days)
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>loadDSDDashboard();</script>
   <!-- Feedback Modal -->
   <div class="modal-overlay" id="feedback-modal" onclick="if(event.target===this)this.classList.remove('active')">
