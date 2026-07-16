@@ -437,9 +437,14 @@ async function handleLogin(e) {
 // ADDY DSD TIER & COMMISSION FUNCTIONS
 // ==========================================
 
-async function setUserTier(userId, tier) {
-  const result = await apiFetch('/api/users/' + userId + '/tier', { method: 'PATCH', body: JSON.stringify({ tier: parseInt(tier) }) });
-  if (result && result.success) { showToast('Tier updated to Tier ' + tier + ' ✓', 'success'); loadUsersTab(); }
+async function setUserDiscount(userId, discount) {
+  // '' → clear the lock so the rep uses the automatic earn-up rate.
+  const body = { discount: discount === '' ? null : parseFloat(discount) };
+  const result = await apiFetch('/api/users/' + userId + '/tier', { method: 'PATCH', body: JSON.stringify(body) });
+  if (result && result.success) {
+    showToast(discount === '' ? 'Set to automatic earn-up ✓' : `Margin locked at ${discount}% ✓`, 'success');
+    loadUsersTab();
+  }
 }
 
 async function loadCommissionsTab() {
@@ -497,7 +502,7 @@ async function loadCommissionsTable() {
     tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;">
       <div style="font-size:28px;margin-bottom:10px;">💸</div>
       <div style="font-weight:600;color:var(--text);margin-bottom:4px;">No commissions yet</div>
-      <div style="font-size:13px;color:var(--text-muted);">Commissions are earned when a Tier 2 or Tier 3 DSD places an order.<br>They'll show up here automatically.</div>
+      <div style="font-size:13px;color:var(--text-muted);">You earn 5% when a rep you personally recruited places an order.<br>They'll show up here automatically.</div>
     </td></tr>`;
     return;
   }
@@ -1071,22 +1076,15 @@ async function submitStoreClaim() {
     store_id: storeId ? parseInt(storeId) : null,
   })});
   if (result && result.success) {
-    showToast('Store submitted for approval ✓', 'success');
+    // Claims are auto-approved; a conflict comes back flagged for admin review instead.
+    showToast(result.message || (result.flagged ? 'Flagged for admin review' : 'Store claimed ✓'), result.flagged ? 'info' : 'success');
     document.getElementById('claim-store-modal')?.classList.remove('active');
     ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
     loadMyStores();
-    // Immediately prompt for store photos after claiming (required within 24 hours)
-    if (result.needsPhotos) {
+    // Prompt for store photos only when the claim actually went through (required within 24 hours)
+    if (result.needsPhotos && !result.flagged) {
       setTimeout(() => openPhotoModal(result.id, false, name), 400);
     }
-  } else if (result && result.alreadyClaimed) {
-    showToast(result.error, 'error');
-    // Switch to ownership request mode
-    const btn = document.getElementById('cs-submit-btn');
-    btn.textContent = 'Request Ownership Transfer';
-    btn.onclick = () => requestOwnership(result.storeId);
-    btn.classList.remove('btn-green');
-    btn.classList.add('btn-outline');
   } else if (result && result.error) {
     showToast(result.error, 'error');
   }
@@ -1496,11 +1494,13 @@ async function loadPendingApprovals() {
   `).join('');
 }
 
-// ADDY DSD pricing tiers
+// ADDY rep discount options (new model). "Auto" = the automatic earn-up rate.
 const PRICING_TIERS = [
-  { value: '3', label: 'Tier 3 — 25% margin (starter)' },
-  { value: '2', label: 'Tier 2 — 30% margin' },
-  { value: '1', label: 'Tier 1 — 35% margin (best)' },
+  { value: 'auto',   label: 'Auto — earn-up (20% → 25% → 30% margin)' },
+  { value: '20',     label: 'Lock 20% margin' },
+  { value: '25',     label: 'Lock 25% margin' },
+  { value: '30',     label: 'Lock 30% margin' },
+  { value: '35',     label: 'Lock 35% margin' },
   { value: 'custom', label: 'Custom % (set manually below)' },
 ];
 
@@ -1525,60 +1525,46 @@ async function showApprovePricingModal(userId, userName, userRole) {
     `<option value="${t.value}">${t.label}</option>`
   ).join('');
 
-  // Default to Tier 3 for new DSDs
-  tierSelect.value = '3';
-  renderTierPreview('3');
+  // New DSDs start on the automatic earn-up rate
+  tierSelect.value = 'auto';
+  renderTierPreview('auto');
 
   modal.classList.add('active');
 }
 
 async function renderTierPreview(tier) {
   const previewWrap = document.getElementById('approve-price-preview');
+  if (!previewWrap) return;
   if (!_approveProducts.length) { previewWrap.innerHTML = ''; return; }
 
   if (tier === 'custom') {
     previewWrap.innerHTML = `
-      <p style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px;">Set custom price per product:</p>
-      ${_approveProducts.map(p => {
-        const roleDefault = (p.role_prices || []).find(rp => rp.role === 'dsd');
-        return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-          <span style="flex:1;font-size:13px;color:var(--text);">${esc(p.name)}</span>
-          <input type="number" step="0.01" min="0" placeholder="0.00"
-            id="custom-price-${p.id}"
-            style="width:90px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px;"
-            value="${roleDefault ? roleDefault.price : ''}">
-        </div>`;
-      }).join('')}
-    `;
-  } else if (tier === 'custom') {
-    // show custom % input
-    previewWrap.innerHTML = `
       <div class="form-group" style="margin-bottom:10px;">
-        <label style="font-size:12px;font-weight:600;color:var(--text);">Custom margin % <span style="font-weight:400;color:var(--text-muted);">(e.g. 28 = they pay 72% of retail)</span></label>
-        <input type="number" step="1" min="1" max="60" id="custom-margin-pct" placeholder="e.g. 28"
+        <label style="font-size:12px;font-weight:600;color:var(--text);">Custom margin % <span style="font-weight:400;color:var(--text-muted);">(e.g. 28 = they buy at 72% of MSRP)</span></label>
+        <input type="number" step="1" min="0" max="90" id="custom-margin-pct" placeholder="e.g. 28"
           oninput="updateCustomMarginPreview()"
           style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;margin-top:6px;">
       </div>
-      <div id="custom-margin-preview"></div>
-    `;
-  } else {
-    // Show calculated tier prices from retail_price
-    const multipliers = { '1': 0.65, '2': 0.70, '3': 0.75 };
-    const mult = multipliers[tier] || 0.75;
-    const marginPct = Math.round((1 - mult) * 100);
-    const rows = _approveProducts.map(p => {
-      const retail = parseFloat(p.retail_price || 0);
-      const price = retail > 0
-        ? `<span style="font-weight:700;color:var(--green);">$${(retail * mult).toFixed(2)}</span>`
-        : '<span style="color:var(--text-muted);font-size:12px;">Set retail price first</span>';
-      return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);">
-        <span style="color:var(--text);">${esc(p.name)}</span>${price}</div>`;
-    }).join('');
-    previewWrap.innerHTML = `
-      <p style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">They pay (${marginPct}% margin — keeps ${marginPct}% when selling at retail):</p>
-      ${rows || '<p style="color:var(--text-muted);font-size:13px;">No products yet</p>'}
-    `;
+      <div id="custom-margin-preview"></div>`;
+    return;
   }
+
+  const discount = tier === 'auto' ? 20 : (parseFloat(tier) || 20);
+  const mult = 1 - discount / 100;
+  const rows = _approveProducts.map(p => {
+    const retail = parseFloat(p.retail_price || 0);
+    const price = retail > 0
+      ? `<span style="font-weight:700;color:var(--green);">$${(retail * mult).toFixed(2)}</span>`
+      : '<span style="color:var(--text-muted);font-size:12px;">Set retail price first</span>';
+    return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);">
+      <span style="color:var(--text);">${esc(p.name)}</span>${price}</div>`;
+  }).join('');
+  const header = tier === 'auto'
+    ? 'Starts at 20% margin, earns up (25% at 15 boxes, 30% at 27):'
+    : `They buy at ${100 - discount}% of MSRP (${discount}% margin):`;
+  previewWrap.innerHTML = `
+    <p style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">${header}</p>
+    ${rows || '<p style="color:var(--text-muted);font-size:13px;">No products yet</p>'}`;
 }
 
 function updateCustomMarginPreview() {
@@ -1615,33 +1601,28 @@ async function showChangeTierModal(userId, userName) {
     `<option value="${t.value}">${t.label}</option>`
   ).join('');
 
-  const userRow = _approveProducts.length ? null : null; // tier loaded from user
-  tierSelect.value = '3';
-  renderTierPreview('3');
+  // Preselect the user's current locked discount (or Auto if they're on earn-up)
+  const cur = (window._adminUsers || []).find(u => u.id === userId);
+  const lp = cur && cur.locked_discount_pct != null ? String(parseFloat(cur.locked_discount_pct)) : 'auto';
+  const preset = ['20','25','30','35','auto'].includes(lp) ? lp : 'custom';
+  tierSelect.value = preset;
+  renderTierPreview(preset);
   modal.classList.add('active');
 }
 
 async function confirmApproveWithPricing() {
-  const tier = document.getElementById('approve-tier-select').value;
+  const sel = document.getElementById('approve-tier-select').value;
   const btn = document.getElementById('approve-confirm-btn');
   const isApproveFlow = btn.textContent.includes('Approve');
   btn.disabled = true;
   btn.textContent = 'Saving...';
 
-  const customPct = tier === 'custom' ? parseFloat(document.getElementById('custom-margin-pct')?.value || 0) : null;
+  // Locked discount %: null = automatic earn-up. custom_margin_pct carries the lock to both endpoints.
+  let lockPct = null;
+  if (sel === 'custom') lockPct = parseFloat(document.getElementById('custom-margin-pct')?.value || '') || null;
+  else if (sel !== 'auto') lockPct = parseFloat(sel);
   const canPayInvoice = document.getElementById('approve-can-pay-invoice')?.checked || false;
-  let pricingPayload = { tier: tier === 'custom' ? 3 : parseInt(tier), custom_margin_pct: customPct, can_pay_invoice: canPayInvoice };
-
-  if (tier === 'custom') {
-    const customPrices = {};
-    for (const p of _approveProducts) {
-      const val = document.getElementById(`custom-price-${p.id}`)?.value;
-      if (val !== '' && val !== undefined && val !== null) {
-        customPrices[p.id] = parseFloat(val);
-      }
-    }
-    pricingPayload.custom_prices = customPrices;
-  }
+  const pricingPayload = { tier: sel, custom_margin_pct: lockPct, can_pay_invoice: canPayInvoice };
 
   // If approving a pending user, hit the approve endpoint (which also sets pricing)
   // If changing tier on an active user, hit the dedicated pricing endpoint
@@ -1881,9 +1862,14 @@ async function loadDSDDashboard() {
   // Load user profile to show tier and commission balance
   const profile = await apiFetch('/api/profile');
   if (profile) {
-    const tierNames = {1:'Tier 1 — 35% margin', 2:'Tier 2 — 30% margin', 3:'Tier 3 — 25% margin'};
     const tierEl = document.getElementById('stat-tier');
-    if (tierEl) tierEl.textContent = tierNames[profile.tier||1] || 'Tier 1';
+    if (tierEl) {
+      const pct = profile.discount_pct != null ? profile.discount_pct : 20;
+      let label = pct + '% margin';
+      if (profile.locked_discount_pct != null) label += ' (locked)';
+      else if (profile.next_tier_at) label += ` · ${Math.max(0, profile.next_tier_at - (profile.boxes_bought||0))} boxes to next tier`;
+      tierEl.textContent = label;
+    }
     const commEl = document.getElementById('stat-commission');
     if (commEl) commEl.textContent = '$' + parseFloat(profile.commission_balance||0).toFixed(2);
     // Show payout banner if balance > 0
@@ -2063,12 +2049,14 @@ function showUserDetail(userId) {
         <div><div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Phone</div><div style="font-size:14px;color:var(--text);">${esc(u.phone || '—')}</div></div>
         <div><div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Status</div><span class="status-badge ${u.status}">${u.status}</span></div>
         <div>
-          <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">DSD Tier</div>
-          ${u.role === 'dsd' ? `
-          <select onchange="setUserTier(${u.id}, this.value)" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:13px;cursor:pointer;">
-            <option value="1" ${(u.tier||1)==1?'selected':''}>Tier 1 — 35% margin</option>
-            <option value="2" ${(u.tier||1)==2?'selected':''}>Tier 2 — 30% margin</option>
-            <option value="3" ${(u.tier||1)==3?'selected':''}>Tier 3 — 25% margin</option>
+          <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Margin</div>
+          ${(u.role === 'dsd' || u.role === 'member') ? `
+          <select onchange="setUserDiscount(${u.id}, this.value)" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:13px;cursor:pointer;">
+            <option value="" ${u.locked_discount_pct==null?'selected':''}>Auto (earn-up)</option>
+            <option value="20" ${parseFloat(u.locked_discount_pct)===20?'selected':''}>20% margin (locked)</option>
+            <option value="25" ${parseFloat(u.locked_discount_pct)===25?'selected':''}>25% margin (locked)</option>
+            <option value="30" ${parseFloat(u.locked_discount_pct)===30?'selected':''}>30% margin (locked)</option>
+            <option value="35" ${parseFloat(u.locked_discount_pct)===35?'selected':''}>35% margin (locked)</option>
           </select>` : '<div style="font-size:14px;color:var(--text);">Admin</div>'}
         </div>
         <div>

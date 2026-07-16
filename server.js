@@ -129,10 +129,28 @@ async function migrate() {
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_id TEXT');
     await q('ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(10,2) NOT NULL DEFAULT 0');
     await q('ALTER TABLE products ADD COLUMN IF NOT EXISTS retail_price NUMERIC(10,2) NOT NULL DEFAULT 0');
+    // New pricing model: tag products as a master-box type + per-user locked discount override
+    await q('ALTER TABLE products ADD COLUMN IF NOT EXISTS box_type TEXT');
+    await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_discount_pct NUMERIC(5,2)');
+    await q('CREATE TABLE IF NOT EXISTS app_migrations (key TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
     await q('ALTER TABLE stores ADD COLUMN IF NOT EXISTS exclusive_rep_id INTEGER REFERENCES users(id)');
     await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_approval_status TEXT NOT NULL DEFAULT 'approved'");
     console.log('✅ ADDY DSD tier/commission migrations applied');
   } catch(e) { console.log('ℹ️  ADDY migrations already up to date:', e.message); }
+
+  // One-time: pin every existing rep/member to a flat 30% (Danny → 35%).
+  // New reps created after this run stay unlocked and use the earn-up system (20→25→30%).
+  try {
+    await q('CREATE TABLE IF NOT EXISTS app_migrations (key TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
+    const alreadyPinned = await one("SELECT 1 FROM app_migrations WHERE key='pin_existing_discounts_v1'");
+    if (!alreadyPinned) {
+      const r1 = await q("UPDATE users SET locked_discount_pct=30 WHERE role IN ('dsd','member') AND locked_discount_pct IS NULL");
+      const r2 = await q("UPDATE users SET locked_discount_pct=35 WHERE role IN ('dsd','member') AND (lower(trim(name))='danny' OR lower(name) LIKE 'danny %')");
+      await q("INSERT INTO app_migrations (key) VALUES ('pin_existing_discounts_v1')");
+      console.log(`✅ Pinned ${r1.rowCount||0} existing DSD/member account(s) to 30%; set ${r2.rowCount||0} "Danny" account(s) to 35%`);
+      if ((r2.rowCount||0) !== 1) console.log(`⚠️  Expected exactly one "Danny" for the 35% lock but matched ${r2.rowCount||0} — set it manually in the admin if needed.`);
+    }
+  } catch(e) { console.log('ℹ️  discount pin migration skipped:', e.message); }
 
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
@@ -305,27 +323,93 @@ async function logActivity(action, targetName, userEmail) {
   await q('INSERT INTO activity_log (action, target_name, user_email) VALUES ($1,$2,$3)', [action, targetName, userEmail]);
 }
 
-// ADDY DSD tier margins: Tier1=35%, Tier2=30%, Tier3=25%
-const TIER_MULTIPLIERS = { 1: 0.65, 2: 0.70, 3: 0.75 };
+// ── ADDY discount model ───────────────────────────────────────────────────────
+// New reps earn their discount up by cumulative master boxes bought:
+//   < 15 boxes → 20% off · 15+ → 25% · 27+ → 30%   (buy-in-threes: 15 = 5 of each, 27 = 9 of each)
+// Existing reps/members are pinned via users.locked_discount_pct (30%, Danny 35%),
+// which always wins over the earned rate. Members ride their parent DSD's discount.
+const BOX_TYPES = ['shots', 'blister_card', 'gummies'];
+const TIER_25_BOXES = 15;
+const TIER_30_BOXES = 27;
+function discountFromBoxes(boxes) {
+  if (boxes >= TIER_30_BOXES) return 30;
+  if (boxes >= TIER_25_BOXES) return 25;
+  return 20;
+}
+async function getCumulativeBoxes(userId) {
+  const r = await one(
+    `SELECT COALESCE(SUM(oi.quantity),0) AS boxes
+       FROM order_items oi
+       JOIN orders o   ON o.id = oi.order_id
+       JOIN products p ON p.id = oi.product_id
+      WHERE o.user_id=$1 AND o.status<>'cancelled' AND p.box_type IS NOT NULL`,
+    [userId]
+  );
+  return parseInt(r?.boxes || 0, 10);
+}
+// Effective discount % for a user (locked override wins; members ride their parent DSD).
+async function getEffectiveDiscountPct(userId) {
+  const user = await one('SELECT id, role, parent_id, locked_discount_pct FROM users WHERE id=$1', [userId]);
+  if (!user) return 20;
+  if (user.role === 'member' && user.parent_id) {
+    const parent = await one('SELECT id, locked_discount_pct FROM users WHERE id=$1', [user.parent_id]);
+    if (parent) {
+      if (parent.locked_discount_pct != null) return parseFloat(parent.locked_discount_pct);
+      return discountFromBoxes(await getCumulativeBoxes(parent.id));
+    }
+  }
+  if (user.locked_discount_pct != null) return parseFloat(user.locked_discount_pct);
+  return discountFromBoxes(await getCumulativeBoxes(userId));
+}
+
+// A locked discount (the user's own, or a member's parent DSD) — or null when they earn their rate.
+async function getLockedDiscountPct(userId) {
+  const user = await one('SELECT role, parent_id, locked_discount_pct FROM users WHERE id=$1', [userId]);
+  if (!user) return null;
+  if (user.role === 'member' && user.parent_id) {
+    const parent = await one('SELECT locked_discount_pct FROM users WHERE id=$1', [user.parent_id]);
+    return parent && parent.locked_discount_pct != null ? parseFloat(parent.locked_discount_pct) : null;
+  }
+  return user.locked_discount_pct != null ? parseFloat(user.locked_discount_pct) : null;
+}
 
 async function getPriceForUser(productId, userId, role) {
-  // 1. Check per-user price override (admin can set custom price per DSD)
+  const product = await one('SELECT retail_price FROM products WHERE id=$1', [productId]);
+  const retail = parseFloat(product?.retail_price || 0);
+  // 1. A locked discount always wins — pinned reps get exactly their rate, no matter what.
+  const locked = await getLockedDiscountPct(userId);
+  if (locked != null && retail > 0) return Math.round(retail * (1 - locked / 100) * 100) / 100;
+  // 2. Per-user manual price override (for unlocked reps the admin hand-prices)
   const userPrice = await one('SELECT price FROM product_prices WHERE product_id=$1 AND user_id=$2', [productId, userId]);
   if (userPrice) return parseFloat(userPrice.price);
-  // 2. Calculate tier-based price from retail_price
-  // Members use their parent DSD's tier instead of their own
-  let user = await one('SELECT tier,role,parent_id FROM users WHERE id=$1', [userId]);
-  if (user?.role === 'member' && user?.parent_id) {
-    const parent = await one('SELECT tier FROM users WHERE id=$1', [user.parent_id]);
-    if (parent) user = { ...user, tier: parent.tier };
+  // 3. Earned discount off retail_price
+  if (retail > 0) {
+    const discount = await getEffectiveDiscountPct(userId);
+    return Math.round(retail * (1 - discount / 100) * 100) / 100;
   }
-  const product = await one('SELECT retail_price, cost_price FROM products WHERE id=$1', [productId]);
-  const tier = user?.tier || 1;
-  const retail = parseFloat(product?.retail_price || 0);
-  if (retail > 0) return Math.round(retail * TIER_MULTIPLIERS[tier] * 100) / 100;
-  // 3. Fallback to role-based price
+  // 4. Fallback to role-based price
   const rolePrice = await one('SELECT price FROM product_prices WHERE product_id=$1 AND role=$2 AND user_id IS NULL ORDER BY id DESC', [productId, role]);
   return rolePrice ? parseFloat(rolePrice.price) : null;
+}
+
+// ── Store claiming ────────────────────────────────────────────────────────────
+// A DSD's claim is auto-approved and linked everywhere the store list reads from
+// (exclusive_rep_id, owner_stores, dsd_stores) so it shows up consistently.
+async function claimStoreForDsd(storeId, userId, via = 'manual') {
+  const photoDue = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved', photos_due_at=$2, photos_complete=false, claimed_via=$3 WHERE id=$4",
+    [userId, photoDue, via, storeId]);
+  await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
+  await q('INSERT INTO dsd_stores (dsd_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
+}
+// When a store is already claimed by someone else, raise a flag for admins to resolve
+// instead of blocking or silently stealing it.
+async function flagStoreClaimConflict(storeId, requesterId, currentOwnerId, note) {
+  const existing = await one("SELECT id FROM ownership_requests WHERE store_id=$1 AND requester_id=$2 AND status='pending'", [storeId, requesterId]);
+  if (existing) return false;
+  await q('INSERT INTO ownership_requests (store_id, requester_id, current_owner_id, message) VALUES ($1,$2,$3,$4)',
+    [storeId, requesterId, currentOwnerId, note || 'Auto-flagged: tried to claim a store already claimed by another rep']);
+  return true;
 }
 
 async function calculateAndSaveCommissions(orderId, buyerId, orderTotal) {
@@ -362,20 +446,8 @@ async function calculateAndSaveCommissions(orderId, buyerId, orderTotal) {
       }
     }
 
-    // Level 2: recruiter's recruiter earns 3%
-    if (recruiter.referred_by && recruiter.referred_by !== buyer.id) {
-      // Guard 5: prevent circular chain (A→B→A)
-      const grandRecruiter = await one("SELECT id, status FROM users WHERE id=$1 AND role='dsd'", [recruiter.referred_by]);
-      if (grandRecruiter && grandRecruiter.id !== buyerId && grandRecruiter.status === 'active') {
-        const level2Amount = Math.round(orderTotal * 0.03 * 100) / 100;
-        if (level2Amount > 0) {
-          await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,2)',
-            [grandRecruiter.id, orderId, buyerId, level2Amount, 0.03]);
-          await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [level2Amount, grandRecruiter.id]);
-          console.log('✅ Commission L2: $' + level2Amount + ' → user #' + grandRecruiter.id);
-        }
-      }
-    }
+    // Single level only — the direct recruiter earns 5%. There is deliberately no
+    // second level: if a rep you brought recruits someone else, you earn nothing on that.
   } catch(e) { console.error('❌ Commission calculation error for order #' + orderId + ':', e.message); }
 }
 
@@ -390,8 +462,10 @@ function serveDashboard(allowedRoles) {
     try {
       const user = jwt.verify(token, JWT_SECRET);
       if (!allowedRoles.includes(user.role)) return res.redirect('/login.html');
-      const roleFileMap = { admin:'admin', investor:'investor', dsd:'owner', dsd:'dsd', rep:'rep' };
-      res.sendFile(path.join(__dirname, 'public', `dashboard-${roleFileMap[user.role]}.html`));
+      // Every non-admin role (dsd, member, and the legacy investor/rep) uses the DSD dashboard.
+      const roleFileMap = { admin:'admin', dsd:'dsd', member:'dsd', investor:'dsd', rep:'dsd' };
+      const file = roleFileMap[user.role] || 'dsd';
+      res.sendFile(path.join(__dirname, 'public', `dashboard-${file}.html`));
     } catch { res.redirect('/login.html'); }
   };
 }
@@ -512,7 +586,15 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
 
 app.get('/api/me', authenticate, async (req, res) => {
   try {
-    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier,parent_id FROM users WHERE id=$1', [req.user.id]);
+    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier,parent_id,locked_discount_pct FROM users WHERE id=$1', [req.user.id]);
+    if (user) {
+      user.discount_pct = await getEffectiveDiscountPct(user.id);
+      user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
+      // How many boxes until the next discount tier (null when locked or already at the top).
+      user.next_tier_at = user.locked_discount_pct != null || user.discount_pct >= 30
+        ? null
+        : (user.discount_pct >= 25 ? TIER_30_BOXES : TIER_25_BOXES);
+    }
     res.json(user || req.user);
   } catch(e) { res.json(req.user); }
 });
@@ -520,9 +602,16 @@ app.get('/api/me', authenticate, async (req, res) => {
 app.get('/api/profile', authenticate, async (req, res) => {
   try {
     const user = await one(
-      'SELECT id,name,email,role,phone,status,tier,commission_balance,referred_by,stripe_connect_id,can_pay_invoice FROM users WHERE id=$1',
+      'SELECT id,name,email,role,phone,status,tier,locked_discount_pct,commission_balance,referred_by,stripe_connect_id,can_pay_invoice,parent_id FROM users WHERE id=$1',
       [req.user.id]
     );
+    if (user) {
+      user.discount_pct = await getEffectiveDiscountPct(user.id);
+      user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
+      user.next_tier_at = user.locked_discount_pct != null || user.discount_pct >= 30
+        ? null
+        : (user.discount_pct >= 25 ? TIER_30_BOXES : TIER_25_BOXES);
+    }
     res.json(user);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -639,11 +728,13 @@ app.get('/api/stores', authenticate, async (req, res) => {
       return res.json({ stores: store ? [store] : [], total: store ? 1 : 0, network_avg: avg.avg_revenue });
     }
 
-    if (role === 'dsd') {
-      const stores = await all(
-        'SELECT s.* FROM stores s INNER JOIN dsd_stores ds ON ds.store_id=s.id WHERE ds.dsd_id=$1 ORDER BY s.name',
-        [userId]
-      );
+    if (role === 'member') {
+      // Members see only their parent DSD's claimed stores — never the global directory.
+      const me = await one('SELECT parent_id FROM users WHERE id=$1', [userId]);
+      const stores = me?.parent_id ? await all(
+        'SELECT s.* FROM stores s INNER JOIN owner_stores os ON os.store_id=s.id WHERE os.owner_id=$1 ORDER BY s.name',
+        [me.parent_id]
+      ) : [];
       return res.json({ stores, total: stores.length });
     }
 
@@ -920,7 +1011,7 @@ app.post('/api/users', authenticate, authorize('admin'), async (req, res) => {
 });
 
 app.get('/api/users', authenticate, authorize('admin'), async (req, res) => {
-  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,can_pay_invoice FROM users ORDER BY role,name')); }
+  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,locked_discount_pct,can_pay_invoice FROM users ORDER BY role,name')); }
   catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
@@ -1001,12 +1092,17 @@ app.patch('/api/users/:id/pricing', authenticate, authorize('admin'), async (req
       return res.json({ success: true });
     }
 
-    if (tier !== undefined && tier !== null) {
-      // Use case 2: change overall tier (recalculates all product prices)
+    if (tier !== undefined && tier !== null && tier !== '') {
+      // Use case 2 (new model): lock a discount % for this DSD, or 'auto' to clear it (earn-up rate).
       const user = await one('SELECT * FROM users WHERE id=$1', [req.params.id]);
       if (!user) return res.status(404).json({ error: 'User not found' });
-      await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
-      await q('UPDATE users SET can_pay_invoice=$1 WHERE id=$2', [!!can_pay_invoice, req.params.id]);
+      let pct;
+      if (tier === 'auto') pct = null;
+      else if (custom_margin_pct !== undefined && custom_margin_pct !== null && custom_margin_pct !== '') pct = parseFloat(custom_margin_pct);
+      else { const legacy = { 1: 35, 2: 30, 3: 25 }; pct = legacy[parseInt(tier)] ?? parseFloat(tier); }
+      if (pct != null && !(pct >= 0 && pct <= 90)) return res.status(400).json({ error: 'Margin must be between 0 and 90%.' });
+      await q('UPDATE users SET locked_discount_pct=$1 WHERE id=$2', [pct, req.params.id]);
+      if (can_pay_invoice !== undefined) await q('UPDATE users SET can_pay_invoice=$1 WHERE id=$2', [!!can_pay_invoice, req.params.id]);
       await logActivity('pricing_updated', user.name||user.email, req.user.email);
       return res.json({ success: true });
     }
@@ -1041,34 +1137,8 @@ app.get('/api/pending-users', authenticate, authorize('admin'), async (req, res)
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
-// Set/change pricing tier for any user
-async function applyPricingTier(userId, tierVal, customPrices, customMarginPct) {
-  // ADDY DSD tier system: tier 1=35%, tier 2=30%, tier 3=25%, custom=user-defined %
-  const TIER_MULTS = { 1: 0.65, 2: 0.70, 3: 0.75 };
-  const tierNum = parseInt(tierVal);
-  const mult = customMarginPct ? (1 - customMarginPct / 100) : (TIER_MULTS[tierNum] || 0.75);
-
-  // Update user's tier number
-  const finalTier = customMarginPct ? 3 : (tierNum || 3);
-  await q('UPDATE users SET tier=$1 WHERE id=$2', [finalTier, userId]);
-
-  // If custom %, store it on the user for future reference
-  if (customMarginPct) {
-    await q('UPDATE users SET pricing_tier=$1 WHERE id=$2', [`custom_${customMarginPct}pct`, userId]);
-  } else {
-    await q('UPDATE users SET pricing_tier=$1 WHERE id=$2', [`tier_${finalTier}`, userId]);
-  }
-
-  // Set per-user price overrides based on retail_price × multiplier
-  const products = await all('SELECT id, retail_price FROM products WHERE active=1');
-  for (const p of products) {
-    const retail = parseFloat(p.retail_price || 0);
-    if (retail <= 0) continue;
-    const price = Math.round(retail * mult * 100) / 100;
-    await q('DELETE FROM product_prices WHERE product_id=$1 AND user_id=$2', [p.id, userId]);
-    await q("INSERT INTO product_prices (product_id,user_id,role,price) VALUES ($1,$2,'dsd',$3)", [p.id, userId, price]);
-  }
-}
+// Pricing is now discount-based (see getPriceForUser). Approval optionally locks a
+// custom discount %; otherwise the rep earns their rate automatically.
 
 app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req, res) => {
   try {
@@ -1080,8 +1150,12 @@ app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req
       await q('UPDATE users SET parent_id=$1 WHERE id=$2', [req.body.parent_id, req.params.id]);
     }
     if (user.store_id) await q("UPDATE stores SET status='active' WHERE id=$1", [user.store_id]);
-    const { tier, custom_prices, custom_margin_pct, can_pay_invoice } = req.body || {};
-    if (tier) await applyPricingTier(req.params.id, tier, custom_prices, custom_margin_pct);
+    const { custom_margin_pct, can_pay_invoice } = req.body || {};
+    // New reps start on the automatic earn-up rate (20%). Admin can optionally lock a custom % now.
+    if (custom_margin_pct !== undefined && custom_margin_pct !== null && custom_margin_pct !== '') {
+      const pct = parseFloat(custom_margin_pct);
+      if (pct >= 0 && pct <= 90) await q('UPDATE users SET locked_discount_pct=$1 WHERE id=$2', [pct, req.params.id]);
+    }
     await q('UPDATE users SET can_pay_invoice=$1 WHERE id=$2', [!!can_pay_invoice, req.params.id]);
     await logActivity('approved', user.name||user.email, req.user.email);
 
@@ -1243,9 +1317,10 @@ app.post('/api/products', authenticate, authorize('admin'), async (req, res) => 
   try {
     const { name, description, image_url, sku, stock, cost_price, prices } = req.body;
     if (!name) return res.status(400).json({ error: 'Product name is required' });
+    const box_type = BOX_TYPES.includes(req.body.box_type) ? req.body.box_type : null;
     const p = await one(
-      'INSERT INTO products (name,description,image_url,sku,stock,retail_price,cost_price,active) VALUES ($1,$2,$3,$4,$5,$6,$7,1) RETURNING *',
-      [name, description||'', image_url||'', sku||'', stock||0, parseFloat(req.body.retail_price||0), parseFloat(req.body.cost_price||0)]
+      'INSERT INTO products (name,description,image_url,sku,stock,retail_price,cost_price,box_type,active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1) RETURNING *',
+      [name, description||'', image_url||'', sku||'', stock||0, parseFloat(req.body.retail_price||0), parseFloat(req.body.cost_price||0), box_type]
     );
     if (prices) {
       for (const [role, price] of Object.entries(prices)) {
@@ -1267,10 +1342,13 @@ app.patch('/api/products/:id', authenticate, authorize('admin'), async (req, res
     const { name, description, image_url, sku, stock, cost_price, retail_price, active, prices } = req.body;
     const p = await one('SELECT * FROM products WHERE id=$1', [req.params.id]);
     if (!p) return res.status(404).json({ error: 'Product not found' });
+    const box_type = req.body.box_type === undefined
+      ? p.box_type
+      : (BOX_TYPES.includes(req.body.box_type) ? req.body.box_type : null);
     const updated = await one(
-      'UPDATE products SET name=$1,description=$2,image_url=$3,sku=$4,stock=$5,active=$6,retail_price=$7,cost_price=$8 WHERE id=$9 RETURNING *',
+      'UPDATE products SET name=$1,description=$2,image_url=$3,sku=$4,stock=$5,active=$6,retail_price=$7,cost_price=$8,box_type=$9 WHERE id=$10 RETURNING *',
       [name??p.name, description??p.description, image_url??p.image_url, sku??p.sku, stock??p.stock, active??p.active,
-       parseFloat(retail_price??p.retail_price??0), parseFloat(cost_price??p.cost_price??0), req.params.id]
+       parseFloat(retail_price??p.retail_price??0), parseFloat(cost_price??p.cost_price??0), box_type, req.params.id]
     );
     if (prices) {
       for (const [role, price] of Object.entries(prices)) {
@@ -1693,15 +1771,39 @@ app.post('/api/orders', authenticate, async (req, res) => {
       : await one('SELECT * FROM carts WHERE user_id=$1 AND store_id IS NULL', [userId]);
     if (!cart) return res.status(400).json({ error: 'Cart not found' });
 
-    const items = await all('SELECT ci.*,p.name,p.stock,p.free_shipping FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1', [cart.id]);
+    const items = await all('SELECT ci.*,p.name,p.stock,p.free_shipping,p.box_type FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1', [cart.id]);
     if (!items.length) return res.status(400).json({ error: 'Cart is empty' });
     for (const item of items) {
       if (item.stock < item.quantity) return res.status(400).json({ error: `Insufficient stock for ${item.name}` });
     }
 
+    // ── New-model order rules ──────────────────────────────────────────────
+    // A "master box" is any product tagged with a box_type; cart quantity = number of boxes.
+    const boxItems    = items.filter(i => i.box_type);
+    const totalBoxes  = boxItems.reduce((a,i) => a + i.quantity, 0);
+    const typesInCart = new Set(boxItems.map(i => i.box_type));
+    const isRep       = role === 'dsd';
+    const priorOrders = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [userId]))?.c || 0;
+    const isFirstOrder = priorOrders === 0;
+
+    if (isRep) {
+      // Minimum purchase: at least one master box.
+      if (totalBoxes < 1) {
+        return res.status(400).json({ error: 'Your order must include at least one master box (shots, blister card, or gummies).' });
+      }
+    }
+    if (isRep && isFirstOrder) {
+      // Onboarding: the first order must be one master box of each type, 3 boxes minimum.
+      const missing = BOX_TYPES.filter(t => !typesInCart.has(t));
+      if (missing.length > 0 || totalBoxes < 3) {
+        return res.status(400).json({ error: 'Your first order must include one master box of each type — shots, blister card, and gummies (3 boxes minimum). After that you can order freely.' });
+      }
+    }
+
     const subtotal = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
     const allFreeShipping = items.every(i => i.free_shipping);
-    const shipping_cost = (subtotal >= 350 || allFreeShipping) ? 0 : 35;
+    // Free shipping: a rep's first order, any order of 3+ master boxes, or all items flagged free.
+    const shipping_cost = (allFreeShipping || totalBoxes >= 3 || (isRep && isFirstOrder)) ? 0 : 35;
     // Stripe fee passthrough: customer pays fee so we receive full amount
     // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
     const processing_fee = payment_method === 'card'
@@ -1882,10 +1984,7 @@ app.get('/api/inventory/:store_id', authenticate, async (req, res) => {
     const { role, id: userId } = req.user;
     const storeId = parseInt(req.params.store_id);
     if (role === 'dsd') {
-      const user = await one('SELECT store_id FROM users WHERE id=$1', [userId]);
-      if (user.store_id !== storeId) return res.status(403).json({ error: 'Access denied' });
-    }
-    if (role === 'dsd') {
+      // A DSD can view inventory only for stores they've claimed/been assigned.
       const assigned = await one('SELECT 1 FROM dsd_stores WHERE dsd_id=$1 AND store_id=$2', [userId, storeId]);
       if (!assigned) return res.status(403).json({ error: 'Access denied' });
     }
@@ -1894,6 +1993,12 @@ app.get('/api/inventory/:store_id', authenticate, async (req, res) => {
       if (!rep) return res.status(403).json({ error: 'Access denied' });
       const assigned = await one('SELECT 1 FROM rep_store_assignments WHERE rep_id=$1 AND store_id=$2', [rep.id, storeId]);
       if (!assigned) return res.status(403).json({ error: 'Access denied' });
+    }
+    if (role === 'member') {
+      // Members can only view inventory for their parent DSD's stores.
+      const me = await one('SELECT parent_id FROM users WHERE id=$1', [userId]);
+      const ok = me?.parent_id && await one('SELECT 1 FROM dsd_stores WHERE dsd_id=$1 AND store_id=$2', [me.parent_id, storeId]);
+      if (!ok) return res.status(403).json({ error: 'Access denied' });
     }
     const store = await one('SELECT * FROM stores WHERE id=$1', [storeId]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
@@ -2176,11 +2281,29 @@ app.get('/api/members', authenticate, authorize('admin'), async (req, res) => {
 });
 
 // ── BULK CSV STORE IMPORT ─────────────────────────────────────────────────────
-app.post('/api/stores/bulk-import', authenticate, authorize('admin'), async (req, res) => {
+app.post('/api/stores/bulk-import', authenticate, async (req, res) => {
   try {
     const { rows } = req.body;
     if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows must be an array' });
     if (rows.length > 500) return res.status(400).json({ error: 'Maximum 500 rows per import. Please split your file.' });
+
+    const { role, id: userId } = req.user;
+
+    // A DSD importing stores claims them: auto-approved and linked if unclaimed (or already
+    // theirs); flagged for admin review if another rep already owns the store.
+    // admin / member imports create shared-directory stores with no per-user claim.
+    async function claimImported(storeId) {
+      if (role !== 'dsd') return { linked: false, flagged: false };
+      const st = await one('SELECT exclusive_rep_id FROM stores WHERE id=$1', [storeId]);
+      if (st && st.exclusive_rep_id && st.exclusive_rep_id !== userId) {
+        await flagStoreClaimConflict(storeId, userId, st.exclusive_rep_id, 'Claim conflict via CSV import');
+        return { linked: false, flagged: true };
+      }
+      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved' WHERE id=$2", [userId, storeId]);
+      await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
+      await q('INSERT INTO dsd_stores (dsd_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
+      return { linked: true, flagged: false };
+    }
 
     // Photo deadline: >25 stores in one batch gets 60 days, otherwise 24 hours
     const isBulkBatch = rows.length > 25;
@@ -2210,20 +2333,29 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin'), async (req
       try {
         const exists = await one('SELECT id FROM stores WHERE LOWER(name)=LOWER($1)', [name]);
         if (exists) {
+          // Store already exists — claim it to this importer, or flag a conflict.
+          const r = await claimImported(exists.id);
           skipped++;
-          results.push({ row: rowNum, status: 'skipped', reason: `"${name}" already exists` });
+          results.push({
+            row: rowNum,
+            status: r.flagged ? 'flagged' : 'skipped',
+            reason: r.flagged
+              ? `"${name}" is already claimed by another rep — flagged for admin review`
+              : `"${name}" already exists${r.linked ? ' — claimed to you' : ''}`
+          });
           continue;
         }
 
-        await q(
+        const inserted = await one(
           `INSERT INTO stores (name,owner_name,email,address,city,state,zip,phone,store_number,category,status,monthly_revenue,wholesale_price,retail_price,distribution_cost,photos_due_at,photos_complete,claimed_via)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,0,0,0,$12,false,$13)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,0,0,0,$12,false,$13) RETURNING id`,
           [name, (row.owner_name||'').trim(), (row.email||'').trim(),
            (row.address||'').trim(), (row.city||'').trim(), (row.state||'').trim(),
            (row.zip||'').trim(), (row.phone||'').trim(), (row.store_number||'').trim(),
            (row.category||'General').trim(), (row.status||'active').trim(),
            photoDeadline, claimedVia]
         );
+        await claimImported(inserted.id);
         created++;
         results.push({ row: rowNum, status: 'created', note: warning || undefined });
       } catch(rowErr) {
@@ -2238,7 +2370,7 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin'), async (req
 });
 
 // ── EXAMPLE CSV DOWNLOAD ───────────────────────────────────────────────────────
-app.get('/api/stores/example-csv', authenticate, authorize('admin'), (req, res) => {
+app.get('/api/stores/example-csv', authenticate, (req, res) => {
   const csv = [
     'name,owner_name,email,address,city,state,zip,phone,store_number,category',
     '"Corner Market",John Smith,john@example.com,"123 Main St",Miami,FL,33101,(305) 555-0100,ST-001,Convenience',
@@ -2316,12 +2448,18 @@ app.get('/api/wowcow-stores/search', authenticate, async (req, res) => {
     const { q } = req.query;
     if (!q || q.length < 2) return res.json([]);
 
-    // ADDY's own stores first — these have real-time claim status (exclusive_rep_id)
+    // ADDY's own stores. Non-admins only see unclaimed stores or ones they already own —
+    // never a store another rep has claimed (and exclusive_rep_id is not exposed).
+    const isAdmin = req.user.role === 'admin';
     const ownStores = await all(
-      `SELECT id, name, address, city, state, zip, category, exclusive_rep_id,
-              (exclusive_rep_id IS NOT NULL) as already_claimed
-       FROM stores WHERE LOWER(name) LIKE LOWER($1) OR LOWER(city) LIKE LOWER($1) LIMIT 10`,
-      [`%${q}%`]
+      `SELECT id, name, address, city, state, zip, category,
+              (exclusive_rep_id IS NOT NULL) as already_claimed,
+              (exclusive_rep_id = $2) as mine
+       FROM stores
+       WHERE (LOWER(name) LIKE LOWER($1) OR LOWER(city) LIKE LOWER($1))
+         ${isAdmin ? '' : 'AND (exclusive_rep_id IS NULL OR exclusive_rep_id = $2)'}
+       LIMIT 10`,
+      [`%${q}%`, req.user.id]
     );
 
     // WowCow network stores not yet in ADDY at all
@@ -2466,12 +2604,18 @@ app.post('/api/admin/backup-now', authenticate, authorize('admin'), async (req, 
 // Update DSD rep tier (admin only)
 app.patch('/api/users/:id/tier', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { tier } = req.body;
-    if (![1,2,3].includes(parseInt(tier))) return res.status(400).json({ error: 'Tier must be 1, 2 or 3' });
+    // New model: sets a locked discount % override. Empty/null clears it so the
+    // user falls back to the automatic earn-up rate (20 → 25 → 30%).
+    const { discount } = req.body;
+    let val = null;
+    if (discount !== null && discount !== undefined && discount !== '') {
+      val = parseFloat(discount);
+      if (!(val >= 0 && val <= 90)) return res.status(400).json({ error: 'Margin must be between 0 and 90%.' });
+    }
     const user = await one('SELECT name, email FROM users WHERE id=$1', [req.params.id]);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    await q('UPDATE users SET tier=$1 WHERE id=$2', [parseInt(tier), req.params.id]);
-    await logActivity('changed_tier', `${user.name || user.email} → Tier ${tier}`, req.user.email);
+    await q('UPDATE users SET locked_discount_pct=$1 WHERE id=$2', [val, req.params.id]);
+    await logActivity('changed_discount', `${user.name || user.email} → ${val == null ? 'auto (earn-up)' : val + '%'}`, req.user.email);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -2582,32 +2726,28 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
     if (existing) {
       // Store already exists in the network
       if (existing.exclusive_rep_id && existing.exclusive_rep_id !== req.user.id) {
-        // Already claimed by SOMEONE ELSE — block direct claim, must request ownership instead
-        return res.status(409).json({
-          error: 'This store is already claimed by another rep. Submit an ownership request instead.',
-          alreadyClaimed: true,
-          storeId: existing.id
-        });
+        // Already claimed by SOMEONE ELSE — auto-flag the conflict for admins, don't steal it.
+        await flagStoreClaimConflict(existing.id, req.user.id, existing.exclusive_rep_id, `Claim conflict on "${name}"`);
+        await logActivity('store_claim_conflict', `${name} — flagged (already claimed)`, req.user.email);
+        return res.json({ success: true, flagged: true, id: existing.id, message: 'This store is already claimed by another rep — flagged for admin review.' });
       }
       if (existing.exclusive_rep_id === req.user.id) {
-        return res.status(409).json({ error: 'You already have a pending or approved claim on this store.' });
+        return res.status(409).json({ error: 'You have already claimed this store.' });
       }
-      // Store exists but unclaimed — claim it, set 24h photo deadline
-      const photoDue = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='pending', photos_due_at=$2, photos_complete=false, claimed_via='manual' WHERE id=$3",
-        [req.user.id, photoDue, existing.id]);
+      // Store exists but unclaimed — claim it (auto-approved), set 24h photo deadline
+      await claimStoreForDsd(existing.id, req.user.id, 'manual');
       await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
-      return res.json({ success: true, id: existing.id, needsPhotos: true, message: 'Store submitted for approval' });
+      return res.json({ success: true, id: existing.id, needsPhotos: true, message: 'Store claimed and approved.' });
     }
 
-    // Brand new store — create it, set 24h photo deadline
-    const photoDueNew = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    // Brand new store — create it (auto-approved to the claimer), set 24h photo deadline
     const store = await one(
-      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,store_approval_status,exclusive_rep_id,monthly_revenue,status,photos_due_at,photos_complete,claimed_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,0,'active',$12,false,'manual') RETURNING id",
-      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', req.user.id, photoDueNew]
+      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,store_approval_status,exclusive_rep_id,monthly_revenue,status,photos_complete,claimed_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved',$11,0,'active',false,'manual') RETURNING id",
+      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', req.user.id]
     );
+    await claimStoreForDsd(store.id, req.user.id, 'manual');
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
-    res.json({ success: true, id: store.id, needsPhotos: true, message: 'Store submitted for approval' });
+    res.json({ success: true, id: store.id, needsPhotos: true, message: 'Store claimed and approved.' });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2662,6 +2802,11 @@ app.patch('/api/ownership-requests/:id', authenticate, authorize('admin'), async
 
     if (approved) {
       await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved' WHERE id=$2", [request.requester_id, request.store_id]);
+      // Move the claim links to the new owner so store lists stay consistent.
+      await q('DELETE FROM owner_stores WHERE store_id=$1', [request.store_id]);
+      await q('DELETE FROM dsd_stores  WHERE store_id=$1', [request.store_id]);
+      await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [request.requester_id, request.store_id]);
+      await q('INSERT INTO dsd_stores  (dsd_id,   store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [request.requester_id, request.store_id]);
       await q("UPDATE ownership_requests SET status='approved' WHERE id=$1", [req.params.id]);
     } else {
       await q("UPDATE ownership_requests SET status='rejected' WHERE id=$1", [req.params.id]);

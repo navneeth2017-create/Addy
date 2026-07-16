@@ -38,7 +38,7 @@
       </div>
 
       <div class="stats-grid">
-        <div class="stat-card"><div class="stat-label">My Tier</div><div class="stat-value" id="stat-tier">--</div></div>
+        <div class="stat-card"><div class="stat-label">My Margin</div><div class="stat-value" id="stat-tier" style="font-size:18px;">--</div></div>
         <div class="stat-card"><div class="stat-label">Commission Balance</div><div class="stat-value revenue" id="stat-commission">$0.00</div></div>
         <div class="stat-card"><div class="stat-label">My Stores</div><div class="stat-value" id="stat-my-stores">--</div></div>
         <div class="stat-card"><div class="stat-label">Total Orders</div><div class="stat-value" id="stat-total-orders">--</div></div>
@@ -57,6 +57,7 @@
         <div class="table-toolbar">
           <h2>Store Directory</h2>
           <div class="toolbar-controls">
+            <button class="btn btn-sm btn-green" onclick="openCsvImportModal()">📂 Import Stores</button>
             <input type="text" class="search-input" id="search-input" placeholder="Search stores..." oninput="filterStores(this.value)">
           </div>
         </div>
@@ -115,7 +116,7 @@
         <div class="modal" style="max-width:480px;">
           <button class="close-btn" onclick="document.getElementById('claim-store-modal').classList.remove('active')">&times;</button>
           <h2>Claim a Store</h2>
-          <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Submit a store for exclusive assignment. Admin will review and approve your claim.</p>
+          <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Claim a store for exclusive assignment — it's yours instantly. If another rep already claimed it, it's flagged for admin review.</p>
           <div style="display:flex;flex-direction:column;gap:12px;">
             <div style="position:relative;">
               <input type="text" id="cs-search" placeholder="🔍 Search existing stores on network..."
@@ -185,7 +186,55 @@
     </div>
   </div>
 
+  <script type="module" src="/js/admin-csv-import.js"></script>
   <script src="/js/app.js"></script>
+
+  <!-- CSV Import Modal -->
+  <div class="modal-overlay" id="csv-import-modal" onclick="if(event.target===this)closeCsvModal()">
+    <div class="modal" style="max-width:760px;max-height:90vh;overflow-y:auto;">
+      <button class="close-btn" onclick="closeCsvModal()">&times;</button>
+      <h2>📂 Import Stores from CSV</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        Upload a CSV or Excel file (.csv, .xlsx, .xls) with your store data — imported stores are claimed to your account. Columns are matched automatically; you can correct any mismatches before importing.
+        <a href="#" onclick="downloadExampleCsv();return false;" style="color:var(--accent);margin-left:8px;">⬇ Download example file</a>
+      </p>
+      <div id="csv-step-upload">
+        <label style="display:block;border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:14px;" for="csv-file-input">
+          <div style="font-size:36px;margin-bottom:8px;">📄</div>
+          <div>Click to choose a CSV or Excel file, or drag and drop</div>
+        </label>
+        <input type="file" id="csv-file-input" accept=".csv,.xlsx,.xls,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;" onchange="handleCsvFile(event)">
+      </div>
+      <div id="csv-step-mapping" style="display:none;">
+        <h3 style="font-size:15px;margin-bottom:12px;">Step 1 — Match columns</h3>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">These are our best guesses. Fix any that look wrong before continuing.</p>
+        <div id="csv-mapping-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px;"></div>
+        <button class="btn btn-green" onclick="runCsvPreview()">Preview Import →</button>
+      </div>
+      <div id="csv-step-preview" style="display:none;">
+        <h3 style="font-size:15px;margin-bottom:8px;">Step 2 — Review</h3>
+        <div id="csv-stats" style="display:flex;gap:16px;margin-bottom:14px;font-size:13px;"></div>
+        <div id="csv-warnings-wrap" style="display:none;background:var(--amberBg,#fffbeb);border:1px solid var(--amber,#d97706);border-radius:8px;padding:12px;margin-bottom:14px;">
+          <div style="font-weight:700;font-size:13px;color:var(--amber,#d97706);margin-bottom:6px;">⚠️ Warnings:</div>
+          <div id="csv-warnings-list" style="font-size:12px;color:var(--text-secondary);max-height:120px;overflow-y:auto;line-height:1.8;"></div>
+        </div>
+        <div style="overflow-x:auto;margin-bottom:16px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;" id="csv-preview-table"></table>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <button class="btn btn-green" id="csv-import-btn" onclick="runCsvImport()">Import <span id="csv-import-count"></span> Stores</button>
+          <button class="btn btn-outline" onclick="csvBack()">← Back</button>
+        </div>
+      </div>
+      <div id="csv-step-results" style="display:none;">
+        <h3 style="font-size:15px;margin-bottom:12px;">Import Complete</h3>
+        <div id="csv-result-summary" style="margin-bottom:14px;"></div>
+        <div id="csv-result-errors" style="display:none;"></div>
+        <button class="btn btn-outline" onclick="closeCsvModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Store Photo Upload Modal (required after claiming) -->
   <div id="store-photo-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);overflow-y:auto;">
     <div style="background:var(--bg-card);border-radius:16px;max-width:520px;margin:40px auto;padding:32px;position:relative;">

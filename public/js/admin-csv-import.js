@@ -55,7 +55,7 @@ function showStep(id) {
     .forEach(s => { const el = document.getElementById(s); if (el) el.style.display = s === id ? 'block' : 'none'; });
 }
 
-function getToken() { return localStorage.getItem('addy_token'); }
+function getToken() { return sessionStorage.getItem('addy_preview_token') || localStorage.getItem('addy_token'); }
 
 // ── Public API (called from HTML onclicks / app.js) ───────────────────────────
 window.openCsvImportModal = function() {
@@ -64,6 +64,7 @@ window.openCsvImportModal = function() {
   showStep('csv-step-upload');
   document.getElementById('csv-file-input').value = '';
   document.getElementById('csv-import-modal').classList.add('active');
+  wireDropZone();
 };
 
 window.closeCsvModal = function() {
@@ -78,16 +79,30 @@ window.downloadExampleCsv = async function() {
   a.click();
 };
 
+// Accepts a File from the picker OR from drag-and-drop, in CSV or Excel form.
 window.handleCsvFile = async function(event) {
   const file = event.target.files[0];
-  if (!file) return;
-  const text = await file.text();
-  const parsed = parseCsv(text);
+  if (file) await ingestFile(file);
+};
+
+async function ingestFile(file) {
+  const name = (file.name || '').toLowerCase();
+  let parsed;
+  try {
+    if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.xlsm')) {
+      parsed = await parseSpreadsheet(file);   // Excel → CSV → same parser
+    } else {
+      parsed = parseCsv(await file.text());
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast(e.message || 'Could not read that file', 'error');
+    return;
+  }
   _headers = parsed.headers;
   _records = parsed.records;
 
   if (_records.length === 0) {
-    if (typeof showToast === 'function') showToast('CSV has no data rows', 'error');
+    if (typeof showToast === 'function') showToast('That file has no data rows', 'error');
     return;
   }
   if (_records.length > 500) {
@@ -98,7 +113,47 @@ window.handleCsvFile = async function(event) {
   _mapping = autoMap(_headers, storeFields);
   renderMappingGrid();
   showStep('csv-step-mapping');
-};
+}
+
+// ── Excel support ─────────────────────────────────────────────────────────────
+// SheetJS is only fetched the first time someone actually picks an Excel file,
+// so CSV-only users never download it. We convert the first sheet to CSV text and
+// reuse the exact same parsing/cleaning path as a real .csv upload.
+let _xlsxLoading = null;
+function loadXlsx() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (_xlsxLoading) return _xlsxLoading;
+  _xlsxLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = () => { _xlsxLoading = null; reject(new Error('Excel support could not load — check your connection, or save the file as CSV and try again.')); };
+    document.head.appendChild(s);
+  });
+  return _xlsxLoading;
+}
+
+async function parseSpreadsheet(file) {
+  const XLSX = await loadXlsx();
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (!sheet) throw new Error('That spreadsheet has no readable sheets');
+  return parseCsv(XLSX.utils.sheet_to_csv(sheet));
+}
+
+// Make the upload box a real drag-and-drop target (the label already says so).
+function wireDropZone() {
+  const zone = document.querySelector('#csv-step-upload label');
+  if (!zone || zone._dropWired) return;
+  zone._dropWired = true;
+  const stop = e => { e.preventDefault(); e.stopPropagation(); };
+  ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { stop(e); zone.style.borderColor = 'var(--accent)'; zone.style.opacity = '0.85'; }));
+  ['dragleave','dragend','drop'].forEach(ev => zone.addEventListener(ev, e => { stop(e); zone.style.borderColor = ''; zone.style.opacity = ''; }));
+  zone.addEventListener('drop', e => {
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) ingestFile(file);
+  });
+}
 
 function renderMappingGrid() {
   const grid = document.getElementById('csv-mapping-grid');
@@ -223,8 +278,9 @@ window.runCsvImport = async function() {
 
     showStep('csv-step-results');
 
-    // Refresh the stores table in background
-    if (typeof loadAdminStores === 'function') loadAdminStores();
+    // Refresh whatever store view is on the current page (admin or DSD dashboard)
+    ['loadAdminStores','loadAdminDashboard','loadDSDDashboard']
+      .forEach(fn => { if (typeof window[fn] === 'function') { try { window[fn](); } catch(_) {} } });
 
   } catch(e) {
     if (typeof showToast === 'function') showToast('Import failed: ' + e.message, 'error');

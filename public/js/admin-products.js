@@ -181,6 +181,8 @@ function showEditProduct(id) {
   document.getElementById('pf-description').value = p.description || '';
   document.getElementById('pf-stock').value = p.stock;
   document.getElementById('pf-active').value = String(p.active ?? 1);
+  const btEl = document.getElementById('pf-box-type');
+  if (btEl) btEl.value = p.box_type || '';
   document.getElementById('pf-image-url').value = p.image_url || '';
   updateImagePreview(p.image_url);
   // Fill all tier prices
@@ -325,6 +327,7 @@ async function handleProductSubmit(e) {
     description: document.getElementById('pf-description').value.trim(),
     stock: parseInt(document.getElementById('pf-stock').value) || 0,
     active: parseInt(document.getElementById('pf-active').value),
+    box_type: document.getElementById('pf-box-type')?.value || null,
     image_url: document.getElementById('pf-image-url').value.trim(),
     prices
   };
@@ -363,10 +366,10 @@ function updateTierPricePreview() {
     return;
   }
 
-  // DSD pays = retail × (1 - their margin) — they make their % when selling at retail
-  const t1pays = retail * 0.65;  // Tier 1: 35% margin
-  const t2pays = retail * 0.70;  // Tier 2: 30% margin
-  const t3pays = retail * 0.75;  // Tier 3: 25% margin
+  // Rep pays = retail × (1 - discount). New reps start at 20% and earn up with volume.
+  const t1pays = retail * 0.80;  // 20% off (new rep)
+  const t2pays = retail * 0.75;  // 25% off (15+ boxes)
+  const t3pays = retail * 0.70;  // 30% off (27+ boxes)
 
   if (els.t1) els.t1.textContent = '$' + t1pays.toFixed(2) + ' / unit';
   if (els.t2) els.t2.textContent = '$' + t2pays.toFixed(2) + ' / unit';
