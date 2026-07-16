@@ -88,6 +88,20 @@ async function sendPushToAdmins(title, body, url) {
   } catch(e) { console.error('Push notification error:', e.message); }
 }
 
+// Send a push notification to one specific user (all their devices).
+async function sendPushToUser(userId, title, body, url) {
+  try {
+    const subs = await all('SELECT subscription FROM push_subscriptions WHERE user_id=$1', [userId]);
+    for (const row of subs) {
+      try {
+        await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, url: url || '/' }));
+      } catch(e) {
+        if (e.statusCode === 410) await q('DELETE FROM push_subscriptions WHERE subscription=$1', [row.subscription]);
+      }
+    }
+  } catch(e) { console.error('sendPushToUser error:', e.message); }
+}
+
 // ── EMAIL HELPER ──────────────────────────────────────────────────────────────
 async function sendNotification(subject, htmlBody) {
   if (!resend) return; // silently skip if no API key configured
@@ -205,6 +219,15 @@ async function migrate() {
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     message TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewed','planned','done','declined')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
+  // ── Admin → user messages ("ping a user") ────────────────────────────────────
+  await q(`CREATE TABLE IF NOT EXISTS admin_messages (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message TEXT NOT NULL,
+    read_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
 
@@ -770,6 +793,20 @@ app.get('/api/stores', authenticate, async (req, res) => {
     const offset = (pageNum-1)*pageSize;
 
     const stores = await all(`${baseSelect}${where}${orderClause} LIMIT $${pi} OFFSET $${pi+1}`, [...params, pageSize, offset]);
+    // Admin view: attach which rep claimed / is assigned to each store.
+    if (role === 'admin' && stores.length) {
+      const ids = stores.map(s => s.id);
+      const claims = await all(`
+        SELECT store_id, string_agg(DISTINCT COALESCE(u.name,u.email), ', ') AS claimed_by FROM (
+          SELECT id AS store_id, exclusive_rep_id AS uid FROM stores WHERE id = ANY($1) AND exclusive_rep_id IS NOT NULL
+          UNION
+          SELECT store_id, owner_id AS uid FROM owner_stores WHERE store_id = ANY($1)
+          UNION
+          SELECT store_id, dsd_id  AS uid FROM dsd_stores   WHERE store_id = ANY($1)
+        ) t JOIN users u ON u.id = t.uid GROUP BY store_id`, [ids]);
+      const map = {}; claims.forEach(c => { map[c.store_id] = c.claimed_by; });
+      stores.forEach(s => { s.claimed_by = map[s.id] || null; });
+    }
     const stats = await one('SELECT COUNT(*) as total, SUM(monthly_revenue) as total_revenue, AVG(monthly_revenue) as avg_revenue FROM stores');
     const byCategory = await all('SELECT category, SUM(monthly_revenue) as revenue, COUNT(*) as count FROM stores GROUP BY category ORDER BY revenue DESC');
     const top10 = await all('SELECT id,name,monthly_revenue FROM stores ORDER BY monthly_revenue DESC LIMIT 10');
@@ -1013,6 +1050,53 @@ app.post('/api/users', authenticate, authorize('admin'), async (req, res) => {
 app.get('/api/users', authenticate, authorize('admin'), async (req, res) => {
   try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,locked_discount_pct,can_pay_invoice FROM users ORDER BY role,name')); }
   catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+// ── ADMIN → USER MESSAGES ("ping a user") ─────────────────────────────────────
+app.post('/api/users/:id/ping', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const message = (req.body.message || '').trim();
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+    if (message.length > 1000) return res.status(400).json({ error: 'Message is too long (max 1000 characters)' });
+    const user = await one('SELECT id, name, email FROM users WHERE id=$1', [req.params.id]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    await q('INSERT INTO admin_messages (user_id, message) VALUES ($1,$2)', [user.id, message]);
+    await logActivity('pinged_user', `${user.name || user.email}: ${message.slice(0, 80)}`, req.user.email);
+
+    // Best-effort push + email so they see it even when not logged in.
+    sendPushToUser(user.id, 'Message from ADDY admin', message, '/dashboard-dsd.html').catch(() => {});
+    if (resend && user.email) {
+      try {
+        await resend.emails.send({
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g, ' ').trim(),
+          to: [user.email],
+          subject: '📨 A message from the ADDY admin',
+          html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
+            <p style="font-size:15px;color:#334155;">Hi ${user.name || 'there'},</p>
+            <p style="font-size:15px;color:#334155;line-height:1.6;white-space:pre-wrap;">${message.replace(/</g,'&lt;')}</p>
+            <p style="font-size:13px;color:#94a3b8;margin-top:24px;">Log in to your ADDY dashboard to take care of this.</p>
+          </div>`
+        });
+      } catch(e) { console.error('Ping email failed:', e.message); }
+    }
+    res.json({ success: true });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+// A user fetches the messages an admin sent them
+app.get('/api/my-messages', authenticate, async (req, res) => {
+  try {
+    res.json(await all('SELECT id, message, read_at, created_at FROM admin_messages WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50', [req.user.id]));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Mark all of a user's admin messages as read
+app.post('/api/my-messages/read', authenticate, async (req, res) => {
+  try {
+    await q('UPDATE admin_messages SET read_at=NOW() WHERE user_id=$1 AND read_at IS NULL', [req.user.id]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.patch('/api/users/:id/status', authenticate, authorize('admin'), async (req, res) => {

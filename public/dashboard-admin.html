@@ -118,6 +118,7 @@
                   <th class="check-col"><input type="checkbox" onchange="toggleSelectAll(this.checked)"></th>
                   <th data-sort="name" onclick="sortAdmin('name')">Store Name</th>
                   <th data-sort="owner_name" onclick="sortAdmin('owner_name')">Owner</th>
+                  <th>Claimed By</th>
                   <th>Email</th>
                   <th data-sort="city" onclick="sortAdmin('city')">City</th>
                   <th data-sort="state" onclick="sortAdmin('state')">State</th>
@@ -129,7 +130,7 @@
                   <th>Dist. Cost</th>
                 </tr>
               </thead>
-              <tbody id="stores-tbody"><tr><td colspan="12" class="loading">Loading stores...</td></tr></tbody>
+              <tbody id="stores-tbody"><tr><td colspan="13" class="loading">Loading stores...</td></tr></tbody>
             </table>
           </div>
           <div class="table-footer" id="table-footer"></div>

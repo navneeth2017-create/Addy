@@ -176,7 +176,33 @@ function requireAuth(allowedRoles) {
   const role = getRole();
   if (!token || !role) { window.location.href = '/login.html'; return false; }
   if (allowedRoles && !allowedRoles.includes(role)) { window.location.href = '/login.html'; return false; }
+  if (role !== 'admin') checkAdminMessages();
   return true;
+}
+
+// Show a dismissible banner with any unread messages an admin sent this user.
+async function checkAdminMessages() {
+  try {
+    const msgs = await apiFetch('/api/my-messages');
+    if (!msgs || !msgs.length) return;
+    const unread = msgs.filter(m => !m.read_at);
+    if (!unread.length) return;
+    const existing = document.getElementById('admin-message-banner');
+    if (existing) existing.remove();
+    const banner = document.createElement('div');
+    banner.id = 'admin-message-banner';
+    banner.style.cssText = 'background:#2563eb;color:#fff;padding:12px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;font-size:13px;font-weight:600;position:sticky;top:0;z-index:1000;';
+    banner.innerHTML = `<div style="flex:1;">📨 ${unread.length === 1 ? 'Message from admin' : unread.length + ' messages from admin'}:
+      <div style="font-weight:400;margin-top:6px;line-height:1.6;white-space:pre-wrap;">${unread.map(m => '• ' + esc(m.message)).join('<br>')}</div></div>
+      <button onclick="dismissAdminMessages()" style="background:rgba(255,255,255,0.25);color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600;white-space:nowrap;">Got it</button>`;
+    document.body.prepend(banner);
+  } catch(e) { /* non-critical */ }
+}
+
+async function dismissAdminMessages() {
+  try { await apiFetch('/api/my-messages/read', { method: 'POST' }); } catch(e) {}
+  const b = document.getElementById('admin-message-banner');
+  if (b) b.remove();
 }
 
 async function apiFetch(url, options = {}) {
@@ -1819,13 +1845,14 @@ async function refreshAdminTable() {
 
   const tbody = document.getElementById('stores-tbody');
   if (data.stores.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="12" class="loading">No stores found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="loading">No stores found</td></tr>';
   } else {
     tbody.innerHTML = data.stores.map(s => `
       <tr>
         <td class="check-col"><input type="checkbox" value="${s.id}" onchange="toggleStoreSelect(${s.id}, this.checked)"></td>
         <td style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</td>
         <td>${esc(s.owner_name)}</td>
+        <td>${s.claimed_by ? esc(s.claimed_by) : '<span style="color:var(--text-muted);">—</span>'}</td>
         <td>${esc(s.email)}</td>
         <td>${esc(s.city)}</td>
         <td>${esc(s.state)}</td>
@@ -1988,11 +2015,24 @@ async function loadUsersTab() {
             ? `<button class="btn btn-sm btn-outline" onclick="showChangeTierModal(${u.id}, '${esc(u.name || u.email)}')">Change Tier</button>`
             : ''
           }
+          ${u.role !== 'admin'
+            ? `<button class="btn btn-sm btn-outline" onclick="pingUser(${u.id}, '${esc(u.name || u.email)}')" title="Send this user a message">📨 Ping</button>`
+            : ''
+          }
           <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${esc(u.name || u.email)}')">Delete</button>
         </div>
       </td>
     </tr>
   `).join('');
+}
+
+async function pingUser(id, name) {
+  const message = prompt(`Send a message to ${name}:`, '');
+  if (message === null) return;              // cancelled
+  if (!message.trim()) { showToast('Message is empty', 'error'); return; }
+  const r = await apiFetch(`/api/users/${id}/ping`, { method: 'POST', body: JSON.stringify({ message: message.trim() }) });
+  if (r && r.success) showToast(`Message sent to ${name} ✓`, 'success');
+  else if (r && r.error) showToast(r.error, 'error');
 }
 
 function showCreateUserModal(role) {
