@@ -1011,6 +1011,42 @@ input[type="checkbox"] {
 
 /* --- Print Styles --- */
 
+/* Card view for opted-in tables on phones (add class="cardify" to a <table>) */
+@media (max-width: 640px) {
+  .table-wrap table.cardify { min-width: 0 !important; }
+  table.cardify thead { display: none; }
+  table.cardify, table.cardify tbody, table.cardify tr, table.cardify td { display: block; width: 100%; }
+  table.cardify tr {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 12px;
+    padding: 6px 12px;
+    background: var(--bg-card);
+  }
+  table.cardify td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    text-align: right;
+    padding: 7px 0;
+    border: none !important;
+    border-bottom: 1px solid var(--border) !important;
+  }
+  table.cardify tr td:last-child { border-bottom: none !important; }
+  table.cardify td::before {
+    content: attr(data-label);
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    text-align: left;
+    flex-shrink: 0;
+  }
+  table.cardify td.check-col { display: none; }
+}
+
 @media print {
   .topbar, .page-actions, .table-toolbar, .table-footer,
   .bulk-bar, .toast-container, .session-warning, .theme-toggle,

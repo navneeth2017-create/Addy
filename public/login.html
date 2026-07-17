@@ -127,6 +127,15 @@
       sessionStorage.removeItem('open_signup');
       document.addEventListener('DOMContentLoaded', () => showSignup());
     }
+    // Referral link: /login.html?ref=<inviter-email> opens signup with the code prefilled
+    const _refCode = new URLSearchParams(location.search).get('ref');
+    if (_refCode) {
+      document.addEventListener('DOMContentLoaded', () => {
+        showSignup();
+        const el = document.querySelector('input[name="referral_code"]');
+        if (el) el.value = _refCode;
+      });
+    }
 
 function hideAll() {
       ['login-form-wrap','signup-form-wrap','forgot-form-wrap','reset-form-wrap'].forEach(id => {

@@ -102,6 +102,26 @@ async function sendPushToUser(userId, title, body, url) {
   } catch(e) { console.error('sendPushToUser error:', e.message); }
 }
 
+// Deliver an admin message to a user: in-app inbox + best-effort push & email.
+async function deliverAdminPing(user, message) {
+  await q('INSERT INTO admin_messages (user_id, message) VALUES ($1,$2)', [user.id, message]);
+  sendPushToUser(user.id, 'Message from ADDY admin', message, '/dashboard-dsd.html').catch(() => {});
+  if (resend && user.email) {
+    try {
+      await resend.emails.send({
+        from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g, ' ').trim(),
+        to: [user.email],
+        subject: '📨 A message from the ADDY admin',
+        html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
+          <p style="font-size:15px;color:#334155;">Hi ${user.name || 'there'},</p>
+          <p style="font-size:15px;color:#334155;line-height:1.6;white-space:pre-wrap;">${message.replace(/</g,'&lt;')}</p>
+          <p style="font-size:13px;color:#94a3b8;margin-top:24px;">Log in to your ADDY dashboard to take care of this.</p>
+        </div>`
+      });
+    } catch(e) { console.error('Ping email failed:', e.message); }
+  }
+}
+
 // ── EMAIL HELPER ──────────────────────────────────────────────────────────────
 async function sendNotification(subject, htmlBody) {
   if (!resend) return; // silently skip if no API key configured
@@ -1097,6 +1117,30 @@ app.post('/api/my-messages/read', authenticate, async (req, res) => {
     await q('UPDATE admin_messages SET read_at=NOW() WHERE user_id=$1 AND read_at IS NULL', [req.user.id]);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin pings whoever claimed / is assigned to a store (e.g. "this store is missing an address").
+app.post('/api/stores/:id/ping-owner', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const message = (req.body.message || '').trim();
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+    if (message.length > 1000) return res.status(400).json({ error: 'Message is too long (max 1000 characters)' });
+    const store = await one('SELECT id, name FROM stores WHERE id=$1', [req.params.id]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    const owners = await all(`
+      SELECT DISTINCT uid FROM (
+        SELECT exclusive_rep_id AS uid FROM stores WHERE id=$1 AND exclusive_rep_id IS NOT NULL
+        UNION SELECT owner_id FROM owner_stores WHERE store_id=$1
+        UNION SELECT dsd_id   FROM dsd_stores   WHERE store_id=$1
+      ) t WHERE uid IS NOT NULL`, [req.params.id]);
+    if (!owners.length) return res.status(400).json({ error: 'No rep has claimed this store yet.' });
+    for (const o of owners) {
+      const u = await one('SELECT id, name, email FROM users WHERE id=$1', [o.uid]);
+      if (u) await deliverAdminPing(u, message);
+    }
+    await logActivity('pinged_store_owner', `${store.name}: ${message.slice(0, 60)}`, req.user.email);
+    res.json({ success: true, pinged: owners.length });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 app.patch('/api/users/:id/status', authenticate, authorize('admin'), async (req, res) => {

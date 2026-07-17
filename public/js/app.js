@@ -180,29 +180,126 @@ function requireAuth(allowedRoles) {
   return true;
 }
 
-// Show a dismissible banner with any unread messages an admin sent this user.
+// Notification bell + inbox: shows messages an admin sent this user, with an unread badge.
 async function checkAdminMessages() {
-  try {
-    const msgs = await apiFetch('/api/my-messages');
-    if (!msgs || !msgs.length) return;
-    const unread = msgs.filter(m => !m.read_at);
-    if (!unread.length) return;
-    const existing = document.getElementById('admin-message-banner');
-    if (existing) existing.remove();
-    const banner = document.createElement('div');
-    banner.id = 'admin-message-banner';
-    banner.style.cssText = 'background:#2563eb;color:#fff;padding:12px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;font-size:13px;font-weight:600;position:sticky;top:0;z-index:1000;';
-    banner.innerHTML = `<div style="flex:1;">📨 ${unread.length === 1 ? 'Message from admin' : unread.length + ' messages from admin'}:
-      <div style="font-weight:400;margin-top:6px;line-height:1.6;white-space:pre-wrap;">${unread.map(m => '• ' + esc(m.message)).join('<br>')}</div></div>
-      <button onclick="dismissAdminMessages()" style="background:rgba(255,255,255,0.25);color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600;white-space:nowrap;">Got it</button>`;
-    document.body.prepend(banner);
-  } catch(e) { /* non-critical */ }
+  try { renderMessageBell(await apiFetch('/api/my-messages') || []); } catch(e) { /* non-critical */ }
+}
+
+function renderMessageBell(msgs) {
+  if (!msgs.length) { const b = document.getElementById('msg-bell'); if (b) b.remove(); return; }
+  const unread = msgs.filter(m => !m.read_at).length;
+  let bell = document.getElementById('msg-bell');
+  if (!bell) {
+    bell = document.createElement('div');
+    bell.id = 'msg-bell';
+    bell.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:1000;';
+    document.body.appendChild(bell);
+  }
+  bell.innerHTML = `
+    <button onclick="toggleMessagePanel()" title="Messages from admin" style="position:relative;width:52px;height:52px;border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:22px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.25);">🔔
+      ${unread ? `<span style="position:absolute;top:-2px;right:-2px;background:#dc2626;color:#fff;border-radius:999px;min-width:20px;height:20px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 5px;">${unread}</span>` : ''}
+    </button>
+    <div id="msg-panel" style="display:none;position:absolute;bottom:64px;right:0;width:320px;max-height:60vh;overflow-y:auto;background:var(--bg-card,#fff);color:var(--text,#0f172a);border:1px solid var(--border,#e2e8f0);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.2);padding:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <strong style="font-size:14px;">Messages</strong>
+        ${unread ? `<button onclick="dismissAdminMessages()" style="font-size:12px;background:none;border:none;color:#2563eb;cursor:pointer;">Mark all read</button>` : ''}
+      </div>
+      ${msgs.map(m => `
+        <div style="padding:10px;border-radius:8px;margin-bottom:8px;background:${m.read_at ? 'transparent' : 'rgba(37,99,235,0.10)'};border:1px solid var(--border,#e2e8f0);">
+          <div style="font-size:13px;line-height:1.5;white-space:pre-wrap;">${esc(m.message)}</div>
+          <div style="font-size:11px;color:var(--text-muted,#94a3b8);margin-top:4px;">${new Date(m.created_at).toLocaleString()}</div>
+        </div>`).join('')}
+    </div>`;
+  if (unread && !bell._nudged) { bell._nudged = true; const p = document.getElementById('msg-panel'); if (p) p.style.display = 'block'; }
+}
+
+function toggleMessagePanel() {
+  const p = document.getElementById('msg-panel');
+  if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
 }
 
 async function dismissAdminMessages() {
   try { await apiFetch('/api/my-messages/read', { method: 'POST' }); } catch(e) {}
-  const b = document.getElementById('admin-message-banner');
-  if (b) b.remove();
+  checkAdminMessages();
+}
+
+// Getting-started checklist for new reps — hides itself once all steps are done.
+async function renderOnboardingChecklist() {
+  const el = document.getElementById('onboarding-checklist');
+  if (!el) return;
+  if (typeof getRole === 'function' && getRole() !== 'dsd') { el.innerHTML = ''; return; } // reps only, not members
+  try {
+    const [orders, storesData, photos] = await Promise.all([
+      apiFetch('/api/orders').catch(() => []),
+      apiFetch('/api/stores').catch(() => ({ stores: [] })),
+      apiFetch('/api/my-stores/photos-pending').catch(() => [])
+    ]);
+    const ordersCount = Array.isArray(orders) ? orders.length : (orders?.orders?.length || 0);
+    const storesCount = storesData?.stores?.length || 0;
+    const photosPending = Array.isArray(photos) ? photos.length : 0;
+    const steps = [
+      { done: ordersCount > 0, label: 'Place your first order', hint: 'One master box of each type — shots, blister card, gummies.' },
+      { done: storesCount > 0, label: 'Claim your first store', hint: 'Lock in a store as your exclusive territory.' },
+      { done: storesCount > 0 && photosPending === 0, label: 'Upload your store photos', hint: 'Required within your photo deadline.' },
+    ];
+    if (steps.every(s => s.done)) { el.innerHTML = ''; return; }
+    const completed = steps.filter(s => s.done).length;
+    el.innerHTML = `
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:20px;">
+        <strong style="font-size:15px;display:block;margin-bottom:12px;">🚀 Getting started (${completed}/${steps.length})</strong>
+        ${steps.map(s => `
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;">
+            <div style="width:22px;height:22px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:${s.done?'#22c55e':'var(--bg-secondary,#eef2f7)'};color:${s.done?'#fff':'var(--text-muted,#94a3b8)'};border:2px solid ${s.done?'#22c55e':'var(--border,#e2e8f0)'};">${s.done?'✓':''}</div>
+            <div><div style="font-size:13px;font-weight:600;color:var(--text);${s.done?'text-decoration:line-through;opacity:0.6;':''}">${s.label}</div><div style="font-size:12px;color:var(--text-muted);">${s.hint}</div></div>
+          </div>`).join('')}
+      </div>`;
+  } catch(e) { /* non-critical */ }
+}
+
+// Visual margin progress: 20% → 25% (15 boxes) → 30% (27 boxes).
+function renderMarginProgress(profile) {
+  const el = document.getElementById('margin-progress');
+  if (!el) return;
+  const pct = profile.discount_pct != null ? profile.discount_pct : 20;
+  if (profile.locked_discount_pct != null) {
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your margin is <strong>locked at ${pct}%</strong> on every order.</div>`;
+    return;
+  }
+  const boxes = profile.boxes_bought || 0;
+  const progress = Math.min(100, (boxes / 27) * 100);
+  const toNext = profile.next_tier_at ? Math.max(0, profile.next_tier_at - boxes) : 0;
+  const nextPct = pct < 25 ? 25 : 30;
+  el.innerHTML = `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:20px;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px;">
+        <span style="font-weight:700;">Your margin: ${pct}%</span>
+        <span style="color:var(--text-muted);">${boxes} master box${boxes===1?'':'es'} bought</span>
+      </div>
+      <div style="position:relative;height:10px;background:var(--bg-secondary,#eef2f7);border-radius:999px;overflow:hidden;">
+        <div style="height:100%;width:${progress}%;background:linear-gradient(90deg,#22c55e,#2563eb);border-radius:999px;transition:width .5s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:6px;">
+        <span>20%</span><span>25% · 15 boxes</span><span>30% · 27 boxes</span>
+      </div>
+      ${profile.next_tier_at
+        ? `<div style="font-size:12px;color:var(--text);margin-top:8px;">📦 <strong>${toNext}</strong> more master box${toNext===1?'':'es'} to reach ${nextPct}% margin.</div>`
+        : `<div style="font-size:12px;color:var(--green);margin-top:8px;">🎉 You've reached the top 30% margin!</div>`}
+    </div>`;
+}
+
+// Copy this rep's invite link (prefills their email as the referral code at signup).
+function copyReferralLink() {
+  const email = window._myEmail;
+  if (!email) { showToast('Still loading — try again in a moment', 'info'); return; }
+  const link = `${location.origin}/login.html?ref=${encodeURIComponent(email)}`;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(
+      () => showToast('Invite link copied! Share it — you earn 5% on their orders.', 'success'),
+      () => prompt('Copy your invite link:', link)
+    );
+  } else {
+    prompt('Copy your invite link:', link);
+  }
 }
 
 async function apiFetch(url, options = {}) {
@@ -809,7 +906,9 @@ async function bulkDelete() {
 
 async function deleteAllStores() {
   const total = document.getElementById('stat-total')?.textContent || 'all';
-  if (!confirm(`⚠️ Delete ALL ${total} stores? This will permanently remove every store in the system. This cannot be undone.`)) return;
+  const typed = prompt(`⚠️ This permanently deletes ALL ${total} stores and cannot be undone.\n\nType DELETE to confirm:`);
+  if (typed === null) return;
+  if (typed.trim().toUpperCase() !== 'DELETE') { showToast('Cancelled — you did not type DELETE', 'info'); return; }
   showToast('Deleting all stores...', 'info');
   const result = await apiFetch('/api/stores/delete-all', { method: 'POST' });
   if (result && result.success) {
@@ -1850,18 +1949,18 @@ async function refreshAdminTable() {
     tbody.innerHTML = data.stores.map(s => `
       <tr>
         <td class="check-col"><input type="checkbox" value="${s.id}" onchange="toggleStoreSelect(${s.id}, this.checked)"></td>
-        <td style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</td>
-        <td>${esc(s.owner_name)}</td>
-        <td>${s.claimed_by ? esc(s.claimed_by) : '<span style="color:var(--text-muted);">—</span>'}</td>
-        <td>${esc(s.email)}</td>
-        <td>${esc(s.city)}</td>
-        <td>${esc(s.state)}</td>
-        <td>${esc(s.category)}</td>
-        <td><span class="status-badge ${s.status}">${s.status}</span></td>
-        <td class="revenue-cell">${formatCurrency(s.monthly_revenue)}</td>
-        <td>${formatCurrency(s.wholesale_price)}</td>
-        <td>${formatCurrency(s.retail_price)}</td>
-        <td>${formatCurrency(s.distribution_cost)}</td>
+        <td data-label="Store"><span style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</span>${(() => { const m = storeMissingInfo(s); return m.length ? ` <span title="Missing: ${m.join(', ')}" style="cursor:help;">⚠️</span><button onclick="event.stopPropagation();pingStoreOwner(${s.id}, '${esc(s.name)}')" title="Ping the rep to fix this" style="margin-left:2px;background:none;border:none;cursor:pointer;font-size:13px;padding:0;vertical-align:middle;">📨</button>` : ''; })()}</td>
+        <td data-label="Owner">${esc(s.owner_name)}</td>
+        <td data-label="Claimed By">${s.claimed_by ? esc(s.claimed_by) : '<span style="color:var(--text-muted);">—</span>'}</td>
+        <td data-label="Email">${esc(s.email)}</td>
+        <td data-label="City">${esc(s.city)}</td>
+        <td data-label="State">${esc(s.state)}</td>
+        <td data-label="Category">${esc(s.category)}</td>
+        <td data-label="Status"><span class="status-badge ${s.status}">${s.status}</span></td>
+        <td data-label="Revenue/mo" class="revenue-cell">${formatCurrency(s.monthly_revenue)}</td>
+        <td data-label="Wholesale">${formatCurrency(s.wholesale_price)}</td>
+        <td data-label="Retail">${formatCurrency(s.retail_price)}</td>
+        <td data-label="Dist. Cost">${formatCurrency(s.distribution_cost)}</td>
       </tr>
     `).join('');
   }
@@ -1887,8 +1986,11 @@ async function loadDSDDashboard() {
   // Check for stores with pending photos and show reminder banner
   checkPhotoPendingBanner();
   // Load user profile to show tier and commission balance
+  renderOnboardingChecklist();
   const profile = await apiFetch('/api/profile');
   if (profile) {
+    window._myEmail = profile.email;
+    renderMarginProgress(profile);
     const tierEl = document.getElementById('stat-tier');
     if (tierEl) {
       const pct = profile.discount_pct != null ? profile.discount_pct : 20;
@@ -2032,6 +2134,28 @@ async function pingUser(id, name) {
   if (!message.trim()) { showToast('Message is empty', 'error'); return; }
   const r = await apiFetch(`/api/users/${id}/ping`, { method: 'POST', body: JSON.stringify({ message: message.trim() }) });
   if (r && r.success) showToast(`Message sent to ${name} ✓`, 'success');
+  else if (r && r.error) showToast(r.error, 'error');
+}
+
+// Which key fields a store is missing (used to flag incomplete records in the admin table).
+function storeMissingInfo(s) {
+  const na = v => !v || String(v).trim() === '' || String(v).trim().toUpperCase() === 'N/A';
+  const labels = [];
+  if (na(s.address)) labels.push('address');
+  if (na(s.city)) labels.push('city');
+  if (na(s.state)) labels.push('state');
+  if (na(s.zip)) labels.push('zip');
+  if (na(s.email)) labels.push('email');
+  if (na(s.phone)) labels.push('phone');
+  return labels;
+}
+
+async function pingStoreOwner(id, name) {
+  const message = prompt(`Message the rep who claimed "${name}":`, `Hi — the store "${name}" is missing some info. Please log in and update it. Thanks!`);
+  if (message === null) return;
+  if (!message.trim()) { showToast('Message is empty', 'error'); return; }
+  const r = await apiFetch(`/api/stores/${id}/ping-owner`, { method: 'POST', body: JSON.stringify({ message: message.trim() }) });
+  if (r && r.success) showToast(`Pinged the rep for "${name}" ✓`, 'success');
   else if (r && r.error) showToast(r.error, 'error');
 }
 
@@ -2254,6 +2378,26 @@ async function loadAdminOrders() {
   window._adminOrders = orders;
 }
 
+// Horizontal progress stepper for an order's status.
+function orderStatusTimeline(status) {
+  if (status === 'cancelled') {
+    return `<div style="background:var(--redBg,#fef2f2);color:var(--red,#dc2626);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;font-weight:600;">✕ This order was cancelled.</div>`;
+  }
+  const steps = ['pending','processing','shipped','delivered'];
+  const cur = Math.max(0, steps.indexOf(status));
+  return `<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;">
+    ${steps.map((s, i) => {
+      const done = i <= cur;
+      const label = s.charAt(0).toUpperCase() + s.slice(1);
+      return `<div style="flex:1;text-align:center;position:relative;">
+        ${i>0 ? `<div style="position:absolute;top:13px;left:-50%;width:100%;height:3px;background:${i<=cur?'#2563eb':'var(--border,#e2e8f0)'};z-index:0;"></div>` : ''}
+        <div style="position:relative;z-index:1;width:28px;height:28px;margin:0 auto 6px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background:${done?'#2563eb':'var(--bg-secondary,#eef2f7)'};color:${done?'#fff':'var(--text-muted,#94a3b8)'};border:2px solid ${done?'#2563eb':'var(--border,#e2e8f0)'};">${done?'✓':i+1}</div>
+        <div style="font-size:11px;font-weight:${i===cur?'700':'500'};color:${done?'var(--text)':'var(--text-muted)'};">${label}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 function showOrderDetail(orderId) {
   const o = (window._adminOrders || []).find(x => x.id === orderId);
   if (!o) return;
@@ -2287,6 +2431,8 @@ function renderOrderDetailModal(o, isAdmin) {
         <span class="status-badge ${o.payment_status==='paid'?'active':'pending'}" style="margin-left:4px;">${o.payment_status}</span>
       </div>
     </div>
+
+    ${orderStatusTimeline(o.status)}
 
     <div style="background:var(--bg-secondary);border-radius:10px;padding:16px;margin-bottom:16px;">
       <p style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;">Items Ordered (${o.items?o.items.length:0})</p>

@@ -17,6 +17,7 @@
         <button class="btn-logout" onclick="showFeedbackModal()" title="Suggest a feature or report an issue">💡 Feedback</button>
         <button class="btn-logout" onclick="showProfile()">Profile</button>
         <span class="role-badge" id="user-role">DSD</span>
+        <button class="btn-logout" onclick="copyReferralLink()" title="Copy your invite link — earn 5% on everyone you refer">🔗 Invite</button>
         <a href="/shop.html" style="padding:7px 16px;background:#2563eb;color:#fff;border-radius:7px;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;">🛒 Shop</a><button class="btn-logout" onclick="logout()">Sign Out</button>
       </div>
     </div>
@@ -43,6 +44,9 @@
         <div class="stat-card"><div class="stat-label">My Stores</div><div class="stat-value" id="stat-my-stores">--</div></div>
         <div class="stat-card"><div class="stat-label">Total Orders</div><div class="stat-value" id="stat-total-orders">--</div></div>
       </div>
+
+      <div id="margin-progress"></div>
+      <div id="onboarding-checklist"></div>
 
       <!-- Commission payout request banner -->
       <div id="payout-banner" style="display:none;background:linear-gradient(135deg,#059669,#047857);color:#fff;border-radius:12px;padding:16px 20px;margin-bottom:20px;display:none;align-items:center;justify-content:space-between;gap:16px;">
