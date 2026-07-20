@@ -17,21 +17,29 @@ async function loadMonarchSuite() {
   card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:20px;';
   anchor.after(card);
 
-  // Monarch configured but unreachable — say so plainly instead of failing on click.
-  if (status.monarch_reachable === false) {
-    card.innerHTML = `
-      <div style="font-weight:800;font-size:16px;margin-bottom:6px;">🚀 Sales Suite <span style="font-weight:500;font-size:12px;color:var(--text-muted);">powered by Monarch</span></div>
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;font-size:13px;color:#991b1b;">
-        ⚠️ Can't reach Monarch right now.<br><span style="color:#7f1d1d;">${esc(status.monarch_error || 'connection failed')}</span>
-        <div style="margin-top:8px;color:#7f1d1d;font-size:12px;">Check that Monarch is deployed and that <code>MONARCH_API_URL</code> (Addy) points to it, with <code>PARTNER_API_KEY</code> set on Monarch.</div>
-      </div>`;
-    return;
-  }
-
   const ws = status.workspace;
   const tierNames = { free: 'Free', starter: 'Starter', pro: 'Pro' };
 
   if (ws) {
+    // FREE: everything lives right here in Addy — no separate Monarch login.
+    if (ws.tier === 'free') {
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:800;font-size:16px;">🚀 Sales Suite <span style="font-weight:500;font-size:12px;color:var(--text-muted);">powered by Monarch</span></div>
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
+              You're on the <strong>Free</strong> plan ✓ — claim your stores and manage your customers right here.
+              ${status.checkout_ready ? '' : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-sm" onclick="switchMyTab('stores', document.querySelectorAll('.admin-tab')[1])" style="background:var(--accent);color:#fff;">My Stores →</button>
+            ${status.checkout_ready ? `<button class="btn btn-sm btn-outline" onclick="upgradeMonarch('starter')">⬆ Upgrade for AI</button>` : `<button class="btn btn-sm btn-outline" disabled>Paid plans soon</button>`}
+          </div>
+        </div>`;
+      return;
+    }
+    // PAID: real Monarch workspace — show login + open the Suite.
     card.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
         <div>
@@ -45,7 +53,7 @@ async function loadMonarchSuite() {
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${ws.temp_password !== null && ws.temp_password !== undefined ? `<button class="btn btn-sm btn-outline" onclick="revealMonarchCreds()">🔑 Show my login</button>` : ''}
           <a class="btn btn-sm btn-green" href="${esc(status.app_url)}" target="_blank" rel="noopener" style="text-decoration:none;">Open Sales Suite →</a>
-          ${ws.tier !== 'pro' && status.checkout_ready ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="upgradeMonarch('${ws.tier === 'free' ? 'starter' : 'pro'}')">⬆ Upgrade</button>` : ''}
+          ${ws.tier !== 'pro' && status.checkout_ready ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="upgradeMonarch('pro')">⬆ Upgrade</button>` : ''}
         </div>
       </div>`;
     return;
@@ -77,13 +85,12 @@ async function loadMonarchSuite() {
 }
 
 async function startMonarchFree() {
-  showToast('Setting up your workspace…', 'info');
+  showToast('Activating your Sales Suite…', 'info');
   const r = await apiFetch('/api/monarch/start-free', { method: 'POST' });
   if (r && r.success) {
-    showToast('Sales Suite created ✓', 'success');
+    showToast('Sales Suite active ✓ — claim your stores below', 'success');
     document.getElementById('monarch-suite-card')?.remove();
     await loadMonarchSuite();
-    revealMonarchCreds();
   }
 }
 

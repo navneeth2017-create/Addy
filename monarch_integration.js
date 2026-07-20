@@ -149,15 +149,45 @@ function installMonarchIntegration(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  /** Free tier — claim-your-stores workspace, provisioned instantly. */
+  /**
+   * Free tier — INSTANT and fully local to Addy. The free features (claim
+   * stores, customer list, order history) already live in Addy; free users
+   * just get the Monarch-branded experience here. We do NOT call Monarch on
+   * this request, so it can never hang or 504 even if Monarch is slow/down.
+   *
+   * A real Monarch free tenant is then created in the BACKGROUND (best-effort)
+   * purely to grow the Monarch user base — it never blocks the response and a
+   * failure is silent to the user.
+   */
   app.post('/api/monarch/start-free', authenticate, authorize('dsd'), async (req, res) => {
     try {
-      if (!configured()) return res.status(503).json({ error: 'Sales Suite is not configured yet' });
       const user = (await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [req.user.id])).rows[0];
       const existing = (await pool.query(`SELECT slug FROM monarch_workspaces WHERE user_id=$1`, [user.id])).rows[0];
       if (existing) return res.status(409).json({ error: 'You already have a Sales Suite workspace' });
-      const result = await provisionWorkspace(user, 'free');
-      res.status(201).json({ success: true, ...result });
+      const slug = slugify(user.name || user.email.split('@')[0], user.id);
+      // Local record first — this is what makes free work instantly.
+      await pool.query(
+        `INSERT INTO monarch_workspaces (user_id, slug, tier, status, monarch_email)
+         VALUES ($1,$2,'free','active',$3)`,
+        [user.id, slug, user.email]
+      );
+      res.status(201).json({ success: true, tier: 'free', slug });
+      // Grow the Monarch user base in the background — fire and forget.
+      if (configured()) {
+        (async () => {
+          try {
+            const created = await monarchApi('/tenants', 'POST', {
+              company_name: user.name ? `${user.name} Distribution` : `Addy Partner ${user.id}`,
+              slug, admin_email: user.email, admin_name: user.name || user.email, plan_tier: 'free',
+            });
+            await pool.query(
+              `UPDATE monarch_workspaces SET temp_password=$1, monarch_email=$2, updated_at=NOW() WHERE user_id=$3`,
+              [created.login.temp_password, created.login.email, user.id]
+            );
+            console.log(`🚀 (bg) Monarch free tenant created for Addy user ${user.id}`);
+          } catch (e) { console.error(`(bg) Monarch free provision failed for user ${user.id} (non-fatal):`, e.message); }
+        })();
+      }
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
