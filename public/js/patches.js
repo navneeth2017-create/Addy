@@ -224,6 +224,12 @@ async function loadMonarchAdminCard() {
     body.innerHTML = '<p style="font-size:13px;color:#dc2626;">Couldn\'t reach the integration — is the new code (boot.js + monarch_integration.js + package.json) deployed?</p>';
     return;
   }
+  if (data.configured && data.monarch_reachable === false) {
+    body.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;font-size:13px;color:#991b1b;">
+      ⚠️ Configured, but can't reach Monarch:<br><span style="color:#7f1d1d;">${esc(data.monarch_error || 'connection failed')}</span>
+      <div style="margin-top:8px;font-size:12px;">Verify Monarch is deployed and <code>MONARCH_API_URL</code> is correct, with <code>PARTNER_API_KEY</code> set on Monarch.</div></div>`;
+    return;
+  }
   if (!data.configured) {
     body.innerHTML = `
       <p style="font-size:13px;color:var(--text-secondary);margin:0 0 8px;">Deployed ✓ but not configured. Add these in Railway → Variables, then redeploy:</p>

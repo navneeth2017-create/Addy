@@ -38,15 +38,40 @@ const PRICE_TO_TIER = {
 
 function configured() { return !!(MONARCH_API && PARTNER_KEY); }
 
-async function monarchApi(path, method = 'GET', body = null) {
-  const res = await fetch(`${MONARCH_API}/api/partner${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json', 'X-Partner-Key': PARTNER_KEY },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+async function monarchApi(path, method = 'GET', body = null, timeoutMs = 12000) {
+  // Hard timeout: without it, a slow/unreachable Monarch makes Addy hang until
+  // the platform edge returns a mysterious 504. Fail fast with a real reason.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${MONARCH_API}/api/partner${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Partner-Key': PARTNER_KEY },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`Couldn't reach Monarch at ${MONARCH_API} within ${timeoutMs / 1000}s — is it deployed and is MONARCH_API_URL correct?`);
+    }
+    throw new Error(`Couldn't connect to Monarch at ${MONARCH_API}: ${e.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Monarch API error ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401) throw new Error('Monarch rejected the partner key — MONARCH_PARTNER_KEY must equal PARTNER_API_KEY on Monarch.');
+    if (res.status === 503) throw new Error('Monarch has no PARTNER_API_KEY set — add it on the Monarch deployment.');
+    throw new Error(data.error || `Monarch API error ${res.status}`);
+  }
   return data;
+}
+
+/** Quick connectivity probe used by the status endpoints — never throws. */
+async function monarchPing() {
+  try { await monarchApi('/plans', 'GET', null, 6000); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
 }
 
 function slugify(name, userId) {
@@ -110,14 +135,16 @@ function installMonarchIntegration(app) {
         `SELECT slug, tier, status, temp_password, monarch_email FROM monarch_workspaces WHERE user_id=$1`,
         [req.user.id]
       )).rows[0] || null;
-      let plans = null;
-      try { plans = await monarchApi('/plans'); } catch (e) { /* catalog is decoration */ }
+      let plans = null, reach = { ok: true };
+      try { plans = await monarchApi('/plans'); } catch (e) { reach = { ok: false, error: e.message }; }
       res.json({
         configured: true,
         app_url: MONARCH_APP,
         checkout_ready: !!(process.env.STRIPE_SECRET_KEY && process.env.MONARCH_STARTER_PRICE_ID && process.env.MONARCH_PRO_PRICE_ID),
         workspace: ws,
         plans,
+        monarch_reachable: reach.ok,
+        monarch_error: reach.ok ? null : reach.error,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -233,6 +260,8 @@ function installMonarchIntegration(app) {
   app.get('/api/admin/monarch/usage', authenticate, authorize('admin'), async (req, res) => {
     try {
       if (!configured()) return res.json({ configured: false, workspaces: [] });
+      const ping = await monarchPing();
+      if (!ping.ok) return res.json({ configured: true, monarch_reachable: false, monarch_error: ping.error, workspaces: [] });
       const rows = (await pool.query(
         `SELECT w.user_id, w.slug, w.tier, w.status, u.name, u.email
          FROM monarch_workspaces w JOIN users u ON u.id = w.user_id ORDER BY w.created_at ASC`
@@ -244,7 +273,7 @@ function installMonarchIntegration(app) {
         catch (e) { usage = { error: e.message }; }
         out.push({ ...r, usage });
       }
-      res.json({ configured: true, workspaces: out });
+      res.json({ configured: true, monarch_reachable: true, workspaces: out });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

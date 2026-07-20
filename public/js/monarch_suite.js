@@ -17,6 +17,17 @@ async function loadMonarchSuite() {
   card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:20px;';
   anchor.after(card);
 
+  // Monarch configured but unreachable — say so plainly instead of failing on click.
+  if (status.monarch_reachable === false) {
+    card.innerHTML = `
+      <div style="font-weight:800;font-size:16px;margin-bottom:6px;">🚀 Sales Suite <span style="font-weight:500;font-size:12px;color:var(--text-muted);">powered by Monarch</span></div>
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;font-size:13px;color:#991b1b;">
+        ⚠️ Can't reach Monarch right now.<br><span style="color:#7f1d1d;">${esc(status.monarch_error || 'connection failed')}</span>
+        <div style="margin-top:8px;color:#7f1d1d;font-size:12px;">Check that Monarch is deployed and that <code>MONARCH_API_URL</code> (Addy) points to it, with <code>PARTNER_API_KEY</code> set on Monarch.</div>
+      </div>`;
+    return;
+  }
+
   const ws = status.workspace;
   const tierNames = { free: 'Free', starter: 'Starter', pro: 'Pro' };
 
