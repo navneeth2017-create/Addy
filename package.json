@@ -4,8 +4,9 @@
   "description": "ADDY DSD Partner Portal",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "seed": "node db/seed.js"
+    "start": "node boot.js",
+    "seed": "node db/seed.js",
+    "start:unpatched": "node server.js"
   },
   "engines": {
     "node": "20.x"
