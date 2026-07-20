@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADDY - Shop</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="https://js.stripe.com/v3/"></script>
+  <script>const saved=localStorage.getItem('addy_theme')||'light';document.documentElement.setAttribute('data-theme',saved);</script>
+  <style>
+    .shop-layout { display: grid; grid-template-columns: 1fr 340px; gap: 24px; align-items: start; }
+    .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; align-items: stretch; }
+    .product-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: box-shadow 0.2s, transform 0.2s; display: flex; flex-direction: column; }
+    .product-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.1); transform: translateY(-2px); }
+    .product-body { padding: 14px; display: flex; flex-direction: column; flex: 1; }
+    .product-img-wrap { width: 100%; height: 200px; background: var(--bg-secondary); overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; position: relative; padding: 12px; box-sizing: border-box; }
+    .product-img-wrap .product-img { width: 100%; height: 100%; object-fit: contain; display: none; }
+    .product-img-wrap.loaded .product-img { display: block; }
+    .product-img-wrap .product-img-fallback, .product-img-wrap .product-img-placeholder { font-size: 48px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .product-img-wrap .product-img-placeholder p { font-size: 11px; color: var(--text-muted); text-align: center; margin: 0; }
+    .product-img-wrap.loaded .product-img-fallback, .product-img-wrap.loaded .product-img-placeholder { display: none; }
+    .product-img-wrap.failed .product-img { display: none; }
+    .product-name { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; line-height: 1.3; }
+    .product-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.4; }
+    .product-sku { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+    .product-price { font-size: 20px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
+    .product-stock { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
+    .product-stock.low { color: var(--red); }
+    .qty-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .qty-btn { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .qty-input { width: 48px; text-align: center; border: 1px solid var(--border); border-radius: 6px; padding: 4px; font-size: 14px; background: var(--bg-input); color: var(--text); }
+    .add-btn { width: 100%; padding: 9px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .add-btn:hover { opacity: 0.9; }
+    .add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Cart sidebar */
+    .cart-sidebar { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; position: sticky; top: 20px; }
+    .cart-header { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+    .cart-store-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+    .cart-tab { padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; }
+    .cart-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .cart-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .cart-item:last-child { border-bottom: none; }
+    .cart-item-img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; background: var(--bg-secondary); flex-shrink: 0; }
+    .cart-item-info { flex: 1; min-width: 0; }
+    .cart-item-name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cart-item-price { font-size: 12px; color: var(--text-secondary); }
+    .cart-item-remove { color: var(--red); font-size: 16px; cursor: pointer; background: none; border: none; padding: 0 4px; }
+    .cart-item-qty { display: flex; align-items: center; gap: 4px; }
+    .cart-qty-btn { width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text); font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .cart-qty-val { font-size: 13px; font-weight: 600; color: var(--text); width: 24px; text-align: center; }
+    .cart-total { font-size: 16px; font-weight: 700; color: var(--text); margin: 16px 0 12px; display: flex; justify-content: space-between; }
+    .cart-empty { text-align: center; padding: 24px 0; color: var(--text-muted); font-size: 13px; }
+    .checkout-btn { width: 100%; padding: 12px; background: var(--green); color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    .checkout-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Store selector for reps */
+    .store-selector { margin-bottom: 16px; }
+    .store-selector label { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block; }
+    .store-selector select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text); font-size: 13px; font-family: inherit; }
+
+    /* Checkout modal */
+    .checkout-section { margin-bottom: 20px; }
+    .checkout-section h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+    .payment-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .payment-options.single-option { grid-template-columns: 1fr; max-width: 280px; margin: 0 auto; }
+    .payment-option { border: 2px solid var(--border); border-radius: 10px; padding: 14px; cursor: pointer; transition: all 0.2s; text-align: center; }
+    .payment-option.selected { border-color: var(--accent); background: var(--accent-bg); }
+    .payment-option-icon { font-size: 24px; margin-bottom: 6px; }
+    .payment-option-label { font-size: 13px; font-weight: 600; color: var(--text); }
+    .payment-option-sub { font-size: 11px; color: var(--text-muted); }
+    .order-summary-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary); padding: 4px 0; }
+    .order-summary-total { display: flex; justify-content: space-between; font-size: 16px; font-weight: 700; color: var(--text); padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 8px; }
+
+    /* Mobile overrides */
+    @media (max-width: 768px) {
+      .shop-layout { grid-template-columns: 1fr; }
+      .cart-sidebar { position: static; border-radius: 12px; }
+      .products-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+      .product-img-wrap { height: 160px; }
+      .payment-options { grid-template-columns: 1fr; }
+      .main-content { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="topbar">
+      <div class="logo-mark" id="logo-container"></div>
+      <div class="user-info">
+        <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"></button>
+        <a id="dashboard-link" href="#" style="padding:7px 16px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;">← Dashboard</a>
+        <span class="role-badge" id="user-role"></span>
+        <button class="btn-logout" onclick="logout()">Sign Out</button>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="page-header">
+        <div><h1>Shop</h1><p id="shop-subtitle">Browse and order products</p></div>
+      </div>
+
+
+
+      <div class="shop-layout">
+        <div>
+          <div id="products-grid" class="products-grid">
+            <div class="loading">Loading products...</div>
+          </div>
+        </div>
+
+        <!-- Cart sidebar -->
+        <div class="cart-sidebar">
+          <div class="cart-header">
+            <span>🛒 Cart</span>
+            <button onclick="clearCart()" style="font-size:12px;color:var(--text-muted);background:none;border:none;cursor:pointer;">Clear</button>
+          </div>
+          <div id="cart-items-wrap">
+            <div class="cart-empty">Your cart is empty</div>
+          </div>
+          <div id="cart-total-row" class="cart-total" style="display:none;">
+            <span>Total</span><span id="cart-total-val">$0.00</span>
+          </div>
+          <div id="cart-shipping-note" style="font-size:11px;color:var(--text-muted);margin-bottom:12px;display:none;">Free shipping on orders over $350</div>
+          <button class="checkout-btn" id="checkout-btn" disabled onclick="showCheckout()">Proceed to Checkout</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Checkout Modal -->
+  <div class="modal-overlay" id="checkout-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal" style="max-width:560px;">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Checkout</h2>
+
+      <div class="checkout-section">
+        <h3>Order Summary</h3>
+        <div id="checkout-items"></div>
+        <div class="order-summary-row"><span>Subtotal</span><span id="co-subtotal">$0.00</span></div>
+        <div class="order-summary-row"><span>Shipping</span><span id="co-shipping">$35.00</span></div>
+        <div class="order-summary-row" id="co-fee-row" style="display:none;color:var(--text-muted);font-size:13px;"><span>Processing Fee (2.9% + $0.30)</span><span id="co-fee">$0.00</span></div>
+        <div class="order-summary-total"><span>Total</span><span id="co-total">$0.00</span></div>
+      </div>
+
+      <div class="checkout-section">
+        <h3>Shipping Address</h3>
+        <div class="form-group"><label>Full Name</label><input type="text" id="ship-name" placeholder="Full name"></div>
+        <div class="form-group"><label>Address</label><input type="text" id="ship-address" placeholder="Street address" required></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+          <div class="form-group"><label>City</label><input type="text" id="ship-city" required></div>
+          <div class="form-group"><label>State</label><input type="text" id="ship-state" maxlength="2" required></div>
+          <div class="form-group"><label>Zip</label><input type="text" id="ship-zip" maxlength="5" required></div>
+        </div>
+      </div>
+
+      <div class="checkout-section">
+        <h3>Payment Method</h3>
+        <div class="payment-options" id="payment-options-wrap">
+          <div class="payment-option" id="pay-card" onclick="selectPayment('card')">
+            <div class="payment-option-icon">💳</div>
+            <div class="payment-option-label">Pay by Card</div>
+            <div class="payment-option-sub" id="card-option-sub">Loading...</div>
+          </div>
+          <div class="payment-option selected" id="pay-invoice" onclick="selectPayment('invoice')">
+            <div class="payment-option-icon">📄</div>
+            <div class="payment-option-label">Invoice / Net-30</div>
+            <div class="payment-option-sub">Billed after delivery</div>
+          </div>
+        </div>
+        <!-- Stripe card element — shown when card is selected and Stripe is active -->
+        <div id="stripe-card-wrap" style="display:none;margin-top:14px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--bg-input);">
+          <div id="stripe-card-element"></div>
+          <div id="stripe-error" style="color:#dc2626;font-size:12px;margin-top:8px;display:none;"></div>
+          <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="4" fill="#635BFF"/><path d="M11.3 9.9c0-.6.5-.8 1.3-.8 1.2 0 2.6.4 3.8 1V6.7c-1.3-.5-2.6-.7-3.8-.7-3.1 0-5.2 1.6-5.2 4.3 0 4.2 5.8 3.5 5.8 5.3 0 .7-.6 1-1.5 1-1.3 0-3-.5-4.3-1.2v3.5c1.5.6 3 .9 4.3.9 3.2 0 5.4-1.6 5.4-4.3 0-4.6-5.8-3.7-5.8-5.6z" fill="white"/></svg>
+            <span style="font-size:11px;color:var(--text-muted);">Payments securely processed by Stripe</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Order Notes (optional)</label>
+        <textarea id="order-notes" rows="2" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;resize:vertical;" placeholder="Any special instructions..."></textarea>
+      </div>
+
+      <button class="btn btn-green" style="width:100%;padding:14px;font-size:16px;" onclick="placeOrder()">Place Order</button>
+    </div>
+  </div>
+
+  <!-- Order Confirmation Modal -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal" style="text-align:center;">
+      <div style="font-size:56px;margin-bottom:16px;">✅</div>
+
+  <!-- Low Stock Reorder Modal -->
+  <div class="modal-overlay" id="reorder-modal">
+    <div class="modal" style="max-width:480px;">
+      <button class="close-btn" onclick="document.getElementById('reorder-modal').classList.remove('active')">&times;</button>
+      <div style="font-size:36px;text-align:center;margin-bottom:8px;">⚠️</div>
+      <h2 style="text-align:center;margin-bottom:6px;">Low Stock Detected</h2>
+      <p id="reorder-store-name" style="text-align:center;font-size:13px;color:var(--text-muted);margin-bottom:20px;"></p>
+      <div id="reorder-items-list" style="margin-bottom:20px;"></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px;text-align:center;">Quantities are suggested based on your low stock threshold. You can adjust before checkout.</p>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('reorder-modal').classList.remove('active')">Skip, browse manually</button>
+        <button class="btn btn-green" style="flex:1;" onclick="confirmReorder()">✓ Add to Cart</button>
+      </div>
+    </div>
+  </div>
+      <h2>Order Placed!</h2>
+      <p id="confirm-msg" style="color:var(--text-secondary);margin:12px 0 24px;"></p>
+      <button class="btn" onclick="closeModal();location.reload()">Continue Shopping</button>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/shop.js"></script>
+</body>
+</html>

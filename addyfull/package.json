@@ -1,0 +1,26 @@
+{
+  "name": "addy-dsd-portal",
+  "version": "1.0.0",
+  "description": "ADDY DSD Partner Portal",
+  "main": "server.js",
+  "scripts": {
+    "start": "node boot.js",
+    "seed": "node db/seed.js",
+    "start:unpatched": "node server.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.5",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "resend": "^3.2.0",
+    "stripe": "^14.21.0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^8.4.1"
+  }
+}

@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADDY - DSD</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/styles.css">
+  <script>const saved=localStorage.getItem('addy_theme')||'light';document.documentElement.setAttribute('data-theme',saved);</script>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="topbar">
+      <div class="logo-mark" id="logo-container"><a href="/dashboard-dsd.html" style="display:flex;align-items:center;text-decoration:none;"><img src="/images/addy-logo.svg" alt="ADDY" style="height:52px;width:auto;object-fit:contain;"></a></div>
+      <div class="user-info">
+        <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"></button>
+        <button class="btn-logout" onclick="showFeedbackModal()" title="Suggest a feature or report an issue">💡 Feedback</button>
+        <button class="btn-logout" onclick="showProfile()">Profile</button>
+        <span class="role-badge" id="user-role">DSD</span>
+        <button class="btn-logout" onclick="copyReferralLink()" title="Copy your invite link — earn 5% on everyone you refer">🔗 Invite</button>
+        <a href="/shop.html" style="padding:7px 16px;background:#2563eb;color:#fff;border-radius:7px;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;">🛒 Shop</a><button class="btn-logout" onclick="logout()">Sign Out</button>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div style="display:flex;gap:8px;margin-bottom:24px;border-bottom:1px solid var(--border);">
+        <button class="admin-tab active" onclick="switchMyTab('main',this)">Overview</button>
+        <button class="admin-tab" onclick="switchMyTab('stores',this)">My Stores</button>
+        <button class="admin-tab" onclick="switchMyTab('commissions',this)">Commissions 💰</button>
+        <button class="admin-tab" onclick="switchMyTab('orders',this)">My Orders</button>
+        <button class="admin-tab" onclick="switchMyTab('inventory',this)">Inventory</button>
+      </div>
+      <div id="my-tab-main">
+      <div class="page-header">
+        <div>
+          <h1>My Assigned Stores</h1>
+          <p>Your distribution territory and pricing details</p>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-label">My Margin</div><div class="stat-value" id="stat-tier" style="font-size:18px;">--</div></div>
+        <div class="stat-card"><div class="stat-label">Commission Balance</div><div class="stat-value revenue" id="stat-commission">$0.00</div></div>
+        <div class="stat-card"><div class="stat-label">My Stores</div><div class="stat-value" id="stat-my-stores">--</div></div>
+        <div class="stat-card"><div class="stat-label">Total Orders</div><div class="stat-value" id="stat-total-orders">--</div></div>
+      </div>
+
+      <div id="margin-progress"></div>
+      <div id="onboarding-checklist"></div>
+
+      <!-- Commission payout request banner -->
+      <div id="payout-banner" style="display:none;background:linear-gradient(135deg,#059669,#047857);color:#fff;border-radius:12px;padding:16px 20px;margin-bottom:20px;display:none;align-items:center;justify-content:space-between;gap:16px;">
+        <div>
+          <div style="font-weight:700;font-size:15px;">💰 You have commissions available!</div>
+          <div style="font-size:13px;opacity:0.9;margin-top:2px;" id="payout-balance-text"></div>
+        </div>
+        <button class="btn" onclick="requestPayout()" style="background:#fff;color:#047857;font-weight:700;white-space:nowrap;">Request Payout</button>
+      </div>
+
+      <div class="table-card">
+        <div class="table-toolbar">
+          <h2>Store Directory</h2>
+          <div class="toolbar-controls">
+            <button class="btn btn-sm btn-green" onclick="openCsvImportModal()">📂 Import Stores</button>
+            <input type="text" class="search-input" id="search-input" placeholder="Search stores..." oninput="filterStores(this.value)">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Store Name</th>
+                <th>Owner</th>
+                <th>City</th>
+                <th>State</th>
+                <th>Category</th>
+                <th>Wholesale Price</th>
+                <th>Retail Price</th>
+                <th>Distribution Cost</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="stores-tbody">
+              <tr><td colspan="9" class="loading">Loading stores...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      </div><!-- end my-tab-main -->
+      <!-- My Commissions Tab -->
+      <div id="my-tab-commissions" style="display:none;">
+        <div class="page-header"><div><h1>My Commissions</h1><p>Earnings from your recruited reps' orders</p></div></div>
+
+        <div id="my-payout-requests" style="margin-bottom:24px;"></div>
+
+        <div class="table-card">
+          <div class="table-toolbar"><h2>Commission History</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Buyer</th><th>Level</th><th>Rate</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+              <tbody id="my-commissions-tbody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- My Stores Tab -->
+      <div id="my-tab-stores" style="display:none;">
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;">
+          <div><h1>My Exclusive Stores</h1><p>Stores claimed exclusively by you — no other rep can sell into these locations</p></div>
+          <button class="btn btn-green" onclick="showClaimStoreModal()">+ Claim a Store</button>
+        </div>
+        <div id="my-stores-list"><div class="loading">Loading...</div></div>
+      </div>
+
+      <!-- Claim Store Modal -->
+      <div class="modal-overlay" id="claim-store-modal" onclick="if(event.target===this)this.classList.remove('active')">
+        <div class="modal" style="max-width:480px;">
+          <button class="close-btn" onclick="document.getElementById('claim-store-modal').classList.remove('active')">&times;</button>
+          <h2>Claim a Store</h2>
+          <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Claim a store for exclusive assignment — it's yours instantly. If another rep already claimed it, it's flagged for admin review.</p>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="position:relative;">
+              <input type="text" id="cs-search" placeholder="🔍 Search existing stores on network..."
+                oninput="searchWowCowStores(this.value)"
+                style="width:100%;padding:10px;border:2px solid var(--accent);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;">
+              <div id="wc-store-results" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.15);"></div>
+            </div>
+            <p style="font-size:11px;color:var(--text-muted);margin:0;line-height:1.5;">
+              If a store already exists in the system, it cannot be claimed directly by another rep —
+              you'll be able to submit an ownership request for admin review instead.
+            </p>
+            <div style="text-align:center;font-size:11px;color:var(--text-muted);">— or fill in manually below —</div>
+            <input type="text" id="cs-name" placeholder="Store name *" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <input type="text" id="cs-address" placeholder="Address" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <div style="display:grid;grid-template-columns:1fr 80px 100px;gap:8px;">
+              <input type="text" id="cs-city" placeholder="City" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+              <input type="text" id="cs-state" placeholder="State" maxlength="2" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+              <input type="text" id="cs-zip" placeholder="ZIP" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            </div>
+            <input type="tel" id="cs-phone" placeholder="Store phone" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <input type="email" id="cs-email" placeholder="Store email" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+            <input type="hidden" id="cs-store-id" value="">
+            <button class="btn btn-green" id="cs-submit-btn" onclick="submitStoreClaim()" style="margin-top:4px;">Submit for Approval</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="my-tab-orders" style="display:none;">
+        <div class="page-header"><div><h1>My Orders</h1><p>Your order history</p></div></div>
+        <div class="table-card">
+          <div class="table-toolbar"><h2>Order History</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Order #</th><th>Date</th><th>For Store</th><th>Items</th><th>Total</th><th>Invoice</th><th>Status</th><th></th></tr></thead>
+              <tbody id="my-orders-tbody"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="my-tab-inventory" style="display:none;">
+        <div class="page-header"><div><h1>Store Inventory</h1><p>Track product levels across your assigned stores</p></div></div>
+        <div id="inventory-content"><div class="loading" style="padding:40px;text-align:center;">Loading inventory...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- My Order Detail Modal -->
+  <div class="modal-overlay" id="my-order-detail-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal" style="max-width:580px;">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Order Details</h2>
+      <div class="order-detail-body"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="profile-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <h2>Change Password</h2>
+      <form onsubmit="handleChangePassword(event)">
+        <div class="form-group"><label>Current Password</label><input type="password" name="current_password" required></div>
+        <div class="form-group"><label>New Password</label><input type="password" name="new_password" required minlength="6"></div>
+        <div class="form-group"><label>Confirm New Password</label><input type="password" name="confirm_password" required minlength="6"></div>
+        <button type="submit" class="btn">Update Password</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="/js/admin-csv-import.js"></script>
+  <script src="/js/app.js"></script>
+
+  <!-- CSV Import Modal -->
+  <div class="modal-overlay" id="csv-import-modal" onclick="if(event.target===this)closeCsvModal()">
+    <div class="modal" style="max-width:760px;max-height:90vh;overflow-y:auto;">
+      <button class="close-btn" onclick="closeCsvModal()">&times;</button>
+      <h2>📂 Import Stores from CSV</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        Upload a CSV or Excel file (.csv, .xlsx, .xls) with your store data — imported stores are claimed to your account. Columns are matched automatically; you can correct any mismatches before importing.
+        <a href="#" onclick="downloadExampleCsv();return false;" style="color:var(--accent);margin-left:8px;">⬇ Download example file</a>
+      </p>
+      <div id="csv-step-upload">
+        <label style="display:block;border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:14px;" for="csv-file-input">
+          <div style="font-size:36px;margin-bottom:8px;">📄</div>
+          <div>Click to choose a CSV or Excel file, or drag and drop</div>
+        </label>
+        <input type="file" id="csv-file-input" accept=".csv,.xlsx,.xls,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;" onchange="handleCsvFile(event)">
+      </div>
+      <div id="csv-step-mapping" style="display:none;">
+        <h3 style="font-size:15px;margin-bottom:12px;">Step 1 — Match columns</h3>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">These are our best guesses. Fix any that look wrong before continuing.</p>
+        <div id="csv-mapping-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px;"></div>
+        <button class="btn btn-green" onclick="runCsvPreview()">Preview Import →</button>
+      </div>
+      <div id="csv-step-preview" style="display:none;">
+        <h3 style="font-size:15px;margin-bottom:8px;">Step 2 — Review</h3>
+        <div id="csv-stats" style="display:flex;gap:16px;margin-bottom:14px;font-size:13px;"></div>
+        <div id="csv-warnings-wrap" style="display:none;background:var(--amberBg,#fffbeb);border:1px solid var(--amber,#d97706);border-radius:8px;padding:12px;margin-bottom:14px;">
+          <div style="font-weight:700;font-size:13px;color:var(--amber,#d97706);margin-bottom:6px;">⚠️ Warnings:</div>
+          <div id="csv-warnings-list" style="font-size:12px;color:var(--text-secondary);max-height:120px;overflow-y:auto;line-height:1.8;"></div>
+        </div>
+        <div style="overflow-x:auto;margin-bottom:16px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;" id="csv-preview-table"></table>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <button class="btn btn-green" id="csv-import-btn" onclick="runCsvImport()">Import <span id="csv-import-count"></span> Stores</button>
+          <button class="btn btn-outline" onclick="csvBack()">← Back</button>
+        </div>
+      </div>
+      <div id="csv-step-results" style="display:none;">
+        <h3 style="font-size:15px;margin-bottom:12px;">Import Complete</h3>
+        <div id="csv-result-summary" style="margin-bottom:14px;"></div>
+        <div id="csv-result-errors" style="display:none;"></div>
+        <button class="btn btn-outline" onclick="closeCsvModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Store Photo Upload Modal (required after claiming) -->
+  <div id="store-photo-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);overflow-y:auto;">
+    <div style="background:var(--bg-card);border-radius:16px;max-width:520px;margin:40px auto;padding:32px;position:relative;">
+      <!-- No X button — must complete or dismiss is blocked for manual claims -->
+      <div style="text-align:center;margin-bottom:24px;">
+        <div style="font-size:40px;margin-bottom:12px;">📸</div>
+        <h2 style="margin:0 0 8px;">Store Photos Required</h2>
+        <p id="photo-modal-subtitle" style="color:var(--text-muted);font-size:14px;margin:0;"></p>
+      </div>
+
+      <!-- Front of Store -->
+      <div style="margin-bottom:24px;padding:20px;border:2px dashed var(--border);border-radius:12px;text-align:center;" id="photo-front-zone">
+        <div style="font-size:28px;margin-bottom:8px;">🏪</div>
+        <div style="font-weight:700;margin-bottom:4px;">Front of Store</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Photo of the exterior / storefront signage</div>
+        <img id="preview-front" style="display:none;width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:12px;">
+        <div id="front-status" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></div>
+        <label style="cursor:pointer;" for="input-front">
+          <span id="btn-front" class="btn btn-outline" style="font-size:13px;">📷 Take / Upload Photo</span>
+        </label>
+        <input type="file" id="input-front" accept="image/*" capture="environment" style="display:none;" onchange="handlePhotoSelect('front', this)">
+      </div>
+
+      <!-- Product Display -->
+      <div style="margin-bottom:24px;padding:20px;border:2px dashed var(--border);border-radius:12px;text-align:center;" id="photo-display-zone">
+        <div style="font-size:28px;margin-bottom:8px;">🛍️</div>
+        <div style="font-weight:700;margin-bottom:4px;">Product Display</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Photo showing where ADDY products are displayed in the store</div>
+        <img id="preview-display" style="display:none;width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:12px;">
+        <div id="display-status" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></div>
+        <label style="cursor:pointer;" for="input-display">
+          <span id="btn-display" class="btn btn-outline" style="font-size:13px;">📷 Take / Upload Photo</span>
+        </label>
+        <input type="file" id="input-display" accept="image/*" capture="environment" style="display:none;" onchange="handlePhotoSelect('display', this)">
+      </div>
+
+      <div id="photo-modal-error" style="display:none;color:var(--red);font-size:13px;margin-bottom:12px;text-align:center;"></div>
+
+      <button id="submit-photos-btn" class="btn btn-green" onclick="submitStorePhotos()" style="width:100%;font-size:15px;padding:14px;" disabled>
+        Submit Photos
+      </button>
+      <div id="photo-skip-wrap" style="text-align:center;margin-top:12px;display:none;">
+        <button onclick="skipPhotosForNow()" style="background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;text-decoration:underline;">
+          I'll do this later (you have 60 days)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>loadDSDDashboard();</script>
+  <!-- Feedback Modal -->
+  <div class="modal-overlay" id="feedback-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:480px;">
+      <button class="close-btn" onclick="document.getElementById('feedback-modal').classList.remove('active')">&times;</button>
+      <h2>💡 Suggest a Feature or Report an Issue</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Got an idea to improve ADDY, or found something that's not working right? Let us know — admin reviews every submission.</p>
+      <textarea id="feedback-message" rows="5" placeholder="Tell us what's on your mind..."
+        style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;resize:vertical;margin-bottom:14px;"></textarea>
+      <button class="btn btn-green" onclick="submitFeedback()" style="width:100%;">Submit Feedback</button>
+    </div>
+  </div>
+
+</body>
+</html>
