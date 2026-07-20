@@ -260,19 +260,46 @@ MONARCH_PARTNER_KEY=some-long-random-secret</pre>
     body.innerHTML = countsBar + '<p style="font-size:13px;color:var(--text-secondary);">No Sales Suite users yet. When a partner clicks “Start free” or subscribes, they appear here.</p>';
     return;
   }
-  body.innerHTML = countsBar + `
+  // Build-your-own plan requests waiting on a decision — approving is what
+  // flips their Monarch tier + allowances and starts the monthly invoice.
+  const pending = data.workspaces.filter(w => w.custom_status === 'pending' && w.custom_plan);
+  const unitNames = { ai_calls: 'AI calls', texts: 'texts', ai_drafts: 'AI drafts', emails: 'emails' };
+  const pendingBlock = pending.length ? `
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+      <div style="font-weight:800;font-size:13px;color:#92400e;margin-bottom:8px;">⏳ Custom plan requests (${pending.length})</div>
+      ${pending.map(w => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;padding:6px 0;border-top:1px solid #fde68a;">
+          <div>
+            <strong>${esc(w.name || w.email)}</strong> ${w.custom_plan_prev ? `wants to change <span style="text-decoration:line-through;">$${Number(w.custom_plan_prev.monthly_usd).toFixed(2)}</span> →` : 'wants'}
+            <strong>$${Number(w.custom_plan.monthly_usd).toFixed(2)}/mo</strong>
+            <span style="color:#92400e;">(${esc(Object.entries(w.custom_plan.units || {}).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${unitNames[k] || k}`).join(', '))} · ${esc(w.custom_plan.tier)} features)</span>
+            ${w.stripe_subscription_id ? '<div style="font-size:11.5px;color:#b45309;">💳 Pays by card via Stripe — cancel that subscription before approving or they\'ll be billed twice.</div>' : ''}
+            ${w.custom_plan_prev ? '<div style="font-size:11.5px;color:#92400e;">Declining keeps their current plan active — nothing is lost.</div>' : ''}
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm btn-green" onclick="decideCustomPlan(${w.user_id}, 'approve', this)">✓ Approve</button>
+            <button class="btn btn-sm btn-outline" onclick="decideCustomPlan(${w.user_id}, 'decline', this)">Decline</button>
+          </div>
+        </div>`).join('')}
+      <div style="font-size:11.5px;color:#92400e;margin-top:6px;">Approving activates their allowances on Monarch immediately — remember to set up their monthly invoice for the amount shown.</div>
+    </div>` : '';
+  body.innerHTML = countsBar + pendingBlock + `
     <table style="width:100%;font-size:13px;border-collapse:collapse;">
       <thead><tr style="text-align:left;color:var(--text-muted);"><th style="padding:4px;">Partner</th><th>Plan</th><th>In Monarch</th><th>Overage this month</th></tr></thead>
       <tbody>${data.workspaces.map(w => `
         <tr style="border-top:1px solid var(--border);">
           <td style="padding:6px 4px;">${esc(w.name || w.email)}<br><span style="color:var(--text-muted);">${esc(w.slug)}</span></td>
-          <td>${esc(w.tier)}</td>
+          <td>${esc(w.tier)}${(() => {
+            const live = w.custom_status === 'active' ? w.custom_plan : (w.custom_status === 'pending' && w.custom_plan_prev) ? w.custom_plan_prev : null;
+            return (live ? ` <span style="font-size:11px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:20px;padding:1px 8px;font-weight:700;">custom $${Number(live.monthly_usd).toFixed(2)}/mo</span>` : '')
+              + (w.custom_status === 'pending' ? ' <span style="font-size:11px;color:#e8873b;font-weight:700;">⏳ request</span>' : '');
+          })()}</td>
           <td>${w.monarch_provisioned ? '✓' : '<span style="color:#e8873b;">pending</span>'}</td>
           <td style="font-weight:700;">${w.tier === 'free' ? '—' : '$' + Number(w.usage?.overage_total_usd || 0).toFixed(2)}</td>
         </tr>`).join('')}
       </tbody>
     </table>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">Free users are counted for the Monarch user base; only paid plans accrue overage. Add each paid partner's overage to their invoice at month end.</p>`;
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">Free users are counted for the Monarch user base; only paid plans accrue overage. Custom plans are invoiced at their monthly price + any overage. Add each paid partner's total to their invoice at month end.</p>`;
 }
 
 async function diagnoseMonarch(btn) {
@@ -297,6 +324,21 @@ async function diagnoseMonarch(btn) {
         ${d.body ? `body: ${esc(String(d.body))}` : ''}
       </div>
     </div>`;
+}
+
+async function decideCustomPlan(userId, action, btn) {
+  if (action === 'approve' && !window.confirm('Approve this custom plan?\n\nTheir Monarch tier + allowances change immediately, and you should start invoicing them the monthly amount shown.')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  const r = await apiFetch(`/api/admin/monarch/custom-plan/${userId}`, { method: 'POST', body: JSON.stringify({ action }) });
+  if (r && r.success) {
+    showToast(action === 'approve'
+      ? `Approved ✓ — ${r.tier} features live, invoice $${Number(r.monthly_usd).toFixed(2)}/mo`
+      : r.status === 'reverted_to_active'
+        ? `Change declined — their previous $${Number(r.monthly_usd).toFixed(2)}/mo plan stays active`
+        : 'Request declined', 'success');
+  }
+  document.getElementById('monarch-admin-card')?.remove();
+  loadMonarchAdminCard();
 }
 
 async function syncMonarchUsers(btn, all) {

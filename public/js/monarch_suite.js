@@ -22,8 +22,15 @@ async function loadMonarchSuite() {
 
   const ws = status.workspace;
   const tierNames = { free: 'Free', starter: 'Starter', pro: 'Pro' };
+  window._monarchPricing = monarchPricingFrom(status);
 
   if (ws) {
+    const pendingBadge = ws.custom_status === 'pending' && ws.custom_plan ? `
+      <div style="margin-top:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:13px;color:#92400e;">
+        ⏳ <strong>${ws.custom_plan_prev ? 'Plan change requested' : 'Custom plan requested'}</strong> — $${Number(ws.custom_plan.monthly_usd).toFixed(2)}/mo, awaiting approval.
+        ${ws.custom_plan_prev ? `Your current $${Number(ws.custom_plan_prev.monthly_usd).toFixed(2)}/mo plan stays active meanwhile.` : `It activates as soon as it's confirmed.`}
+      </div>` : '';
+
     // FREE: everything lives right here in Addy — no separate Monarch login.
     if (ws.tier === 'free') {
       card.innerHTML = `
@@ -32,33 +39,45 @@ async function loadMonarchSuite() {
             ${SUITE_HEADER}
             <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
               You're on the <strong>Free</strong> plan ✓ — claim your stores and manage your customers right here.
-              ${status.checkout_ready ? '' : ''}
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn btn-sm" onclick="switchMyTab('stores', document.querySelectorAll('.admin-tab')[1])" style="background:var(--accent);color:#fff;">My Stores →</button>
-            ${status.checkout_ready ? `<button class="btn btn-sm btn-outline" onclick="upgradeMonarch('starter')">⬆ Upgrade for AI</button>` : `<button class="btn btn-sm btn-outline" disabled>Paid plans soon</button>`}
+            ${status.checkout_ready ? `<button class="btn btn-sm btn-outline" onclick="upgradeMonarch('starter')">⬆ Upgrade for AI</button>` : ''}
+            ${ws.custom_status === 'pending' ? '' : `<button class="btn btn-sm btn-outline" onclick="toggleMonarchBuilder()">⚙ Build your own AI plan</button>`}
           </div>
-        </div>`;
+        </div>
+        ${pendingBadge}
+        <div id="monarch-builder-slot" style="display:none;"></div>`;
       return;
     }
-    // PAID: real Monarch workspace — show login + open the Suite.
+    // PAID: real Monarch workspace — show login + open the Suite. While an
+    // adjustment is pending, the PREVIOUS plan is still the live one — keep
+    // showing it so the paid plan never "disappears" mid-request.
+    const livePlan = ws.custom_status === 'active' ? ws.custom_plan
+      : (ws.custom_status === 'pending' && ws.custom_plan_prev) ? ws.custom_plan_prev : null;
+    const customChip = livePlan ? `
+      <span style="font-size:11.5px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:20px;padding:2px 10px;font-weight:700;">Custom · $${Number(livePlan.monthly_usd).toFixed(2)}/mo</span>` : '';
     card.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
         <div>
           ${SUITE_HEADER}
           <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
-            Your plan: <strong>${esc(tierNames[ws.tier] || ws.tier)}</strong>
+            Your plan: <strong>${esc(tierNames[ws.tier] || ws.tier)}</strong> ${customChip}
             ${ws.status !== 'active' ? ' · <span style="color:#dc2626;font-weight:700;">paused — update your payment method</span>' : ''}
             · Company code: <code>${esc(ws.slug)}</code>
+            ${livePlan ? `<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">Includes monthly: ${esc(monarchUnitsSummary(livePlan.units))}</div>` : ''}
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${ws.temp_password !== null && ws.temp_password !== undefined ? `<button class="btn btn-sm btn-outline" onclick="revealMonarchCreds()">🔑 Show my login</button>` : ''}
           <a class="btn btn-sm btn-green" href="${esc(status.app_url)}" target="_blank" rel="noopener" style="text-decoration:none;">Open Sales Suite →</a>
+          ${ws.custom_status === 'pending' ? '' : `<button class="btn btn-sm btn-outline" onclick="toggleMonarchBuilder()">⚙ Adjust my plan</button>`}
           ${ws.tier !== 'pro' && status.checkout_ready ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="upgradeMonarch('pro')">⬆ Upgrade</button>` : ''}
         </div>
-      </div>`;
+      </div>
+      ${pendingBadge}
+      <div id="monarch-builder-slot" style="display:none;"></div>`;
     return;
   }
 
@@ -83,8 +102,106 @@ async function loadMonarchSuite() {
         status.checkout_ready ? `<button class="btn btn-sm" style="width:100%;background:var(--accent);color:#fff;" onclick="upgradeMonarch('starter')">Subscribe</button>` : `<button class="btn btn-sm btn-outline" style="width:100%;" disabled>Coming soon</button>`)}
       ${tierCard('pro', 'Pro', 'Everything, automated', ['AI voice calls to prospects', 'Route optimization', 'Automated reorder outreach', 'Bulk email & flyer scanning'],
         status.checkout_ready ? `<button class="btn btn-sm" style="width:100%;background:var(--accent);color:#fff;" onclick="upgradeMonarch('pro')">Subscribe</button>` : `<button class="btn btn-sm btn-outline" style="width:100%;" disabled>Coming soon</button>`)}
+      ${tierCard('custom', 'Build your own', 'Pick exactly what you need', ['Slide your own monthly AI amounts', 'Pay only for what you pick', 'Approved &amp; invoiced by ADDY'],
+        `<button class="btn btn-sm btn-outline" style="width:100%;" onclick="toggleMonarchBuilder()">⚙ Customize →</button>`)}
     </div>
+    <div id="monarch-builder-slot" style="display:none;"></div>
     <div style="font-size:11.5px;color:var(--text-muted);margin-top:10px;">Paid plans include monthly usage; going over pauses the feature until you enable pay-per-use overage inside the Suite. Cancel anytime — you drop back to Free and keep your store claims.</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Build-your-own AI plan — the sliders. Prices come from Monarch's live plan
+// catalog via /api/monarch/status (server re-prices on submit; the browser
+// math is display-only).
+// ---------------------------------------------------------------------------
+const MONARCH_BUILDER_UNITS = {
+  ai_calls:  { label: '📞 AI voice calls', max: 500,   step: 5,   hint: 'AI calls your lead list for you' },
+  texts:     { label: '💬 Text messages',  max: 5000,  step: 50,  hint: 'reorder texts & follow-ups' },
+  ai_drafts: { label: '✍️ AI writing',     max: 5000,  step: 50,  hint: 'AI-written emails, texts & polish' },
+  emails:    { label: '📧 Emails',         max: 20000, step: 250, hint: 'order confirmations & campaigns' },
+};
+
+function monarchPricingFrom(status) {
+  const up = status?.plans?.unit_prices || {};
+  return {
+    prices: {
+      ai_calls: up.ai_calls?.price ?? 0.75,
+      texts: up.texts?.price ?? 0.05,
+      ai_drafts: up.ai_drafts?.price ?? 0.05,
+      emails: up.emails?.price ?? 0.01,
+    },
+    baseFee: typeof status?.plans?.custom_base_fee === 'number' ? status.plans.custom_base_fee : 25,
+  };
+}
+
+function monarchUnitsSummary(units) {
+  if (!units) return '';
+  const names = { ai_calls: 'AI calls', texts: 'texts', ai_drafts: 'AI drafts', emails: 'emails' };
+  return Object.entries(units).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${names[k] || k}`).join(' · ');
+}
+
+function toggleMonarchBuilder() {
+  const slot = document.getElementById('monarch-builder-slot');
+  if (!slot) return;
+  if (slot.style.display !== 'none') { slot.style.display = 'none'; return; }
+  const { prices, baseFee } = window._monarchPricing || monarchPricingFrom(null);
+  slot.innerHTML = `
+    <div style="margin-top:14px;border:1px solid var(--border);border-radius:10px;padding:16px;">
+      <div style="font-weight:800;margin-bottom:2px;">⚙ Build your own AI plan</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;">Slide each dial to how much you'd use in a month — the price updates live. Submit it and it activates once approved (you're invoiced monthly, cancel anytime).</div>
+      ${Object.entries(MONARCH_BUILDER_UNITS).map(([k, u]) => `
+        <div style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+            <span><strong>${u.label}</strong> <span style="color:var(--text-muted);">— ${u.hint}</span></span>
+            <span><strong id="mb-val-${k}">0</strong>/mo · <span id="mb-line-${k}" style="color:var(--text-muted);">$0.00</span></span>
+          </div>
+          <input type="range" id="mb-slider-${k}" min="0" max="${u.max}" step="${u.step}" value="0" style="width:100%;accent-color:#E8873B;" oninput="monarchBuilderRecalc()">
+        </div>`).join('')}
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:linear-gradient(135deg,rgba(232,135,59,0.10),rgba(185,106,44,0.06));border:1px solid rgba(232,135,59,0.35);border-radius:10px;padding:12px 16px;">
+        <div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:700;">Your plan</div>
+          <div style="font-size:24px;font-weight:800;color:#E8873B;line-height:1.2;"><span id="mb-total">$${baseFee.toFixed(2)}/mo</span></div>
+          <div style="font-size:11.5px;color:var(--text-muted);">includes $${baseFee.toFixed(2)} base fee · cancel anytime</div>
+        </div>
+        <button class="btn btn-green" id="mb-submit" onclick="submitMonarchCustomPlan(this)" style="font-weight:700;">Request this plan →</button>
+      </div>
+    </div>`;
+  slot.style.display = '';
+  monarchBuilderRecalc();
+}
+
+function monarchBuilderRecalc() {
+  const { prices, baseFee } = window._monarchPricing || monarchPricingFrom(null);
+  let total = baseFee;
+  for (const k of Object.keys(MONARCH_BUILDER_UNITS)) {
+    const el = document.getElementById(`mb-slider-${k}`);
+    if (!el) return;
+    const qty = Number(el.value);
+    const line = qty * prices[k];
+    total += line;
+    document.getElementById(`mb-val-${k}`).textContent = qty.toLocaleString();
+    document.getElementById(`mb-line-${k}`).textContent = `$${line.toFixed(2)}`;
+  }
+  const totalEl = document.getElementById('mb-total');
+  if (totalEl) totalEl.textContent = `$${total.toFixed(2)}/mo`;
+}
+
+async function submitMonarchCustomPlan(btn) {
+  const units = {};
+  let any = false;
+  for (const k of Object.keys(MONARCH_BUILDER_UNITS)) {
+    units[k] = Number(document.getElementById(`mb-slider-${k}`)?.value || 0);
+    if (units[k] > 0) any = true;
+  }
+  if (!any) { showToast('Slide at least one dial up first', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Requesting…'; }
+  const r = await apiFetch('/api/monarch/custom-plan', { method: 'POST', body: JSON.stringify({ units }) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Request this plan →'; }
+  if (r && r.success) {
+    showToast(`Custom plan requested — $${Number(r.monthly_usd).toFixed(2)}/mo, pending approval ✓`, 'success');
+    document.getElementById('monarch-suite-card')?.remove();
+    await loadMonarchSuite();
+  }
 }
 
 async function startMonarchFree() {
