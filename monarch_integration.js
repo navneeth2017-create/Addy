@@ -352,6 +352,49 @@ function installMonarchIntegration(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  /** GET /api/admin/monarch/diagnose — raw connectivity probe for the admin.
+   *  Does a live fetch to Monarch's partner /plans and returns the VERBATIM
+   *  status/body so we can tell apart the three ways this fails:
+   *    • unreachable / timeout  → wrong MONARCH_API_URL, Monarch down, no DNS
+   *    • 401                    → partner key mismatch (or trailing whitespace)
+   *    • 404                    → old Monarch build without /api/partner routes
+   *  key_len is reported (not the key) so a copy that picked up a newline or a
+   *  trailing space is obvious without leaking the secret. */
+  app.get('/api/admin/monarch/diagnose', authenticate, authorize('admin'), async (req, res) => {
+    const out = {
+      configured: configured(),
+      api_url: MONARCH_API || '(unset)',
+      key_set: !!PARTNER_KEY,
+      key_len: PARTNER_KEY.length,
+      key_trimmed_len: PARTNER_KEY.trim().length,
+      probe_url: MONARCH_API ? `${MONARCH_API}/api/partner/plans` : null,
+    };
+    if (!MONARCH_API) { out.verdict = 'MONARCH_API_URL is not set on Addy.'; return res.json(out); }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(out.probe_url, {
+        headers: { 'X-Partner-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+      });
+      out.status = r.status;
+      out.ok = r.ok;
+      const text = await r.text().catch(() => '');
+      out.body = text.slice(0, 600);
+      if (r.ok) out.verdict = '✓ Connected — Monarch accepted the partner key.';
+      else if (r.status === 401 || r.status === 403) out.verdict = 'Reached Monarch, but it REJECTED the key. MONARCH_PARTNER_KEY (Addy) must exactly equal PARTNER_API_KEY (Monarch) — check for a trailing space/newline (compare key_len vs key_trimmed_len).';
+      else if (r.status === 404) out.verdict = 'Reached the host, but /api/partner/plans is 404 — Monarch is deployed WITHOUT the partner routes (old build) or MONARCH_API_URL points at the wrong service.';
+      else if (r.status === 503) out.verdict = 'Reached Monarch, but it has no PARTNER_API_KEY set — add it on the Monarch deployment.';
+      else out.verdict = `Reached Monarch but got HTTP ${r.status}.`;
+    } catch (e) {
+      out.fetch_error = e.name === 'AbortError' ? 'timeout after 8s' : e.message;
+      out.verdict = `Could NOT reach ${out.probe_url} (${out.fetch_error}). MONARCH_API_URL is wrong, Monarch is down, or the network blocks it.`;
+    } finally {
+      clearTimeout(timer);
+    }
+    res.json(out);
+  });
+
   // Inject the Sales Suite card script into the DSD dashboard.
   const fs = require('fs');
   const path = require('path');

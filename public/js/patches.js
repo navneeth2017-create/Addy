@@ -134,7 +134,7 @@ function _injectRestoreButton() {
   if (!backupBtn || document.getElementById('backups-restore-btn')) return;
   const viewBtn = document.createElement('button');
   viewBtn.id = 'backups-restore-btn';
-  viewBtn.className = 'btn btn-outline';
+  viewBtn.className = 'btn btn-outline btn-sm';
   viewBtn.style.cssText = 'font-size:13px;margin-left:8px;';
   viewBtn.textContent = '📥 View / Restore Backups';
   viewBtn.onclick = loadBackupsList;
@@ -214,7 +214,9 @@ async function loadMonarchAdminCard() {
   card.style.cssText = 'max-width:640px;margin-bottom:24px;';
   card.innerHTML = `
     <div class="table-toolbar"><div><h2 style="margin:0 0 4px;display:flex;align-items:center;gap:8px;"><svg width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" style="flex:none;vertical-align:middle;"><g transform="rotate(-6 32 32)"><path d="M31 21.5 C29 16.5 26.5 13.5 23.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M33 21.5 C35 16.5 37.5 13.5 40.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z" fill="#E8873B"/><path d="M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z" fill="#B96A2C"/><path d="M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z" fill="#E8873B"/><path d="M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z" fill="#B96A2C"/><ellipse cx="32" cy="36.5" rx="2.6" ry="10.5" fill="#5b3a1e"/><circle cx="32" cy="24" r="2.9" fill="#5b3a1e"/></g></svg>Sales Suite <span style="font-weight:500;font-size:13px;color:var(--text-secondary);">powered by Monarch</span></h2>
-      <p style="font-size:13px;color:var(--text-secondary);margin:0;">Partner workspaces &amp; monthly overage to bill</p></div></div>
+      <p style="font-size:13px;color:var(--text-secondary);margin:0;">Partner workspaces &amp; monthly overage to bill</p></div>
+      <button class="btn btn-outline btn-sm" onclick="diagnoseMonarch(this)" title="Live-test the partner API connection to Monarch">🔧 Test connection</button></div>
+    <div id="monarch-diagnose-result" style="margin:0 24px;"></div>
     <div id="monarch-admin-body" style="padding:0 24px 20px;"><div class="loading">Loading…</div></div>`;
   // Insert at the TOP of Settings (after the page header) so it's the first thing seen.
   const header = settingsTab.querySelector('.page-header');
@@ -268,6 +270,30 @@ MONARCH_PARTNER_KEY=some-long-random-secret</pre>
       </tbody>
     </table>
     <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">Free users are counted for the Monarch user base; only paid plans accrue overage. Add each paid partner's overage to their invoice at month end.</p>`;
+}
+
+async function diagnoseMonarch(btn) {
+  const out = document.getElementById('monarch-diagnose-result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  if (out) out.innerHTML = '<div class="loading" style="padding:10px 0;">Contacting Monarch…</div>';
+  const d = await apiFetch('/api/admin/monarch/diagnose');
+  if (btn) { btn.disabled = false; btn.textContent = '🔧 Test connection'; }
+  if (!out) return;
+  if (!d) { out.innerHTML = '<p style="font-size:13px;color:#dc2626;padding:10px 0;">Couldn\'t reach the Addy integration itself — is the new code deployed?</p>'; return; }
+  const good = d.ok === true;
+  const whitespace = d.key_set && d.key_len !== d.key_trimmed_len;
+  out.innerHTML = `
+    <div style="background:${good ? '#f0fdf4' : '#fef2f2'};border:1px solid ${good ? '#bbf7d0' : '#fecaca'};border-radius:8px;padding:12px 14px;margin:4px 0 14px;font-size:13px;color:${good ? '#166534' : '#991b1b'};">
+      <div style="font-weight:700;margin-bottom:6px;">${esc(d.verdict || (good ? 'Connected' : 'Failed'))}</div>
+      <div style="font-family:monospace;font-size:12px;line-height:1.7;color:${good ? '#15803d' : '#7f1d1d'};">
+        api_url: ${esc(String(d.api_url))}<br>
+        probe: ${esc(String(d.probe_url || '—'))}<br>
+        key_set: ${d.key_set ? 'yes' : 'NO'} · key_len: ${d.key_len}${whitespace ? ` <span style="color:#b45309;font-weight:700;">⚠ trimmed=${d.key_trimmed_len} — the key has leading/trailing whitespace!</span>` : ''}<br>
+        ${d.status !== undefined ? `http_status: ${d.status}<br>` : ''}
+        ${d.fetch_error ? `fetch_error: ${esc(String(d.fetch_error))}<br>` : ''}
+        ${d.body ? `body: ${esc(String(d.body))}` : ''}
+      </div>
+    </div>`;
 }
 
 async function syncMonarchUsers(btn) {
