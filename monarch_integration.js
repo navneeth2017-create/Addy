@@ -336,19 +336,26 @@ function installMonarchIntegration(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  /** POST /api/admin/monarch/sync — push any not-yet-provisioned signups up to
-   *  Monarch (backfills anyone who signed up while Monarch was unreachable). */
+  /** POST /api/admin/monarch/sync — push not-yet-provisioned signups up to
+   *  Monarch (backfills anyone who signed up while Monarch was unreachable).
+   *  POST with {all:true} (or ?all=1) re-pushes EVERY workspace regardless of
+   *  the provisioned flag — used when pointing Addy at a fresh Monarch instance
+   *  (e.g. after moving to your own Railway), so the new box repopulates.
+   *  syncWorkspaceToMonarch is idempotent (409 "already exists" counts as ok),
+   *  so re-running against a box that already has them is harmless. */
   app.post('/api/admin/monarch/sync', authenticate, authorize('admin'), async (req, res) => {
     try {
       if (!configured()) return res.status(503).json({ error: 'Monarch integration not configured' });
+      const all = req.body?.all === true || req.query.all === '1' || req.query.all === 'true';
+      const where = all ? '' : 'WHERE w.monarch_provisioned = false';
       const rows = (await pool.query(
         `SELECT w.user_id, w.slug, w.tier, w.monarch_email, u.name, u.email
          FROM monarch_workspaces w JOIN users u ON u.id = w.user_id
-         WHERE w.monarch_provisioned = false LIMIT 200`
+         ${where} ORDER BY w.created_at ASC LIMIT 500`
       )).rows;
       let synced = 0, failed = 0;
       for (const r of rows) { const out = await syncWorkspaceToMonarch(r); out.ok ? synced++ : failed++; }
-      res.json({ attempted: rows.length, synced, failed });
+      res.json({ attempted: rows.length, synced, failed, mode: all ? 'all' : 'pending' });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

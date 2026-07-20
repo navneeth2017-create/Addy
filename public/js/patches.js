@@ -252,7 +252,10 @@ MONARCH_PARTNER_KEY=some-long-random-secret</pre>
       <div><strong style="font-size:20px;">${c.paid}</strong><br><span style="color:var(--text-muted);">on paid plans</span></div>
       ${c.pending_sync ? `<div><strong style="font-size:20px;color:#e8873b;">${c.pending_sync}</strong><br><span style="color:var(--text-muted);">pending sync</span></div>` : ''}
     </div>
-    ${c.pending_sync ? `<button class="btn btn-sm btn-outline" onclick="syncMonarchUsers(this)" style="margin-bottom:12px;">↻ Sync ${c.pending_sync} to Monarch now</button>` : ''}`;
+    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      ${c.pending_sync ? `<button class="btn btn-sm btn-outline" onclick="syncMonarchUsers(this)">↻ Sync ${c.pending_sync} to Monarch now</button>` : ''}
+      ${c.total ? `<button class="btn btn-sm btn-outline" onclick="syncMonarchUsers(this, true)" title="Re-push every workspace — use after pointing Addy at a fresh Monarch instance">⟳ Re-sync all to Monarch</button>` : ''}
+    </div>`;
   if (!data.workspaces || data.workspaces.length === 0) {
     body.innerHTML = countsBar + '<p style="font-size:13px;color:var(--text-secondary);">No Sales Suite users yet. When a partner clicks “Start free” or subscribes, they appear here.</p>';
     return;
@@ -296,9 +299,9 @@ async function diagnoseMonarch(btn) {
     </div>`;
 }
 
-async function syncMonarchUsers(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
-  const r = await apiFetch('/api/admin/monarch/sync', { method: 'POST' });
+async function syncMonarchUsers(btn, all) {
+  if (btn) { btn.disabled = true; btn.textContent = all ? 'Re-syncing…' : 'Syncing…'; }
+  const r = await apiFetch('/api/admin/monarch/sync', { method: 'POST', body: JSON.stringify({ all: !!all }) });
   if (r) showToast(`Synced ${r.synced}/${r.attempted} to Monarch${r.failed ? ' — ' + r.failed + ' still failing (is Monarch reachable?)' : ''}`, r.failed ? 'error' : 'success');
   document.getElementById('monarch-admin-card')?.remove();
   loadMonarchAdminCard();
