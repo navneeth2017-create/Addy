@@ -241,7 +241,7 @@ function installMonarchIntegration(app) {
   // Fallback prices if Monarch is unreachable when a partner opens the builder
   // — kept in sync with Monarch's src/config/plans.js METERED_UNITS prices.
   const FALLBACK_UNIT_PRICES = { ai_calls: 0.75, texts: 0.05, ai_drafts: 0.05, emails: 0.01 };
-  const FALLBACK_BASE_FEE = 25;
+  const FALLBACK_BASE_FEE = 200; // Pro license fee — kept in sync with Monarch's CUSTOM_BASE_FEE
   const CUSTOM_UNIT_MAX = { ai_calls: 10000, texts: 100000, ai_drafts: 100000, emails: 500000 };
 
   /**

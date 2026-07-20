@@ -132,7 +132,7 @@ function monarchPricingFrom(status) {
       ai_drafts: up.ai_drafts?.price ?? 0.05,
       emails: up.emails?.price ?? 0.01,
     },
-    baseFee: typeof status?.plans?.custom_base_fee === 'number' ? status.plans.custom_base_fee : 25,
+    baseFee: typeof status?.plans?.custom_base_fee === 'number' ? status.plans.custom_base_fee : 200,
   };
 }
 
