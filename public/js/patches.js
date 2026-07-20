@@ -239,23 +239,40 @@ MONARCH_PARTNER_KEY=some-long-random-secret</pre>
       <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Also set <code>PARTNER_API_KEY</code> = the same secret on the Monarch deployment. Partners then get the Sales Suite card on <strong>their</strong> dashboard (it never shows on this admin page).</p>`;
     return;
   }
+  const c = data.counts || { total: (data.workspaces||[]).length, synced: 0, pending_sync: 0, paid: 0 };
+  const countsBar = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin:0 0 14px;font-size:13px;">
+      <div><strong style="font-size:20px;">${c.total}</strong><br><span style="color:var(--text-muted);">Sales Suite users</span></div>
+      <div><strong style="font-size:20px;color:#059669;">${c.synced}</strong><br><span style="color:var(--text-muted);">live in Monarch</span></div>
+      <div><strong style="font-size:20px;">${c.paid}</strong><br><span style="color:var(--text-muted);">on paid plans</span></div>
+      ${c.pending_sync ? `<div><strong style="font-size:20px;color:#e8873b;">${c.pending_sync}</strong><br><span style="color:var(--text-muted);">pending sync</span></div>` : ''}
+    </div>
+    ${c.pending_sync ? `<button class="btn btn-sm btn-outline" onclick="syncMonarchUsers(this)" style="margin-bottom:12px;">↻ Sync ${c.pending_sync} to Monarch now</button>` : ''}`;
   if (!data.workspaces || data.workspaces.length === 0) {
-    body.innerHTML = '<p style="font-size:13px;color:var(--text-secondary);">Configured ✓ — no partner workspaces yet. Partners see the Sales Suite card on their own dashboard and can start free.</p>';
+    body.innerHTML = countsBar + '<p style="font-size:13px;color:var(--text-secondary);">No Sales Suite users yet. When a partner clicks “Start free” or subscribes, they appear here.</p>';
     return;
   }
-  body.innerHTML = `
+  body.innerHTML = countsBar + `
     <table style="width:100%;font-size:13px;border-collapse:collapse;">
-      <thead><tr style="text-align:left;color:var(--text-muted);"><th style="padding:4px;">Partner</th><th>Plan</th><th>Status</th><th>Overage this month</th></tr></thead>
+      <thead><tr style="text-align:left;color:var(--text-muted);"><th style="padding:4px;">Partner</th><th>Plan</th><th>In Monarch</th><th>Overage this month</th></tr></thead>
       <tbody>${data.workspaces.map(w => `
         <tr style="border-top:1px solid var(--border);">
           <td style="padding:6px 4px;">${esc(w.name || w.email)}<br><span style="color:var(--text-muted);">${esc(w.slug)}</span></td>
           <td>${esc(w.tier)}</td>
-          <td>${w.status === 'active' ? '✓ active' : '<span style="color:#dc2626;">' + esc(w.status) + '</span>'}</td>
-          <td style="font-weight:700;">$${Number(w.usage?.overage_total_usd || 0).toFixed(2)}</td>
+          <td>${w.monarch_provisioned ? '✓' : '<span style="color:#e8873b;">pending</span>'}</td>
+          <td style="font-weight:700;">${w.tier === 'free' ? '—' : '$' + Number(w.usage?.overage_total_usd || 0).toFixed(2)}</td>
         </tr>`).join('')}
       </tbody>
     </table>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">Add the overage amount to each partner's invoice at month end.</p>`;
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">Free users are counted for the Monarch user base; only paid plans accrue overage. Add each paid partner's overage to their invoice at month end.</p>`;
+}
+
+async function syncMonarchUsers(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  const r = await apiFetch('/api/admin/monarch/sync', { method: 'POST' });
+  if (r) showToast(`Synced ${r.synced}/${r.attempted} to Monarch${r.failed ? ' — ' + r.failed + ' still failing (is Monarch reachable?)' : ''}`, r.failed ? 'error' : 'success');
+  document.getElementById('monarch-admin-card')?.remove();
+  loadMonarchAdminCard();
 }
 document.addEventListener('DOMContentLoaded', loadMonarchAdminCard);
 if (document.readyState !== 'loading') loadMonarchAdminCard();

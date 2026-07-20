@@ -88,9 +88,39 @@ async function ensureTable() {
     stripe_subscription_id TEXT,
     temp_password TEXT,
     monarch_email TEXT,
+    monarch_provisioned BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  // Additive for existing installs.
+  await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS monarch_provisioned BOOLEAN NOT NULL DEFAULT false`);
+}
+
+/**
+ * Push one local workspace up to Monarch (create the tenant) and mark it
+ * provisioned. Used by the background call on signup AND the retry/backfill
+ * sweep, so a signup made while Monarch was down still lands later. Idempotent:
+ * a slug that already exists on Monarch (409) is treated as provisioned.
+ */
+async function syncWorkspaceToMonarch(row) {
+  try {
+    const created = await monarchApi('/tenants', 'POST', {
+      company_name: row.name ? `${row.name} Distribution` : `Addy Partner ${row.user_id}`,
+      slug: row.slug, admin_email: row.monarch_email || row.email, admin_name: row.name || row.email, plan_tier: row.tier || 'free',
+    });
+    await pool.query(
+      `UPDATE monarch_workspaces SET monarch_provisioned=true, temp_password=COALESCE($1,temp_password), monarch_email=COALESCE($2,monarch_email), updated_at=NOW() WHERE user_id=$3`,
+      [created.login?.temp_password ?? null, created.login?.email ?? null, row.user_id]
+    );
+    return { ok: true };
+  } catch (e) {
+    // Already exists on Monarch -> it IS provisioned; stop retrying it.
+    if (/already exists/i.test(e.message)) {
+      await pool.query(`UPDATE monarch_workspaces SET monarch_provisioned=true, updated_at=NOW() WHERE user_id=$1`, [row.user_id]);
+      return { ok: true, existed: true };
+    }
+    return { ok: false, error: e.message };
+  }
 }
 
 /** Provision (or re-tier) the Monarch workspace for an Addy user. */
@@ -114,8 +144,8 @@ async function provisionWorkspace(user, tier, stripeSubId = null) {
     plan_tier: tier,
   });
   await pool.query(
-    `INSERT INTO monarch_workspaces (user_id, slug, tier, status, stripe_subscription_id, temp_password, monarch_email)
-     VALUES ($1,$2,$3,'active',$4,$5,$6)`,
+    `INSERT INTO monarch_workspaces (user_id, slug, tier, status, stripe_subscription_id, temp_password, monarch_email, monarch_provisioned)
+     VALUES ($1,$2,$3,'active',$4,$5,$6,true)`,
     [user.id, slug, tier, stripeSubId, created.login.temp_password, created.login.email]
   );
   return { slug, tier, created: true };
@@ -172,21 +202,12 @@ function installMonarchIntegration(app) {
         [user.id, slug, user.email]
       );
       res.status(201).json({ success: true, tier: 'free', slug });
-      // Grow the Monarch user base in the background — fire and forget.
+      // Grow the Monarch user base in the background — fire and forget. If it
+      // fails (Monarch down), the nightly/manual sync backfills it later.
       if (configured()) {
-        (async () => {
-          try {
-            const created = await monarchApi('/tenants', 'POST', {
-              company_name: user.name ? `${user.name} Distribution` : `Addy Partner ${user.id}`,
-              slug, admin_email: user.email, admin_name: user.name || user.email, plan_tier: 'free',
-            });
-            await pool.query(
-              `UPDATE monarch_workspaces SET temp_password=$1, monarch_email=$2, updated_at=NOW() WHERE user_id=$3`,
-              [created.login.temp_password, created.login.email, user.id]
-            );
-            console.log(`🚀 (bg) Monarch free tenant created for Addy user ${user.id}`);
-          } catch (e) { console.error(`(bg) Monarch free provision failed for user ${user.id} (non-fatal):`, e.message); }
-        })();
+        syncWorkspaceToMonarch({ user_id: user.id, slug, tier: 'free', name: user.name, email: user.email, monarch_email: user.email })
+          .then(r => console.log(`(bg) Monarch sync for user ${user.id}:`, r.ok ? 'ok' : r.error))
+          .catch(() => {});
       }
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -293,17 +314,41 @@ function installMonarchIntegration(app) {
       const ping = await monarchPing();
       if (!ping.ok) return res.json({ configured: true, monarch_reachable: false, monarch_error: ping.error, workspaces: [] });
       const rows = (await pool.query(
-        `SELECT w.user_id, w.slug, w.tier, w.status, u.name, u.email
+        `SELECT w.user_id, w.slug, w.tier, w.status, w.monarch_provisioned, u.name, u.email
          FROM monarch_workspaces w JOIN users u ON u.id = w.user_id ORDER BY w.created_at ASC`
       )).rows;
       const out = [];
       for (const r of rows) {
         let usage = null;
-        try { usage = await monarchApi(`/tenants/${r.slug}/usage${req.query.period ? `?period=${req.query.period}` : ''}`); }
-        catch (e) { usage = { error: e.message }; }
+        if (r.tier !== 'free') { // only paid tenants meter usage
+          try { usage = await monarchApi(`/tenants/${r.slug}/usage${req.query.period ? `?period=${req.query.period}` : ''}`); }
+          catch (e) { usage = { error: e.message }; }
+        }
         out.push({ ...r, usage });
       }
-      res.json({ configured: true, monarch_reachable: true, workspaces: out });
+      const counts = {
+        total: rows.length,
+        synced: rows.filter(r => r.monarch_provisioned).length,
+        pending_sync: rows.filter(r => !r.monarch_provisioned).length,
+        paid: rows.filter(r => r.tier !== 'free').length,
+      };
+      res.json({ configured: true, monarch_reachable: true, counts, workspaces: out });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  /** POST /api/admin/monarch/sync — push any not-yet-provisioned signups up to
+   *  Monarch (backfills anyone who signed up while Monarch was unreachable). */
+  app.post('/api/admin/monarch/sync', authenticate, authorize('admin'), async (req, res) => {
+    try {
+      if (!configured()) return res.status(503).json({ error: 'Monarch integration not configured' });
+      const rows = (await pool.query(
+        `SELECT w.user_id, w.slug, w.tier, w.monarch_email, u.name, u.email
+         FROM monarch_workspaces w JOIN users u ON u.id = w.user_id
+         WHERE w.monarch_provisioned = false LIMIT 200`
+      )).rows;
+      let synced = 0, failed = 0;
+      for (const r of rows) { const out = await syncWorkspaceToMonarch(r); out.ok ? synced++ : failed++; }
+      res.json({ attempted: rows.length, synced, failed });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
