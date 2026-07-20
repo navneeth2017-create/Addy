@@ -132,21 +132,30 @@ async function syncWorkspaceToMonarch(row) {
   }
 }
 
-/** Provision (or re-tier) the Monarch workspace for an Addy user. */
-async function provisionWorkspace(user, tier, stripeSubId = null) {
+/**
+ * Provision (or re-tier) the Monarch workspace for an Addy user after payment.
+ * `customPlan` = { units, monthly_usd } for a build-your-own Pro plan (from the
+ * sliders); when present the tier is Pro and their custom allowances are set on
+ * Monarch. When absent it's a standard fixed tier and any prior custom
+ * allowances are cleared, so entitlement and billing always match what's paid.
+ */
+async function provisionWorkspace(user, tier, stripeSubId = null, customPlan = null) {
+  const effectiveTier = customPlan ? 'pro' : tier;
+  const patch = customPlan
+    ? { plan_tier: 'pro', status: 'active', custom_included: customPlan.units }
+    : { plan_tier: effectiveTier, status: 'active', custom_included: null };
+
   const existing = (await pool.query(`SELECT * FROM monarch_workspaces WHERE user_id=$1`, [user.id])).rows[0];
   if (existing) {
-    // A Stripe checkout moves them onto a STANDARD tier — clear any custom
-    // allowances on both sides so entitlement and billing stay in sync
-    // (custom_included:null is ignored harmlessly by older Monarch builds).
-    await monarchApi(`/tenants/${existing.slug}`, 'PATCH', { plan_tier: tier, status: 'active', custom_included: null });
+    await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
     await pool.query(
       `UPDATE monarch_workspaces SET tier=$1, status='active',
          stripe_subscription_id=COALESCE($2, stripe_subscription_id),
-         custom_plan=NULL, custom_status=NULL, custom_plan_prev=NULL, updated_at=NOW() WHERE user_id=$3`,
-      [tier, stripeSubId, user.id]
+         custom_plan=$3, custom_status=$4, custom_plan_prev=NULL, updated_at=NOW() WHERE user_id=$5`,
+      [effectiveTier, stripeSubId, customPlan ? JSON.stringify(customPlan) : null,
+       customPlan ? 'active' : null, user.id]
     );
-    return { slug: existing.slug, tier, upgraded: true };
+    return { slug: existing.slug, tier: effectiveTier, upgraded: true };
   }
   const slug = slugify(user.name || user.email.split('@')[0], user.id);
   const created = await monarchApi('/tenants', 'POST', {
@@ -154,14 +163,17 @@ async function provisionWorkspace(user, tier, stripeSubId = null) {
     slug,
     admin_email: user.email,
     admin_name: user.name || user.email,
-    plan_tier: tier,
+    plan_tier: effectiveTier,
   });
+  // New tenants are created on the tier; a custom plan then sets allowances.
+  if (customPlan) await monarchApi(`/tenants/${slug}`, 'PATCH', { plan_tier: 'pro', status: 'active', custom_included: customPlan.units });
   await pool.query(
-    `INSERT INTO monarch_workspaces (user_id, slug, tier, status, stripe_subscription_id, temp_password, monarch_email, monarch_provisioned)
-     VALUES ($1,$2,$3,'active',$4,$5,$6,true)`,
-    [user.id, slug, tier, stripeSubId, created.login.temp_password, created.login.email]
+    `INSERT INTO monarch_workspaces (user_id, slug, tier, status, stripe_subscription_id, temp_password, monarch_email, monarch_provisioned, custom_plan, custom_status)
+     VALUES ($1,$2,$3,'active',$4,$5,$6,true,$7,$8)`,
+    [user.id, slug, effectiveTier, stripeSubId, created.login.temp_password, created.login.email,
+     customPlan ? JSON.stringify(customPlan) : null, customPlan ? 'active' : null]
   );
-  return { slug, tier, created: true };
+  return { slug, tier: effectiveTier, created: true };
 }
 
 function installMonarchIntegration(app) {
@@ -184,7 +196,7 @@ function installMonarchIntegration(app) {
       res.json({
         configured: true,
         app_url: MONARCH_APP,
-        checkout_ready: !!(process.env.STRIPE_SECRET_KEY && process.env.MONARCH_STARTER_PRICE_ID && process.env.MONARCH_PRO_PRICE_ID),
+        checkout_ready: !!process.env.STRIPE_SECRET_KEY, // dynamic pricing — no pre-made price IDs needed
         workspace: ws,
         plans,
         monarch_reachable: reach.ok,
@@ -233,17 +245,20 @@ function installMonarchIntegration(app) {
   const CUSTOM_UNIT_MAX = { ai_calls: 10000, texts: 100000, ai_drafts: 100000, emails: 500000 };
 
   /**
-   * Build-your-own AI plan (the sliders). A partner composes a bundle of
+   * Build-your-own Pro plan (the sliders). A partner composes a bundle of
    * monthly allowances; we price it server-side (never trust the browser's
-   * math), store it as a PENDING request, and the Addy admin approves it from
-   * the admin card — approval is what actually changes their Monarch tier +
-   * allowances and starts the billing. Nothing is unlocked until approved,
-   * so nobody gets free AI usage before you've agreed to invoice them.
+   * math) and send them straight to Stripe Checkout for that exact monthly
+   * amount (a dynamic recurring price — no pre-made Stripe price IDs needed).
+   * On successful payment the webhook provisions Pro + their custom allowances.
+   * Self-serve: no admin approval, and they can't use anything until they pay.
    */
   app.post('/api/monarch/custom-plan', authenticate, authorize('dsd'), (req, res) => {
     jsonParser(req, res, async () => {
       try {
         if (!configured()) return res.status(503).json({ error: 'Sales Suite is not configured yet' });
+        const stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null;
+        if (!stripe) { console.warn('custom-plan: STRIPE_SECRET_KEY not set on Addy'); return res.status(503).json({ error: 'Card payments are switching on shortly — hang tight, this will be ready very soon.' }); }
+
         const raw = req.body?.units || {};
         const units = {};
         for (const k of Object.keys(FALLBACK_UNIT_PRICES)) {
@@ -254,7 +269,7 @@ function installMonarchIntegration(app) {
           units[k] = Math.floor(v);
         }
         if (Object.values(units).every(v => v === 0)) {
-          return res.status(400).json({ error: 'Pick at least some monthly usage — all sliders are at zero' });
+          return res.status(400).json({ error: 'Slide at least one dial up first' });
         }
         // Price it from Monarch's live catalog (fallback to the mirrored rates).
         let prices = FALLBACK_UNIT_PRICES, baseFee = FALLBACK_BASE_FEE;
@@ -262,45 +277,36 @@ function installMonarchIntegration(app) {
           const plans = await monarchApi('/plans', 'GET', null, 6000);
           if (plans.unit_prices) prices = Object.fromEntries(Object.entries(plans.unit_prices).map(([k, u]) => [k, u.price]));
           if (typeof plans.custom_base_fee === 'number') baseFee = plans.custom_base_fee;
-        } catch { /* unreachable Monarch must not block a plan REQUEST */ }
+        } catch { /* unreachable Monarch must not block reaching checkout */ }
         const usage_usd = Object.entries(units).reduce((s, [k, q]) => s + q * (prices[k] || 0), 0);
         const monthly_usd = +(usage_usd + baseFee).toFixed(2);
-        // AI voice calls are a Pro feature; everything else fits Starter.
-        const tier = units.ai_calls > 0 ? 'pro' : 'starter';
 
-        // Workspace row must exist (free signup creates it); create if missing
-        // so "build your own" also works as a first entry point.
         const user = (await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [req.user.id])).rows[0];
-        const existing = (await pool.query(`SELECT slug FROM monarch_workspaces WHERE user_id=$1`, [user.id])).rows[0];
-        const plan = { units, monthly_usd, base_fee: baseFee, tier, requested_at: new Date().toISOString() };
-        if (existing) {
-          // If a custom plan is ACTIVE, this is an ADJUSTMENT request: snapshot
-          // the live plan into custom_plan_prev first, so a decline restores it
-          // instead of erasing the record of what Monarch still has (and what's
-          // being invoiced). A re-submitted pending request keeps the existing
-          // snapshot. Done in one atomic UPDATE — no read-then-write race.
-          await pool.query(
-            `UPDATE monarch_workspaces
-                SET custom_plan_prev = CASE WHEN custom_status='active' THEN custom_plan ELSE custom_plan_prev END,
-                    custom_plan=$1, custom_status='pending', updated_at=NOW()
-              WHERE user_id=$2`,
-            [JSON.stringify(plan), user.id]
-          );
-        } else {
-          const slug = slugify(user.name || user.email.split('@')[0], user.id);
-          await pool.query(
-            `INSERT INTO monarch_workspaces (user_id, slug, tier, status, monarch_email, custom_plan, custom_status)
-             VALUES ($1,$2,'free','active',$3,$4,'pending')`,
-            [user.id, slug, user.email, JSON.stringify(plan)]
-          );
-          if (configured()) {
-            syncWorkspaceToMonarch({ user_id: user.id, slug, tier: 'free', name: user.name, email: user.email, monarch_email: user.email })
-              .then(r => console.log(`(bg) Monarch sync for user ${user.id}:`, r.ok ? 'ok' : r.error))
-              .catch(() => {});
-          }
-        }
-        res.status(201).json({ success: true, status: 'pending', monthly_usd, tier });
-      } catch (e) { res.status(500).json({ error: e.message }); }
+        const summary = Object.entries(units).filter(([, v]) => v > 0)
+          .map(([k, v]) => `${v.toLocaleString()} ${({ ai_calls: 'AI calls', texts: 'texts', ai_drafts: 'AI writes', emails: 'emails' })[k]}`).join(', ');
+        const origin = `${req.protocol}://${req.get('host')}`;
+        // custom_units rides in metadata so the webhook can provision exactly
+        // what was paid for. All values are strings (Stripe metadata rule).
+        const meta = { addy_user_id: String(user.id), tier: 'pro', custom_units: JSON.stringify(units), monthly_usd: String(monthly_usd) };
+        const session = await stripe.checkout.sessions.create({
+          mode: 'subscription',
+          line_items: [{
+            price_data: {
+              currency: 'usd',
+              product_data: { name: 'Sales Suite — Pro (your plan)', description: summary },
+              unit_amount: Math.round(monthly_usd * 100),
+              recurring: { interval: 'month' },
+            },
+            quantity: 1,
+          }],
+          customer_email: user.email,
+          success_url: `${origin}/dashboard-dsd.html?monarch=success`,
+          cancel_url: `${origin}/dashboard-dsd.html?monarch=cancelled`,
+          metadata: meta,
+          subscription_data: { metadata: meta },
+        });
+        res.json({ url: session.url, monthly_usd });
+      } catch (e) { console.error('custom-plan checkout failed:', e.message); res.status(500).json({ error: e.message }); }
     });
   });
 
@@ -363,10 +369,27 @@ function installMonarchIntegration(app) {
         const s = event.data.object;
         const userId = parseInt(s.metadata?.addy_user_id, 10);
         const tier = s.metadata?.tier;
+        // Build-your-own Pro plan pays through a dynamic price; custom_units
+        // rides in the session metadata so we provision exactly what was paid.
+        let customPlan = null;
+        if (s.metadata?.custom_units) {
+          try {
+            customPlan = { units: JSON.parse(s.metadata.custom_units), monthly_usd: Number(s.metadata.monthly_usd) || null };
+          } catch { /* malformed metadata — treat as a plain tier */ }
+        }
         if (userId && (tier === 'starter' || tier === 'pro')) {
           const user = (await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [userId])).rows[0];
-          if (user) await provisionWorkspace(user, tier, s.subscription || null);
-          console.log(`🚀 Sales Suite ${tier} activated for Addy user ${userId}`);
+          if (user) {
+            // An adjustment means a NEW subscription — cancel the previous one
+            // so the partner is never billed on two subscriptions at once.
+            const prev = (await pool.query(`SELECT stripe_subscription_id FROM monarch_workspaces WHERE user_id=$1`, [userId])).rows[0];
+            if (prev?.stripe_subscription_id && prev.stripe_subscription_id !== s.subscription) {
+              try { await stripe.subscriptions.cancel(prev.stripe_subscription_id); }
+              catch (e) { console.error('could not cancel prior subscription:', e.message); }
+            }
+            await provisionWorkspace(user, tier, s.subscription || null, customPlan);
+          }
+          console.log(`🚀 Sales Suite ${customPlan ? 'custom Pro' : tier} activated for Addy user ${userId}`);
         }
       } else if (event.type === 'customer.subscription.deleted') {
         const sub = event.data.object;
@@ -461,64 +484,6 @@ function installMonarchIntegration(app) {
       for (const r of rows) { const out = await syncWorkspaceToMonarch(r); out.ok ? synced++ : failed++; }
       res.json({ attempted: rows.length, synced, failed, mode: all ? 'all' : 'pending' });
     } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
-  /**
-   * Approve or decline a partner's build-your-own plan request. Approval is
-   * the moment their Monarch tier + custom allowances actually change — and
-   * the moment you start invoicing them the plan's monthly_usd.
-   *
-   * Decline on a FIRST request clears everything (nothing was ever unlocked).
-   * Decline on an ADJUSTMENT (they already had an active custom plan) restores
-   * the previous active plan from the snapshot — their live entitlement on
-   * Monarch never changed, so Addy's billing record must not vanish either.
-   */
-  app.post('/api/admin/monarch/custom-plan/:userId', authenticate, authorize('admin'), (req, res) => {
-    jsonParser(req, res, async () => {
-      try {
-        if (!configured()) return res.status(503).json({ error: 'Monarch integration not configured' });
-        const action = req.body?.action;
-        if (!['approve', 'decline'].includes(action)) return res.status(400).json({ error: 'action must be approve or decline' });
-        const ws = (await pool.query(
-          `SELECT w.user_id, w.slug, w.tier, w.custom_plan, w.custom_status, w.custom_plan_prev,
-                  w.stripe_subscription_id, w.monarch_email, u.name, u.email
-           FROM monarch_workspaces w JOIN users u ON u.id = w.user_id WHERE w.user_id=$1`,
-          [req.params.userId]
-        )).rows[0];
-        if (!ws || !ws.custom_plan || ws.custom_status !== 'pending') {
-          return res.status(404).json({ error: 'No pending custom plan for that user' });
-        }
-        if (action === 'decline') {
-          const restored = !!ws.custom_plan_prev;
-          await pool.query(
-            `UPDATE monarch_workspaces
-                SET custom_plan = custom_plan_prev,
-                    custom_status = CASE WHEN custom_plan_prev IS NOT NULL THEN 'active' ELSE NULL END,
-                    custom_plan_prev = NULL, updated_at=NOW()
-              WHERE user_id=$1`, [ws.user_id]);
-          return res.json({ success: true, status: restored ? 'reverted_to_active' : 'declined',
-            ...(restored ? { monthly_usd: ws.custom_plan_prev.monthly_usd } : {}) });
-        }
-        // Approve. A live Stripe subscription would DOUBLE-BILL this partner
-        // (card charge + your custom invoice) — make the operator resolve it.
-        if (ws.stripe_subscription_id) {
-          return res.status(409).json({ error: 'This partner already pays by card through Stripe. Cancel their Stripe subscription first, then approve the custom plan — otherwise they would be billed twice.' });
-        }
-        const plan = ws.custom_plan;
-        // Make sure the tenant exists on Monarch first (free signups may still
-        // be pending sync), then set tier + allowances in one PATCH.
-        const synced = await syncWorkspaceToMonarch(ws);
-        if (!synced.ok) return res.status(502).json({ error: `Couldn't reach Monarch to provision first: ${synced.error}` });
-        await monarchApi(`/tenants/${ws.slug}`, 'PATCH', {
-          plan_tier: plan.tier, status: 'active', custom_included: plan.units,
-        });
-        await pool.query(
-          `UPDATE monarch_workspaces SET tier=$1, custom_status='active', custom_plan_prev=NULL, updated_at=NOW() WHERE user_id=$2`,
-          [plan.tier, ws.user_id]
-        );
-        res.json({ success: true, status: 'active', tier: plan.tier, monthly_usd: plan.monthly_usd });
-      } catch (e) { res.status(500).json({ error: e.message }); }
-    });
   });
 
   /** GET /api/admin/monarch/diagnose — raw connectivity probe for the admin.
