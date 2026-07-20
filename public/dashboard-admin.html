@@ -315,10 +315,10 @@
           <div><h1>Settings</h1><p>Notifications, database & feedback</p></div>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;max-width:1060px;align-items:start;">
+        <div style="columns:340px 2;column-gap:20px;max-width:1060px;">
 
           <!-- Notification Emails -->
-          <div class="table-card" style="margin:0;">
+          <div class="table-card" style="margin:0 0 20px;break-inside:avoid;">
             <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">🔔 Notification Emails</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">New orders &amp; account requests go to everyone listed.</p></div></div>
             <div style="padding:0 20px 18px;">
               <div id="notif-emails-list" style="margin-bottom:14px;min-height:32px;"></div>
@@ -341,7 +341,7 @@
           </div>
 
           <!-- Database (size + backup + restore) -->
-          <div class="table-card" style="margin:0;">
+          <div class="table-card" style="margin:0 0 20px;break-inside:avoid;">
             <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">🗄 Database</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Size, backups &amp; restore.</p></div></div>
             <div style="padding:14px 20px 18px;">
               <div id="db-size-content"><div class="loading" style="padding:6px 0;">Loading…</div></div>
@@ -353,8 +353,8 @@
             </div>
           </div>
 
-          <!-- Feedback (full width) -->
-          <div class="table-card" style="margin:0;grid-column:1 / -1;">
+          <!-- Feedback -->
+          <div class="table-card" style="margin:0 0 20px;break-inside:avoid;">
             <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">💡 Feedback &amp; Feature Requests</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Submitted by DSDs from their dashboard.</p></div></div>
             <div id="feedback-list" style="padding:0 20px 18px;"><div class="loading">Loading…</div></div>
           </div>
