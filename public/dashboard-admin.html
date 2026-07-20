@@ -312,81 +312,53 @@
 
       <div id="tab-settings" style="display:none;">
         <div class="page-header">
-          <div><h1>Settings</h1><p>Manage notification preferences</p></div>
+          <div><h1>Settings</h1><p>Notifications, database & feedback</p></div>
         </div>
 
-        <!-- Feedback Section -->
-        <div class="table-card" style="margin-bottom:24px;">
-          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">💡 User Feedback & Feature Requests</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Submitted by DSDs from their dashboard</p></div></div>
-          <div id="feedback-list" style="padding:0 24px 20px;"><div class="loading">Loading...</div></div>
-        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;max-width:1060px;">
 
-        <!-- Database Size Section -->
-        <div class="table-card" style="max-width:640px;margin-bottom:24px;">
-          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">Database Size</h2></div></div>
-          <div style="padding:16px 24px;">
-            <div id="db-size-content">
-              <div class="loading" style="padding:8px 0;">Loading...</div>
-            </div>
-            <button class="btn btn-outline" onclick="loadDbSize()" style="font-size:13px;margin-top:12px;">↻ Refresh</button>
-          </div>
-        </div>
-
-        <!-- Backup Section -->
-        <div class="table-card" style="max-width:640px;margin-bottom:24px;">
-          <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">Database Backup</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Runs automatically every night at 3am UTC. Keeps 7 daily + 4 weekly backups.</p></div></div>
-          <div style="padding:16px 24px;">
-            <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px;">Requires B2_KEY_ID, B2_APP_KEY and B2_BUCKET_ID env vars set in Railway.</p>
-            <button class="btn btn-green" onclick="triggerBackup()" style="font-size:13px;">▶ Run Backup Now</button>
-            <span id="backup-status" style="margin-left:12px;font-size:13px;color:var(--text-muted);"></span>
-          </div>
-        </div>
-
-        <div class="table-card" style="max-width:640px;">
-          <div class="table-toolbar">
-            <div>
-              <h2 style="margin:0 0 4px;">Notification Emails</h2>
-              <p style="font-size:13px;color:var(--text-secondary);margin:0;">Every new order and account request will be sent to all addresses listed here simultaneously.</p>
-            </div>
-          </div>
-          <div style="padding:0 24px 20px;">
-            <div id="notif-emails-list" style="margin-bottom:16px;min-height:40px;"></div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-              <div style="flex:1;min-width:200px;">
-                <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px;">Email Address</label>
-                <input type="email" id="notif-email-input" placeholder="someone@example.com"
-                  style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;"
-                  onkeydown="if(event.key==='Enter')addNotifEmail()">
+          <!-- Notification Emails -->
+          <div class="table-card" style="margin:0;">
+            <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">🔔 Notification Emails</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">New orders &amp; account requests go to everyone listed.</p></div></div>
+            <div style="padding:0 20px 18px;">
+              <div id="notif-emails-list" style="margin-bottom:14px;min-height:32px;"></div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+                <div style="flex:1;min-width:150px;">
+                  <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:5px;">Email</label>
+                  <input type="email" id="notif-email-input" placeholder="someone@example.com" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')addNotifEmail()">
+                </div>
+                <div style="width:120px;">
+                  <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:5px;">Label</label>
+                  <input type="text" id="notif-label-input" placeholder="Operations" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')addNotifEmail()">
+                </div>
+                <button class="btn btn-sm btn-green" onclick="addNotifEmail()" style="height:38px;white-space:nowrap;padding:0 16px;">+ Add</button>
               </div>
-              <div style="width:160px;">
-                <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px;">Label (optional)</label>
-                <input type="text" id="notif-label-input" placeholder="e.g. Operations"
-                  style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;box-sizing:border-box;"
-                  onkeydown="if(event.key==='Enter')addNotifEmail()">
-              </div>
-              <button class="btn btn-sm btn-green" onclick="addNotifEmail()" style="height:40px;white-space:nowrap;padding:0 18px;">+ Add Email</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="table-card" style="max-width:640px;margin-top:20px;">
-          <div class="table-toolbar"><h2>What triggers a notification</h2></div>
-          <div style="padding:4px 4px 16px;display:flex;flex-direction:column;gap:12px;">
-            <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg-secondary);border-radius:10px;">
-              <span style="font-size:24px;">🛒</span>
-              <div>
-                <div style="font-size:14px;font-weight:600;color:var(--text);">New Order Placed</div>
-                <div style="font-size:12px;color:var(--text-secondary);">Sent immediately when any user places an order. Includes all items, totals, and shipping address.</div>
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg-secondary);border-radius:10px;">
-              <span style="font-size:24px;">👤</span>
-              <div>
-                <div style="font-size:14px;font-weight:600;color:var(--text);">New Account Request</div>
-                <div style="font-size:12px;color:var(--text-secondary);">Sent when a dsd, dsd, or rep submits a sign-up. Includes their name, role, and contact info.</div>
+              <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;background:var(--bg-secondary);border-radius:20px;padding:5px 12px;color:var(--text-secondary);">🛒 New order placed</span>
+                <span style="font-size:12px;background:var(--bg-secondary);border-radius:20px;padding:5px 12px;color:var(--text-secondary);">👤 New account request</span>
               </div>
             </div>
           </div>
+
+          <!-- Database (size + backup + restore) -->
+          <div class="table-card" style="margin:0;">
+            <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">🗄 Database</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Size, backups &amp; restore.</p></div></div>
+            <div style="padding:14px 20px 18px;">
+              <div id="db-size-content"><div class="loading" style="padding:6px 0;">Loading…</div></div>
+              <button class="btn btn-outline btn-sm" onclick="loadDbSize()" style="font-size:13px;margin-top:8px;">↻ Refresh size</button>
+              <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+              <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">Auto-backup nightly (3am UTC) — keeps 7 daily + 4 weekly. Needs B2 env vars.</div>
+              <button class="btn btn-green btn-sm" onclick="triggerBackup()" style="font-size:13px;">▶ Run Backup Now</button>
+              <span id="backup-status" style="margin-left:10px;font-size:13px;color:var(--text-muted);"></span>
+            </div>
+          </div>
+
+          <!-- Feedback (full width) -->
+          <div class="table-card" style="margin:0;grid-column:1 / -1;">
+            <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">💡 Feedback &amp; Feature Requests</h2><p style="font-size:13px;color:var(--text-secondary);margin:0;">Submitted by DSDs from their dashboard.</p></div></div>
+            <div id="feedback-list" style="padding:0 20px 18px;"><div class="loading">Loading…</div></div>
+          </div>
+
         </div>
       </div>
 
