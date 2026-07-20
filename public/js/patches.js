@@ -213,7 +213,7 @@ async function loadMonarchAdminCard() {
   card.className = 'table-card';
   card.style.cssText = 'max-width:640px;margin-bottom:24px;';
   card.innerHTML = `
-    <div class="table-toolbar"><div><h2 style="margin:0 0 4px;">🚀 Sales Suite (Monarch)</h2>
+    <div class="table-toolbar"><div><h2 style="margin:0 0 4px;display:flex;align-items:center;gap:8px;"><svg width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" style="flex:none;vertical-align:middle;"><g transform="rotate(-6 32 32)"><path d="M31 21.5 C29 16.5 26.5 13.5 23.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M33 21.5 C35 16.5 37.5 13.5 40.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z" fill="#E8873B"/><path d="M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z" fill="#B96A2C"/><path d="M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z" fill="#E8873B"/><path d="M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z" fill="#B96A2C"/><ellipse cx="32" cy="36.5" rx="2.6" ry="10.5" fill="#5b3a1e"/><circle cx="32" cy="24" r="2.9" fill="#5b3a1e"/></g></svg>Sales Suite <span style="font-weight:500;font-size:13px;color:var(--text-secondary);">powered by Monarch</span></h2>
       <p style="font-size:13px;color:var(--text-secondary);margin:0;">Partner workspaces &amp; monthly overage to bill</p></div></div>
     <div id="monarch-admin-body" style="padding:0 24px 20px;"><div class="loading">Loading…</div></div>`;
   settingsTab.appendChild(card);
@@ -276,3 +276,10 @@ async function syncMonarchUsers(btn) {
 }
 document.addEventListener('DOMContentLoaded', loadMonarchAdminCard);
 if (document.readyState !== 'loading') loadMonarchAdminCard();
+// The Settings tab may render after first load; re-run on any admin-tab click
+// (loadMonarchAdminCard is idempotent — it no-ops if the card already exists).
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('admin-tab')) {
+    setTimeout(loadMonarchAdminCard, 30);
+  }
+});
