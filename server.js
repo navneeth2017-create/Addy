@@ -72,11 +72,25 @@ const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || 'ywl9LZOtPOzH3-QGIotbvz4S
 const VAPID_EMAIL   = process.env.VAPID_EMAIL       || 'mailto:admin@addydsds.com';
 webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE);
 
+// Native app (App Store / Play Store build) device tokens live in the same
+// push_subscriptions table, shaped { native: 'ios'|'android', token }.
+// Delivering to them needs APNs (iOS) / FCM (Android) credentials, which can
+// only be created once the Apple/Google developer accounts exist — see
+// MOBILE.md. Until those env vars are set this is a silent no-op, and web
+// subscriptions keep working exactly as before.
+async function sendNativePush(sub, title, body, url) {
+  if (!process.env.APNS_KEY_ID && !process.env.FCM_SERVER_KEY) return;
+  // TODO(native-push): wire @parse/node-apn (APNS_KEY_ID/APNS_TEAM_ID/APNS_KEY)
+  // and FCM once the developer accounts exist. Shape: sub.native, sub.token.
+  console.log(`[native-push] would send to ${sub.native} device: ${title}`);
+}
+
 async function sendPushToAdmins(title, body, url) {
   try {
     const admins = await all("SELECT ps.subscription FROM push_subscriptions ps JOIN users u ON u.id=ps.user_id WHERE u.role='admin'");
     for (const row of admins) {
       try {
+        if (row.subscription && row.subscription.native) { await sendNativePush(row.subscription, title, body, url); continue; }
         await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, url }));
       } catch(e) {
         if (e.statusCode === 410) {
@@ -94,6 +108,7 @@ async function sendPushToUser(userId, title, body, url) {
     const subs = await all('SELECT subscription FROM push_subscriptions WHERE user_id=$1', [userId]);
     for (const row of subs) {
       try {
+        if (row.subscription && row.subscription.native) { await sendNativePush(row.subscription, title, body, url); continue; }
         await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, url: url || '/' }));
       } catch(e) {
         if (e.statusCode === 410) await q('DELETE FROM push_subscriptions WHERE subscription=$1', [row.subscription]);

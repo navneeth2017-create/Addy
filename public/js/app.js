@@ -4,6 +4,9 @@ const API = '';
 let _vapidPublicKey = null;
 
 async function initPushNotifications() {
+  // Inside the native app (App Store build) the WebView has no PushManager —
+  // the bell runs through the Capacitor bridge instead (js/native-push.js).
+  if (window.AddyNativePush) { updatePushBellUI(localStorage.getItem('addy_native_push') === '1'); return; }
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
     const config = await apiFetch('/api/config');
@@ -31,6 +34,22 @@ function updatePushBellUI(isSubscribed) {
 }
 
 async function togglePushNotifications() {
+  // Native app: register with APNs/FCM through the Capacitor bridge.
+  if (window.AddyNativePush) {
+    const wasOn = localStorage.getItem('addy_native_push') === '1';
+    if (wasOn) {
+      const ok = await window.AddyNativePush.disable();
+      if (ok) { localStorage.removeItem('addy_native_push'); updatePushBellUI(false); showToast('Notifications disabled', 'success'); }
+      else showToast('Could not update notification settings', 'error');
+    } else if (!window.AddyNativePush.available()) {
+      showToast('Update the ADDY app to enable notifications', 'error');
+    } else {
+      const ok = await window.AddyNativePush.enable();
+      if (ok) { localStorage.setItem('addy_native_push', '1'); updatePushBellUI(true); showToast('✓ Notifications enabled!', 'success'); }
+      else showToast('Allow notifications for ADDY in your phone Settings', 'error');
+    }
+    return;
+  }
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     showToast('Push notifications not supported in this browser', 'error');
     return;
