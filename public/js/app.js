@@ -2012,6 +2012,7 @@ async function loadDSDDashboard() {
   }
   initTheme();
   initSessionTimeout();
+  initPushNotifications();
   document.getElementById('user-role').className = 'role-badge dsd';
   renderLogo(document.getElementById('logo-container'));
 

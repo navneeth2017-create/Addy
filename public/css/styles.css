@@ -662,12 +662,35 @@ tr:hover td { background: var(--bg-hover); }
 
 .stat-value { transition: opacity 0.2s; }
 
+/* --- Dashboard tab nav (both dashboards) --- */
+
+.admin-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {
-  /* Layout */
-  .topbar { padding: 0 16px; gap: 8px; }
-  .topbar .user-info { gap: 6px; }
+  /* Layout: the topbar carries 7 controls — let it wrap into tidy rows
+     instead of pushing buttons off the right edge of the screen. */
+  .topbar {
+    height: auto;
+    min-height: 0;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    row-gap: 8px;
+    gap: 8px;
+  }
+  .topbar .logo-mark { min-width: 0; }
+  .topbar .logo-mark img { height: 36px !important; }
+  .topbar .user-info { flex-wrap: wrap; gap: 6px; justify-content: flex-end; flex: 1; }
+  .topbar .user-info .btn-logout { padding: 6px 9px; font-size: 12px; }
+  .topbar .user-info a { padding: 6px 10px !important; font-size: 12px !important; margin-right: 0 !important; }
+  .topbar .theme-toggle, .topbar #push-bell-btn { padding: 5px 8px; font-size: 14px; }
   .topbar .logo-text { font-size: 17px; }
   .topbar .role-badge { display: none; }
   .main-content { padding: 16px; }
