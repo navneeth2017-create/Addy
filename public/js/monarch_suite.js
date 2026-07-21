@@ -130,8 +130,8 @@ async function loadMonarchSuite() {
       <div style="padding:22px;position:relative;background:linear-gradient(160deg,rgba(232,135,59,0.08),transparent 60%);">
         <div style="position:absolute;top:16px;right:16px;font-size:10.5px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:var(--accent);border-radius:20px;padding:3px 10px;">Most powerful</div>
         <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);font-weight:800;">Pro — build your own</div>
-        <div style="font-size:30px;font-weight:800;margin:4px 0;">Your price<span style="font-size:14px;color:var(--text-muted);font-weight:500;"> — you set it</span></div>
-        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">Everything in Plus + the AI you dial in.</div>
+        <div style="font-size:30px;font-weight:800;margin:4px 0;">From $199<span style="font-size:14px;color:var(--text-muted);font-weight:500;">/mo</span></div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">Everything in Plus + the AI you dial in — you set the amount.</div>
         <ul style="list-style:none;padding:0;margin:0 0 18px;font-size:13px;color:var(--text-secondary);display:grid;gap:8px;">
           <li>✅ Everything in Plus</li>
           <li>📞 AI call minutes to your leads</li>
@@ -164,7 +164,7 @@ function monarchPricingFrom(status) {
       texts: up.texts?.price ?? 0.20,
       emails: up.emails?.price ?? 0.16,
     },
-    baseFee: typeof status?.plans?.custom_base_fee === 'number' ? status.plans.custom_base_fee : 200,
+    baseFee: typeof status?.plans?.custom_base_fee === 'number' ? status.plans.custom_base_fee : 199,
   };
 }
 

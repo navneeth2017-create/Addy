@@ -242,7 +242,7 @@ function installMonarchIntegration(app) {
   // — kept in sync with Monarch's src/config/plans.js METERED_UNITS prices.
   // AI writing is a given on Pro (not billed); its cost is folded into these.
   const FALLBACK_UNIT_PRICES = { ai_calls: 0.50, texts: 0.20, emails: 0.16 };
-  const FALLBACK_BASE_FEE = 200; // Pro license fee — kept in sync with Monarch's CUSTOM_BASE_FEE
+  const FALLBACK_BASE_FEE = 199; // Pro license fee — kept in sync with Monarch's CUSTOM_BASE_FEE
   const CUSTOM_UNIT_MAX = { ai_calls: 10000, texts: 100000, emails: 500000 };
 
   /**
