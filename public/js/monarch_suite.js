@@ -39,7 +39,29 @@ async function loadMonarchSuite() {
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn btn-sm" onclick="switchMyTab('stores', document.querySelectorAll('.admin-tab')[1])" style="background:var(--accent);color:#fff;">My Stores →</button>
+            <button class="btn btn-sm btn-outline" onclick="upgradeMonarch('plus')">➕ Get Plus ($50/mo)</button>
             <button class="btn btn-sm btn-green" onclick="toggleMonarchBuilder()">⚙ Build your Pro plan</button>
+          </div>
+        </div>
+        <div id="monarch-builder-slot" style="display:none;"></div>`;
+      return;
+    }
+    // PLUS: $50/mo flat — inventory tracking on top of Free. Real Monarch login.
+    if (ws.tier === 'plus') {
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+          <div>
+            ${SUITE_HEADER}
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
+              Your plan: <strong>Plus</strong> <span style="font-size:11.5px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:20px;padding:2px 10px;font-weight:700;">$50/mo</span>
+              ${ws.status !== 'active' ? ' · <span style="color:#dc2626;font-weight:700;">paused — update your payment method</span>' : ''}
+              · Inventory tracking &amp; management unlocked · Company code: <code>${esc(ws.slug)}</code>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${ws.temp_password !== null && ws.temp_password !== undefined ? `<button class="btn btn-sm btn-outline" onclick="revealMonarchCreds()">🔑 Show my login</button>` : ''}
+            <a class="btn btn-sm btn-green" href="${esc(status.app_url)}" target="_blank" rel="noopener" style="text-decoration:none;">Open Sales Suite →</a>
+            <button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="toggleMonarchBuilder()">⬆ Upgrade to Pro (AI)</button>
           </div>
         </div>
         <div id="monarch-builder-slot" style="display:none;"></div>`;
@@ -79,7 +101,7 @@ async function loadMonarchSuite() {
       ${SUITE_HEADER}
       <div style="font-size:13px;color:var(--text-secondary);margin-top:6px;">Run your whole distribution business — your own CRM, AI calls &amp; texts, inventory, routes and more, private to you.</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));">
       <!-- FREE -->
       <div style="padding:22px;border-right:1px solid var(--border);">
         <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);font-weight:700;">Free</div>
@@ -92,16 +114,28 @@ async function loadMonarchSuite() {
         </ul>
         <button class="btn btn-outline" onclick="startMonarchFree()" style="width:100%;font-weight:700;">Start free</button>
       </div>
+      <!-- PLUS $50 -->
+      <div style="padding:22px;border-right:1px solid var(--border);">
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#4f46e5;font-weight:800;">Plus</div>
+        <div style="font-size:30px;font-weight:800;margin:4px 0;">$50<span style="font-size:14px;color:var(--text-muted);font-weight:500;">/mo</span></div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">Everything in Free, plus run your inventory.</div>
+        <ul style="list-style:none;padding:0;margin:0 0 18px;font-size:13px;color:var(--text-secondary);display:grid;gap:8px;">
+          <li>✅ Everything in Free</li>
+          <li>📦 Inventory tracking &amp; management</li>
+          <li>📊 Stock levels &amp; low-stock alerts</li>
+        </ul>
+        <button class="btn" onclick="upgradeMonarch('plus')" style="width:100%;font-weight:700;background:#4f46e5;color:#fff;">Get Plus →</button>
+      </div>
       <!-- PRO (build your own) -->
-      <div style="padding:22px;position:relative;background:linear-gradient(160deg,rgba(232,135,59,0.06),transparent 60%);">
+      <div style="padding:22px;position:relative;background:linear-gradient(160deg,rgba(232,135,59,0.08),transparent 60%);">
         <div style="position:absolute;top:16px;right:16px;font-size:10.5px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:var(--accent);border-radius:20px;padding:3px 10px;">Most powerful</div>
         <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);font-weight:800;">Pro — build your own</div>
         <div style="font-size:30px;font-weight:800;margin:4px 0;">Your price<span style="font-size:14px;color:var(--text-muted);font-weight:500;"> — you set it</span></div>
-        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">Dial in exactly the AI you'll use. Pay for what you pick.</div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">Everything in Plus + the AI you dial in.</div>
         <ul style="list-style:none;padding:0;margin:0 0 18px;font-size:13px;color:var(--text-secondary);display:grid;gap:8px;">
-          <li>📞 AI voice calls to your leads</li>
-          <li>💬 Reorder texts &amp; follow-ups</li>
-          <li>✍️ AI writing, polish &amp; bulk email</li>
+          <li>✅ Everything in Plus</li>
+          <li>📞 AI call minutes to your leads</li>
+          <li>💬 Texts, ✍️ AI writing &amp; bulk email</li>
           <li>🗺️ Route optimization &amp; automation</li>
         </ul>
         <button class="btn btn-green" onclick="toggleMonarchBuilder()" style="width:100%;font-weight:800;">⚙ Build your plan →</button>
@@ -117,20 +151,18 @@ async function loadMonarchSuite() {
 // math is display-only).
 // ---------------------------------------------------------------------------
 const MONARCH_BUILDER_UNITS = {
-  ai_calls:  { label: '📞 AI voice calls', max: 500,   step: 5,   hint: 'AI calls your lead list for you' },
-  texts:     { label: '💬 Text messages',  max: 5000,  step: 50,  hint: 'reorder texts & follow-ups' },
-  ai_drafts: { label: '✍️ AI writing',     max: 5000,  step: 50,  hint: 'AI-written emails, texts & polish' },
-  emails:    { label: '📧 Emails',         max: 20000, step: 250, hint: 'order confirmations & campaigns' },
+  ai_calls:  { label: '📞 AI call minutes', max: 3000,  step: 30,  hint: 'minutes of AI calls to your leads' },
+  texts:     { label: '💬 Text messages',   max: 5000,  step: 50,  hint: 'reorder texts & follow-ups' },
+  emails:    { label: '📧 Emails',           max: 20000, step: 250, hint: 'order confirmations & campaigns' },
 };
 
 function monarchPricingFrom(status) {
   const up = status?.plans?.unit_prices || {};
   return {
     prices: {
-      ai_calls: up.ai_calls?.price ?? 0.75,
-      texts: up.texts?.price ?? 0.05,
-      ai_drafts: up.ai_drafts?.price ?? 0.05,
-      emails: up.emails?.price ?? 0.01,
+      ai_calls: up.ai_calls?.price ?? 0.50,
+      texts: up.texts?.price ?? 0.20,
+      emails: up.emails?.price ?? 0.16,
     },
     baseFee: typeof status?.plans?.custom_base_fee === 'number' ? status.plans.custom_base_fee : 200,
   };

@@ -240,9 +240,10 @@ function installMonarchIntegration(app) {
 
   // Fallback prices if Monarch is unreachable when a partner opens the builder
   // — kept in sync with Monarch's src/config/plans.js METERED_UNITS prices.
-  const FALLBACK_UNIT_PRICES = { ai_calls: 0.75, texts: 0.05, ai_drafts: 0.05, emails: 0.01 };
+  // AI writing is a given on Pro (not billed); its cost is folded into these.
+  const FALLBACK_UNIT_PRICES = { ai_calls: 0.50, texts: 0.20, emails: 0.16 };
   const FALLBACK_BASE_FEE = 200; // Pro license fee — kept in sync with Monarch's CUSTOM_BASE_FEE
-  const CUSTOM_UNIT_MAX = { ai_calls: 10000, texts: 100000, ai_drafts: 100000, emails: 500000 };
+  const CUSTOM_UNIT_MAX = { ai_calls: 10000, texts: 100000, emails: 500000 };
 
   /**
    * Build-your-own Pro plan (the sliders). A partner composes a bundle of
@@ -283,7 +284,7 @@ function installMonarchIntegration(app) {
 
         const user = (await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [req.user.id])).rows[0];
         const summary = Object.entries(units).filter(([, v]) => v > 0)
-          .map(([k, v]) => `${v.toLocaleString()} ${({ ai_calls: 'AI calls', texts: 'texts', ai_drafts: 'AI writes', emails: 'emails' })[k]}`).join(', ');
+          .map(([k, v]) => `${v.toLocaleString()} ${({ ai_calls: 'call minutes', texts: 'texts', emails: 'emails' })[k]}`).join(', ');
         const origin = `${req.protocol}://${req.get('host')}`;
         // custom_units rides in metadata so the webhook can provision exactly
         // what was paid for. All values are strings (Stripe metadata rule).
@@ -322,27 +323,40 @@ function installMonarchIntegration(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  /** Paid tiers — Stripe Checkout (subscription mode). */
+  // Flat monthly prices for the fixed tiers (dynamic Stripe price — no pre-made
+  // price IDs). Only Plus is sold this way; Pro goes through the sliders.
+  const FIXED_TIER_PRICE = { plus: Number(process.env.MONARCH_PLUS_PRICE || 50) };
+  const FIXED_TIER_LABEL = { plus: 'Plus — inventory tracking' };
+
+  /** Fixed tiers (currently Plus $50/mo) — Stripe Checkout, dynamic price. */
   app.post('/api/monarch/checkout', authenticate, authorize('dsd'), (req, res) => {
     jsonParser(req, res, async () => {
       try {
         if (!configured()) return res.status(503).json({ error: 'Sales Suite is not configured yet' });
         const stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null;
-        if (!stripe) return res.status(503).json({ error: 'Card payments are not configured yet' });
+        if (!stripe) { console.warn('checkout: STRIPE_SECRET_KEY not set on Addy'); return res.status(503).json({ error: 'Card payments are switching on shortly — hang tight.' }); }
         const tier = req.body?.tier;
-        const price = tier === 'starter' ? process.env.MONARCH_STARTER_PRICE_ID
-                    : tier === 'pro' ? process.env.MONARCH_PRO_PRICE_ID : null;
-        if (!price) return res.status(400).json({ error: 'Pick a plan (starter or pro)' });
+        const price = FIXED_TIER_PRICE[tier];
+        if (!price) return res.status(400).json({ error: 'That plan isn\'t a fixed-price plan' });
         const user = (await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [req.user.id])).rows[0];
         const origin = `${req.protocol}://${req.get('host')}`;
+        const meta = { addy_user_id: String(user.id), tier };
         const session = await stripe.checkout.sessions.create({
           mode: 'subscription',
-          line_items: [{ price, quantity: 1 }],
+          line_items: [{
+            price_data: {
+              currency: 'usd',
+              product_data: { name: `Sales Suite — ${FIXED_TIER_LABEL[tier] || tier}` },
+              unit_amount: Math.round(price * 100),
+              recurring: { interval: 'month' },
+            },
+            quantity: 1,
+          }],
           customer_email: user.email,
           success_url: `${origin}/dashboard-dsd.html?monarch=success`,
           cancel_url: `${origin}/dashboard-dsd.html?monarch=cancelled`,
-          metadata: { addy_user_id: String(user.id), tier },
-          subscription_data: { metadata: { addy_user_id: String(user.id), tier } },
+          metadata: meta,
+          subscription_data: { metadata: meta },
         });
         res.json({ url: session.url });
       } catch (e) { console.error('monarch checkout failed:', e.message); res.status(500).json({ error: e.message }); }
@@ -377,7 +391,7 @@ function installMonarchIntegration(app) {
             customPlan = { units: JSON.parse(s.metadata.custom_units), monthly_usd: Number(s.metadata.monthly_usd) || null };
           } catch { /* malformed metadata — treat as a plain tier */ }
         }
-        if (userId && (tier === 'starter' || tier === 'pro')) {
+        if (userId && (tier === 'plus' || tier === 'starter' || tier === 'pro')) {
           const user = (await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [userId])).rows[0];
           if (user) {
             // An adjustment means a NEW subscription — cancel the previous one
