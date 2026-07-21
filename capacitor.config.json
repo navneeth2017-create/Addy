@@ -1,0 +1,16 @@
+{
+  "appId": "com.addy.distribution",
+  "appName": "ADDY",
+  "webDir": "public",
+  "backgroundColor": "#0f172a",
+  "server": {
+    "url": "https://REPLACE-WITH-YOUR-RAILWAY-DOMAIN",
+    "cleartext": false
+  },
+  "ios": {
+    "contentInset": "always"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
