@@ -1,0 +1,20 @@
+{
+  "name": "ADDY Distribution",
+  "short_name": "ADDY",
+  "description": "ADDY partner portal — orders, inventory, routes, and your AI sales suite.",
+  "start_url": "/login.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Shop", "url": "/shop.html", "description": "Place an order" },
+    { "name": "Dashboard", "url": "/dashboard-dsd.html" }
+  ]
+}
