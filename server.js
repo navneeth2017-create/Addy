@@ -234,6 +234,24 @@ async function migrate() {
     }
   } catch(e) { console.log('ℹ️  house commission migration skipped:', e.message); }
 
+  // One-time: make sure the house partner (Danny) is locked at 35% — the
+  // original name-match pin may not have caught his account, which left him
+  // seeing 30% in the shop. Re-matches house_partner by name if unset, then
+  // forces the 35% lock on the house partner.
+  try {
+    const done = await one("SELECT 1 FROM app_migrations WHERE key='danny_35_lock_v1'");
+    if (!done) {
+      const anyHouse = await one('SELECT id FROM users WHERE house_partner=TRUE LIMIT 1');
+      if (!anyHouse) {
+        await q("UPDATE users SET house_partner=TRUE WHERE role='dsd' AND (lower(trim(name))='danny' OR lower(name) LIKE 'danny %')");
+      }
+      const r = await q('UPDATE users SET locked_discount_pct=35 WHERE house_partner=TRUE');
+      await q("INSERT INTO app_migrations (key) VALUES ('danny_35_lock_v1')");
+      console.log(`✅ House partner locked at 35% (${r.rowCount||0} account(s))`);
+      if ((r.rowCount||0) !== 1) console.log('⚠️  Expected exactly one house partner — if Danny\'s account name isn\'t "Danny …", set house_partner + 35% manually in the DB/admin.');
+    }
+  } catch(e) { console.log('ℹ️  danny 35 lock migration skipped:', e.message); }
+
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
     await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
@@ -2908,6 +2926,30 @@ app.get('/api/commissions', authenticate, async (req, res) => {
       : await all('SELECT c.*,b.name as buyer_name FROM commissions c LEFT JOIN users b ON b.id=c.buyer_id WHERE c.earner_id=$1 ORDER BY c.created_at DESC', [req.user.id]);
     res.json(rows);
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// The people a rep earns commission on. For the house partner (Danny) that's
+// his referrals PLUS every grandfathered user (5% each) and a flat 2% on
+// everyone else's sales; for a normal rep it's just their referrals at 5%.
+app.get('/api/my-reps', authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'dsd') return res.json({ reps: [], flat_rate_others: null });
+    const me = await one('SELECT id, house_partner FROM users WHERE id=$1', [req.user.id]);
+    if (!me) return res.json({ reps: [], flat_rate_others: null });
+    const reps = me.house_partner
+      ? await all(
+          `SELECT id, name, email, status, created_at,
+                  CASE WHEN referred_by=$1 THEN 'Invited by you' ELSE 'ADDY network' END AS source
+           FROM users WHERE id<>$1 AND role<>'admin' AND (referred_by=$1 OR house_5pct=TRUE)
+           ORDER BY created_at ASC`, [me.id])
+      : await all(
+          `SELECT id, name, email, status, created_at, 'Invited by you' AS source
+           FROM users WHERE referred_by=$1 AND id<>$1 ORDER BY created_at ASC`, [me.id]);
+    res.json({
+      reps: reps.map(r => ({ ...r, your_rate: 5 })),
+      flat_rate_others: me.house_partner ? 2 : null,
+    });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 // Request a payout

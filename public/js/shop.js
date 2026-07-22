@@ -110,9 +110,9 @@ async function loadProducts() {
 // discount itself is applied server-side the moment the cart holds enough
 // boxes — these are just fast ways to get there.
 const PALLETS = {
-  starter: { label: '3 Master Boxes', boxes: 3, each: 1, pct: null, emoji: '📦' },
-  half: { label: 'Half Pallet', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
-  full: { label: 'Full Pallet', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
+  starter: { label: '3 Master Boxes', sub: 'Your minimum order', boxes: 3, each: 1, pct: null, emoji: '📦' },
+  half: { label: 'Half Pallet', sub: '15 master boxes', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
+  full: { label: 'Full Pallet', sub: '27 master boxes', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
 };
 const BOX_TYPE_LABELS = { shots: 'Shots', blister_card: 'Blister Cards', gummies: 'Gummies' };
 
@@ -127,17 +127,35 @@ function renderPalletBar() {
   // The 3-box starter card only shows when it matters: first order, or a
   // pallet-locked rep whose minimum is 3 boxes.
   const kinds = Object.entries(PALLETS).filter(([kind]) => kind !== 'starter' || _minOrderBoxes >= 3);
+  // Reps at the 20% tier (min order 1) get a "custom master box" card instead
+  // of the 3-box starter: one box, packed the way they ask.
+  const singleCard = _minOrderBoxes < 3 ? `
+        <div class="pallet-card starter">
+          <span class="pallet-badge">${_myRate}% OFF</span>
+          <div class="pallet-head">
+            <span class="pallet-emoji">📦</span>
+            <div>
+              <div class="pallet-title">1 Master Box</div>
+              <div class="pallet-sub">Your minimum order · packed your way</div>
+            </div>
+          </div>
+          <div class="pallet-actions">
+            <button class="btn-pallet primary" onclick="openSingleBoxModal()">Pick &amp; customize</button>
+            <button class="btn-pallet" onclick="document.getElementById('products-grid').scrollIntoView({behavior:'smooth'})">Browse boxes</button>
+          </div>
+        </div>` : '';
   bar.innerHTML = `
     <div class="pallet-bar">
+      ${singleCard}
       ${kinds.map(([kind, P]) => `
         <div class="pallet-card ${kind}">
+          <span class="pallet-badge">${Math.max(_myRate, P.pct || 0)}% OFF</span>
           <div class="pallet-head">
             <span class="pallet-emoji">${P.emoji}</span>
             <div>
               <div class="pallet-title">${P.label}</div>
-              <div class="pallet-sub">${P.boxes} master boxes${kind === 'starter' ? ' · your minimum order' : ''}</div>
+              <div class="pallet-sub">${P.sub}</div>
             </div>
-            <span class="pallet-badge">${P.pct ? `${P.pct}% OFF` : `${_myRate}% OFF`}</span>
           </div>
           <div class="pallet-actions">
             <button class="btn-pallet primary" onclick="addClassicPallet('${kind}')">Classic mix — ${P.each} of each</button>
@@ -145,7 +163,7 @@ function renderPalletBar() {
           </div>
         </div>`).join('')}
     </div>
-    <div class="pallet-note">Your price is set by order size, off store cost: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 3 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ''}</div>`;
+    <div class="pallet-note">Your price is set by order size, off store cost: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 3 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'}</div>`;
 }
 
 async function addClassicPallet(kind) {
@@ -174,6 +192,62 @@ async function addClassicPallet(kind) {
   } finally {
     document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = false);
   }
+}
+
+// ── CUSTOM SINGLE MASTER BOX (20% tier, min order 1) ────────────────────────
+// Pick which box, and optionally tell us how to pack it — the note rides
+// along to checkout's order notes so the warehouse packs it custom.
+let _customBoxNote = '';
+
+function openSingleBoxModal() {
+  let modal = document.getElementById('single-box-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'single-box-modal';
+    modal.className = 'modal-overlay';
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    document.body.appendChild(modal);
+  }
+  const opts = boxProducts().map((p, i) => `
+    <label class="pb-row" style="cursor:pointer;">
+      <div class="pb-info" style="display:flex;align-items:center;gap:10px;">
+        <input type="radio" name="sb-pick" value="${p.id}" ${i === 0 ? 'checked' : ''} style="width:auto;accent-color:#2563eb;">
+        <div>
+          <div class="pb-name">${esc(p.name)}</div>
+          <div class="pb-meta">${BOX_TYPE_LABELS[p.box_type] || esc(p.box_type)} · $${parseFloat(p.my_price).toFixed(2)}/box · ${p.stock} in stock</div>
+        </div>
+      </div>
+    </label>`).join('');
+  modal.innerHTML = `
+    <div class="modal" style="max-width:520px;">
+      <button class="close-btn" onclick="document.getElementById('single-box-modal').classList.remove('active')">&times;</button>
+      <h2>📦 Your master box</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Pick a box — and if you want a custom mix inside, tell us how to pack it.</p>
+      ${opts || '<p style="color:var(--text-muted);">No boxes available.</p>'}
+      <div class="form-group" style="margin-top:14px;">
+        <label>Custom mix (optional)</label>
+        <textarea id="sb-note" rows="2" placeholder="e.g. half shots, half gummies — we'll pack it your way" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-family:inherit;font-size:14px;resize:vertical;"></textarea>
+      </div>
+      <button class="checkout-btn" id="sb-add-btn" onclick="addSingleBox()">Add to cart</button>
+    </div>`;
+  modal.classList.add('active');
+}
+
+async function addSingleBox() {
+  const pick = document.querySelector('input[name="sb-pick"]:checked');
+  if (!pick) { showToast('Pick a box first', 'error'); return; }
+  const btn = document.getElementById('sb-add-btn');
+  btn.disabled = true; btn.textContent = 'Adding…';
+  const note = (document.getElementById('sb-note')?.value || '').trim();
+  const body = { product_id: parseInt(pick.value), quantity: 1 };
+  if (_currentStoreId) body.store_id = _currentStoreId;
+  const cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Add to cart';
+  if (!cart) return;
+  _cart = cart; renderCart();
+  if (note) { _customBoxNote = note; showToast('📦 Box added — custom mix noted for packing', 'success'); }
+  else showToast('📦 Box added to cart', 'success');
+  document.getElementById('single-box-modal').classList.remove('active');
 }
 
 let _builderKind = null, _builderQty = {};
@@ -559,6 +633,12 @@ function showCheckout() {
     document.getElementById('ship-city').value = '';
     document.getElementById('ship-state').value = '';
     document.getElementById('ship-zip').value = '';
+  }
+
+  // A custom-box packing request rides along in the order notes.
+  const notesEl = document.getElementById('order-notes');
+  if (notesEl && _customBoxNote && !notesEl.value.includes(_customBoxNote)) {
+    notesEl.value = (notesEl.value ? notesEl.value + '\n' : '') + 'Custom box: ' + _customBoxNote;
   }
 
   document.getElementById('checkout-modal').classList.add('active');
