@@ -282,7 +282,7 @@ function renderMarginProgress(profile) {
   if (!el) return;
   const pct = profile.discount_pct != null ? profile.discount_pct : 20;
   if (profile.locked_discount_pct != null) {
-    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your margin is <strong>locked at ${pct}%</strong> on every order — pallet or not.</div>`;
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your margin is <strong>locked at ${pct}%</strong> on every order — pallet or not.${profile.house_partner ? ' <span title="the luck of the house" style="cursor:default;">\u2618</span>' : ''}</div>`;
     return;
   }
   el.innerHTML = `
@@ -2143,6 +2143,10 @@ async function loadDSDDashboard() {
   const profile = await apiFetch('/api/profile');
   if (profile) {
     window._myEmail = profile.email;
+    window._me = profile;
+    if (profile.house_partner) {
+      console.log('%c\u2618 S\u00e1inte doesn\u2019t pay the bills \u2014 but 35% locked does. F\u00e1ilte, Danny.'.replace('S\u00e1inte','Sl\u00e1inte'), 'color:#169B62;font-size:13px;font-weight:700;');
+    }
     renderMarginProgress(profile);
     const tierEl = document.getElementById('stat-tier');
     if (tierEl) {
@@ -3835,8 +3839,11 @@ function markProgramDocsSeen() {
     const exits = [
       [W + 80, -80], [W * 0.7, -100], [-90, H * 0.15], [W + 90, H * 0.35],
     ];
+    const irish = !!(window._me && window._me.house_partner);
     exits.forEach(([ex, ey], i) => {
-      const el = spawnButterfly(sx - 14, sy - 14, 22 + Math.random() * 10, (Math.random() - 0.5) * 16);
+      // The house partner's flock always carries one emerald monarch. \u2618
+      const hue = irish && i === 2 ? 112 : (Math.random() - 0.5) * 16;
+      const el = spawnButterfly(sx - 14, sy - 14, 22 + Math.random() * 10, hue);
       const anim = el.animate(flightKeyframes(sx - 14, sy - 14, ex, ey, 300), {
         duration: 1900 + Math.random() * 900,
         delay: i * 90,
@@ -3873,5 +3880,38 @@ function markProgramDocsSeen() {
     e.preventDefault();
     e.stopPropagation();
     monarchButterflies(strong);
+  }, true);
+})();
+
+// ── A private bit of Ireland ────────────────────────────────────────────────
+// Triple-click the MY MARGIN tile and, if you're the house partner, a handful
+// of shamrocks tumble out. Nobody else's account does this.
+(function () {
+  let clicks = 0, timer = null;
+  document.addEventListener('click', (e) => {
+    const tile = e.target.closest('#stat-tier');
+    if (!tile || !(window._me && window._me.house_partner)) return;
+    clicks++;
+    clearTimeout(timer);
+    timer = setTimeout(() => { clicks = 0; }, 900);
+    if (clicks < 3) return;
+    clicks = 0;
+    const r = tile.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    for (let i = 0; i < 14; i++) {
+      const sh = document.createElement('div');
+      sh.textContent = '\u2618';
+      sh.style.cssText = `position:fixed;left:0;top:0;z-index:9999;pointer-events:none;font-size:${14 + Math.random() * 14}px;color:hsl(${135 + Math.random() * 25}, ${55 + Math.random() * 25}%, ${32 + Math.random() * 18}%);will-change:transform;`;
+      document.body.appendChild(sh);
+      const dx = (Math.random() - 0.5) * 380;
+      const rise = 80 + Math.random() * 160, fall = 240 + Math.random() * 200;
+      const spin = (Math.random() - 0.5) * 720;
+      const anim = sh.animate([
+        { transform: `translate(${cx}px, ${cy}px) rotate(0deg)`, opacity: 1 },
+        { transform: `translate(${cx + dx * 0.6}px, ${cy - rise}px) rotate(${spin * 0.5}deg)`, opacity: 1, offset: 0.45 },
+        { transform: `translate(${cx + dx}px, ${cy + fall}px) rotate(${spin}deg)`, opacity: 0 },
+      ], { duration: 1400 + Math.random() * 700, easing: 'cubic-bezier(0.3, 0.2, 0.6, 1)', fill: 'forwards' });
+      anim.onfinish = () => sh.remove();
+    }
   }, true);
 })();
