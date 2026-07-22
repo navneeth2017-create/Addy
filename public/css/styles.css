@@ -1250,9 +1250,9 @@ input[type="checkbox"] {
   position: relative;
 }
 .pallet-card.full { background: linear-gradient(135deg, #1D2E63, #0D1B38); border-color: rgba(96, 165, 250, 0.45); }
-.pallet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding-right: 78px; }
+.pallet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding-right: 112px; }
 .pallet-emoji { font-size: 26px; flex-shrink: 0; }
-.pallet-title { font-weight: 800; font-size: 16px; letter-spacing: 0.01em; white-space: nowrap; }
+.pallet-title { font-weight: 800; font-size: 16px; letter-spacing: 0.01em; line-height: 1.2; }
 .pallet-sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
 .pallet-badge {
   position: absolute; top: 14px; right: 14px;
@@ -1261,9 +1261,9 @@ input[type="checkbox"] {
 }
 .pallet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .btn-pallet {
-  padding: 10px 8px; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer;
+  padding: 9px 6px; border-radius: 9px; font-size: 12.5px; font-weight: 700; cursor: pointer;
   background: rgba(255, 255, 255, 0.08); color: #fff; border: 1px solid rgba(255, 255, 255, 0.18);
-  white-space: nowrap;
+  line-height: 1.25;
 }
 .btn-pallet.primary { background: linear-gradient(90deg, #2563EB, #3b82f6); border: none; }
 .btn-pallet:disabled { opacity: 0.55; cursor: default; }
