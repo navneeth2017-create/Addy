@@ -257,7 +257,7 @@ async function renderOnboardingChecklist() {
     const storesCount = storesData?.stores?.length || 0;
     const photosPending = Array.isArray(photos) ? photos.length : 0;
     const steps = [
-      { done: ordersCount > 0, label: 'Place your first order', hint: 'One master box of each type — shots, blister card, gummies.' },
+      { done: ordersCount > 0, label: 'Place your first order', hint: 'At least 3 master boxes, any mix — its size locks in your rate (3+ boxes → 20%, half pallet → 25%, full pallet → 30%).' },
       { done: storesCount > 0, label: 'Claim your first store', hint: 'Lock in a store as your exclusive territory.' },
       { done: storesCount > 0 && photosPending === 0, label: 'Upload your store photos', hint: 'Required within your photo deadline.' },
     ];
@@ -282,12 +282,12 @@ function renderMarginProgress(profile) {
   if (!el) return;
   const pct = profile.discount_pct != null ? profile.discount_pct : 20;
   if (profile.locked_discount_pct != null) {
-    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your rate is <strong>locked at ${pct}% off MSRP</strong> on every order — pallet or not.</div>`;
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your rate is <strong>locked at ${pct}% off store cost</strong> on every order — pallet or not.</div>`;
     return;
   }
   el.innerHTML = `
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:20px;">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">How your pricing works — % off MSRP by order size</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">How your pricing works — % off store cost by order size</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
         <div style="background:var(--bg-secondary,#f3f6fb);border-radius:10px;padding:12px 8px;">
           <div style="font-size:20px;font-weight:800;">20%</div>
@@ -651,7 +651,7 @@ async function loadCommissionsTable() {
   tbody.innerHTML = rows.map(r => `<tr>
     <td>${esc(r.earner_name || r.earner_email || '—')}</td>
     <td>${esc(r.buyer_name || '—')}</td>
-    <td><span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:var(--accent-bg);color:var(--accent);">Level ${r.level}</span></td>
+    <td><span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:var(--accent-bg);color:var(--accent);">${r.level === 2 ? 'House' : 'Referral'}</span></td>
     <td>${(parseFloat(r.rate)*100).toFixed(0)}%</td>
     <td style="font-weight:700;color:var(--green);">$${parseFloat(r.amount).toFixed(2)}</td>
     <td><span class="status-badge ${r.status}">${r.status}</span></td>
@@ -1088,7 +1088,7 @@ async function loadMyCommissions() {
   if (!rows || !rows.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px;">No commissions yet — recruit reps to earn!</td></tr>'; return; }
   tbody.innerHTML = rows.map(r => `<tr>
     <td>${esc(r.buyer_name||'Unknown')}</td>
-    <td><span style="padding:2px 8px;border-radius:10px;font-size:11px;background:var(--accent-bg);color:var(--accent);">Level ${r.level}</span></td>
+    <td><span style="padding:2px 8px;border-radius:10px;font-size:11px;background:var(--accent-bg);color:var(--accent);">${r.level === 2 ? 'House' : 'Referral'}</span></td>
     <td>${(parseFloat(r.rate)*100).toFixed(0)}%</td>
     <td style="font-weight:700;color:var(--green);">$${parseFloat(r.amount).toFixed(2)}</td>
     <td><span class="status-badge ${r.status}">${r.status}</span></td>
@@ -2013,7 +2013,7 @@ async function loadDSDDashboard() {
     const tierEl = document.getElementById('stat-tier');
     if (tierEl) {
       const pct = profile.discount_pct != null ? profile.discount_pct : 20;
-      let label = pct + '% off MSRP';
+      let label = pct + '% off store cost';
       if (profile.locked_discount_pct != null) label += ' (locked)';
       else label += ' · more on pallets';
       tierEl.textContent = label;
