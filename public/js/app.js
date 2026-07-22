@@ -2278,6 +2278,10 @@ async function loadUsersTab() {
             ? `<button class="btn btn-sm btn-outline" onclick="makeHousePartner(${u.id}, '${esc(u.name || u.email)}')" title="Lock at 35% and grandfather everyone else at 5% for them">⭐ House</button>`
             : ''
           }
+          ${u.role === 'dsd'
+            ? `<button class="btn btn-sm btn-outline" onclick="grantSuitePro(${u.id}, '${esc(u.name || u.email)}')" title="Comp the full Sales Suite (Pro) — no payment, no upgrade prompts">🦋 Suite Pro</button>`
+            : ''
+          }
           <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${esc(u.name || u.email)}')">Delete</button>
         </div>
       </td>
@@ -2291,6 +2295,14 @@ async function makeHousePartner(id, name) {
   if (!confirm(`Make ${name} the house partner?\n\n• Locks their margin at 35% on every order\n• They earn 5% on every existing user's orders and their invites\n• Plus a flat 2% on all other future sales\n\nThe reps themselves are never shown any of this.`)) return;
   const r = await apiFetch(`/api/admin/users/${id}/house-partner`, { method: 'POST', body: JSON.stringify({}) });
   if (r && r.success) { showToast(`⭐ ${name} is the house partner — 35% locked`, 'success'); if (typeof loadUsersTab === 'function') loadUsersTab(); }
+}
+
+// Comp the full Sales Suite (Pro tier) for a rep — house partners like Danny.
+// Provisions their workspace on Monarch and removes every buy/upgrade prompt.
+async function grantSuitePro(id, name) {
+  if (!confirm(`Give ${name} the full Sales Suite (Pro) on the house?\n\n• Their workspace is created/upgraded to Pro immediately\n• No payment, and they'll never see plan pricing or upgrade prompts\n• They open it right from their dashboard — it stays inside ADDY`)) return;
+  const r = await apiFetch('/api/admin/monarch/grant', { method: 'POST', body: JSON.stringify({ user_id: id, tier: 'pro' }) });
+  if (r && r.success) showToast(`🦋 ${name} now has the full Sales Suite (Pro, on the house)`, 'success');
 }
 
 async function pingUser(id, name) {
