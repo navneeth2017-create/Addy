@@ -210,10 +210,15 @@ function toggleMonarchBuilder() {
   if (!document.getElementById('mb-range-style')) {
     const st = document.createElement('style');
     st.id = 'mb-range-style';
-    st.textContent = `.mb-range{-webkit-appearance:none;appearance:none;width:100%;height:7px;border-radius:4px;outline:none;cursor:pointer;background:linear-gradient(to right,#E8873B 0%,#E8873B var(--fill,0%),#e5e7eb var(--fill,0%));}
-      .mb-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #E8873B;box-shadow:0 2px 6px rgba(0,0,0,0.25);transition:transform .1s;}
-      .mb-range::-webkit-slider-thumb:hover{transform:scale(1.12);}
-      .mb-range::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:#fff;border:3px solid #E8873B;box-shadow:0 2px 6px rgba(0,0,0,0.25);}`;
+    // Selectors are qualified with input[type="range"] so they out-specify the
+    // app-wide input[type="range"] rules in styles.css (attribute selector +
+    // class beats attribute selector alone).
+    st.textContent = `input[type="range"].mb-range{-webkit-appearance:none;appearance:none;width:100%;height:7px;border-radius:999px;outline:none;cursor:pointer;margin:8px 0;background:linear-gradient(to right,#E8873B 0%,#E8873B var(--fill,0%),rgba(148,163,184,0.35) var(--fill,0%),rgba(148,163,184,0.35) 100%);}
+      input[type="range"].mb-range:focus,input[type="range"].mb-range:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(232,135,59,0.35);border-radius:999px;}
+      input[type="range"].mb-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #E8873B;box-shadow:0 2px 6px rgba(0,0,0,0.3);transition:transform .1s;margin-top:0;}
+      input[type="range"].mb-range::-webkit-slider-thumb:hover{transform:scale(1.12);}
+      input[type="range"].mb-range::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid #E8873B;box-shadow:0 2px 6px rgba(0,0,0,0.3);}
+      input[type="range"].mb-range::-moz-range-track{height:7px;border-radius:999px;background:transparent;}`;
     document.head.appendChild(st);
   }
   slot.style.display = '';
