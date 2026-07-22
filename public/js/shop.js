@@ -111,10 +111,39 @@ async function loadProducts() {
 // boxes — these are just fast ways to get there.
 const PALLETS = {
   starter: { label: '3 Master Boxes', sub: 'Your minimum order', boxes: 3, each: 1, pct: null, emoji: '📦' },
-  half: { label: 'Half Pallet', sub: '15 master boxes', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
-  full: { label: 'Full Pallet', sub: '27 master boxes', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
+  half: { label: 'Half Pallet', sub: '15 master boxes · FREE shipping', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
+  full: { label: 'Full Pallet', sub: '27 master boxes · FREE shipping', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
 };
 const BOX_TYPE_LABELS = { shots: 'Shots', blister_card: 'Blister Cards', gummies: 'Gummies' };
+
+// ── Shipping (mirrors server.js — the server is the source of truth) ────────
+// Free when: half/full pallet (15+ boxes), or the order includes a capsules
+// master box (blister cards). Otherwise zone-rated from Arizona by state.
+const CAPSULE_BOX_TYPE = 'blister_card';
+const SHIPPING_ZONES = [
+  { price: 15, states: ['AZ'] },
+  { price: 25, states: ['CA', 'NV', 'UT', 'NM', 'CO', 'OR', 'WA', 'ID', 'WY', 'MT', 'TX'] },
+  { price: 35, states: ['OK', 'KS', 'NE', 'SD', 'ND', 'MN', 'IA', 'MO', 'AR', 'LA', 'WI', 'IL', 'IN', 'MI', 'OH', 'KY', 'TN', 'MS', 'AL'] },
+  { price: 45, states: ['FL', 'GA', 'SC', 'NC', 'VA', 'WV', 'MD', 'DE', 'PA', 'NJ', 'NY', 'CT', 'RI', 'MA', 'VT', 'NH', 'ME', 'DC'] },
+  { price: 60, states: ['AK', 'HI'] },
+];
+function shippingForState(state) {
+  const st = String(state || '').trim().toUpperCase();
+  for (const z of SHIPPING_ZONES) if (z.states.includes(st)) return z.price;
+  return 35;
+}
+function cartShipsFree() {
+  const items = _cart.items || [];
+  if (!items.length) return false;
+  if (items.every(i => _products.find(p => p.id === i.product_id)?.free_shipping)) return true;
+  const boxes = items.filter(i => i.box_type).reduce((a, i) => a + i.quantity, 0);
+  if (boxes >= 15) return true;
+  return items.some(i => i.box_type === CAPSULE_BOX_TYPE);
+}
+function currentShipping() {
+  if (cartShipsFree()) return 0;
+  return shippingForState(document.getElementById('ship-state')?.value);
+}
 
 function boxProducts() {
   return _products.filter(p => p.box_type && p.active === 1 && p.my_price != null && !isNaN(parseFloat(p.my_price)));
@@ -126,10 +155,12 @@ function renderPalletBar() {
   if (_role === 'admin' || !boxProducts().length) { bar.innerHTML = ''; return; }
   // The 3-box starter card only shows when it matters: first order, or a
   // pallet-locked rep whose minimum is 3 boxes.
-  const kinds = Object.entries(PALLETS).filter(([kind]) => kind !== 'starter' || _minOrderBoxes >= 3);
+  PALLETS.starter.boxes = Math.max(2, _minOrderBoxes);
+  PALLETS.starter.label = `${PALLETS.starter.boxes} Master Boxes`;
+  const kinds = Object.entries(PALLETS).filter(([kind]) => kind !== 'starter' || _minOrderBoxes >= 2);
   // Reps at the 20% tier (min order 1) get a "custom master box" card instead
   // of the 3-box starter: one box, packed the way they ask.
-  const singleCard = _minOrderBoxes < 3 ? `
+  const singleCard = _minOrderBoxes < 2 ? `
         <div class="pallet-card starter">
           <span class="pallet-badge">${_myRate}% OFF</span>
           <div class="pallet-head">
@@ -158,12 +189,15 @@ function renderPalletBar() {
             </div>
           </div>
           <div class="pallet-actions">
-            <button class="btn-pallet primary" onclick="addClassicPallet('${kind}')">Classic mix — ${P.each} of each</button>
-            <button class="btn-pallet" onclick="openPalletBuilder('${kind}')">Build your own</button>
+            ${kind === 'starter' && P.boxes !== 3
+              ? `<button class="btn-pallet primary" onclick="openPalletBuilder('${kind}')">Pick your ${P.boxes} boxes</button>
+            <button class="btn-pallet" onclick="document.getElementById('products-grid').scrollIntoView({behavior:'smooth'})">Browse boxes</button>`
+              : `<button class="btn-pallet primary" onclick="addClassicPallet('${kind}')">Classic mix — ${P.each} of each</button>
+            <button class="btn-pallet" onclick="openPalletBuilder('${kind}')">Build your own</button>`}
           </div>
         </div>`).join('')}
     </div>
-    <div class="pallet-note">Your price is set by order size, off store cost: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 3 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'}</div>`;
+    <div class="pallet-note">Your price is set by order size, off store cost: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 2 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'} Pallets ship FREE — so does any order with a capsules master box.</div>`;
 }
 
 async function addClassicPallet(kind) {
@@ -553,6 +587,9 @@ function renderCart() {
   const total = _cart.items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
   document.getElementById('cart-total-val').textContent = `$${total.toFixed(2)}`;
   totalRow.style.display = 'flex';
+  shippingNote.textContent = cartShipsFree()
+    ? '✓ This order ships FREE'
+    : 'Add a capsules master box (blister cards) for free shipping — otherwise shipping is charged by zone from Arizona';
   shippingNote.style.display = 'block';
   checkoutBtn.disabled = false;
   updateMobileCartBar(total);
@@ -596,8 +633,7 @@ function showCheckout() {
   if (!items.length) return;
 
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-  const allFreeShipping = items.length > 0 && items.every(i => _products.find(p => p.id === i.product_id)?.free_shipping);
-  const shipping = (subtotal >= 350 || allFreeShipping) ? 0 : 35;
+  const shipping = currentShipping();
   const isCard = _selectedPayment === 'card';
   const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
   const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
@@ -633,6 +669,13 @@ function showCheckout() {
     document.getElementById('ship-city').value = '';
     document.getElementById('ship-state').value = '';
     document.getElementById('ship-zip').value = '';
+  }
+
+  // Shipping depends on the destination state — recompute totals as they type.
+  const stEl = document.getElementById('ship-state');
+  if (stEl && !stEl.dataset.shipHooked) {
+    stEl.dataset.shipHooked = '1';
+    stEl.addEventListener('input', updateCheckoutTotals);
   }
 
   // A custom-box packing request rides along in the order notes.
@@ -689,8 +732,7 @@ function updateCheckoutTotals() {
   const items = _cart.items || [];
   if (!items.length) return;
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-  const allFreeShipping = items.length > 0 && items.every(i => _products.find(p => p.id === i.product_id)?.free_shipping);
-  const shipping = (subtotal >= 350 || allFreeShipping) ? 0 : 35;
+  const shipping = currentShipping();
   const isCard = _selectedPayment === 'card';
   const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
   const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
