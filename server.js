@@ -397,11 +397,13 @@ async function logActivity(action, targetName, userEmail) {
   await q('INSERT INTO activity_log (action, target_name, user_email) VALUES ($1,$2,$3)', [action, targetName, userEmail]);
 }
 
-// ── ADDY discount model ───────────────────────────────────────────────────────
-// New reps earn their discount up by cumulative master boxes bought:
-//   < 15 boxes → 20% off · 15+ → 25% · 27+ → 30%   (buy-in-threes: 15 = 5 of each, 27 = 9 of each)
-// Existing reps/members are pinned via users.locked_discount_pct (30%, Danny 35%),
-// which always wins over the earned rate. Members ride their parent DSD's discount.
+// ── ADDY pricing model ────────────────────────────────────────────────────────
+// Reps buy at a percentage off MSRP set by the SIZE OF EACH ORDER, not by
+// purchase history: single master boxes → 20% off · a half pallet (15+ boxes
+// in the order) → 25% · a full pallet (27+) → 30%. The per-order part is
+// enforced by repriceCartForPallets(); getEffectiveDiscountPct() is the flat
+// 20% base. Reps pinned via users.locked_discount_pct (30%, Danny 35%) always
+// keep their better rate. Members ride their parent DSD's rate.
 const BOX_TYPES = ['shots', 'blister_card', 'gummies'];
 const TIER_25_BOXES = 15;
 const TIER_30_BOXES = 27;
@@ -421,19 +423,19 @@ async function getCumulativeBoxes(userId) {
   );
   return parseInt(r?.boxes || 0, 10);
 }
-// Effective discount % for a user (locked override wins; members ride their parent DSD).
+// Base rate off MSRP for a user: a locked override wins; otherwise the flat
+// 20% single-box rate. (The bigger percentages come from ORDER SIZE — see
+// repriceCartForPallets — not from purchase history.)
 async function getEffectiveDiscountPct(userId) {
   const user = await one('SELECT id, role, parent_id, locked_discount_pct FROM users WHERE id=$1', [userId]);
   if (!user) return 20;
   if (user.role === 'member' && user.parent_id) {
     const parent = await one('SELECT id, locked_discount_pct FROM users WHERE id=$1', [user.parent_id]);
-    if (parent) {
-      if (parent.locked_discount_pct != null) return parseFloat(parent.locked_discount_pct);
-      return discountFromBoxes(await getCumulativeBoxes(parent.id));
-    }
+    if (parent && parent.locked_discount_pct != null) return parseFloat(parent.locked_discount_pct);
+    return 20;
   }
   if (user.locked_discount_pct != null) return parseFloat(user.locked_discount_pct);
-  return discountFromBoxes(await getCumulativeBoxes(userId));
+  return 20;
 }
 
 // A locked discount (the user's own, or a member's parent DSD) — or null when they earn their rate.
@@ -665,9 +667,7 @@ app.get('/api/me', authenticate, async (req, res) => {
       user.discount_pct = await getEffectiveDiscountPct(user.id);
       user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
       // How many boxes until the next discount tier (null when locked or already at the top).
-      user.next_tier_at = user.locked_discount_pct != null || user.discount_pct >= 30
-        ? null
-        : (user.discount_pct >= 25 ? TIER_30_BOXES : TIER_25_BOXES);
+      user.next_tier_at = null; // pricing is per-order (pallet size), not a cumulative ladder
     }
     res.json(user || req.user);
   } catch(e) { res.json(req.user); }
@@ -682,9 +682,7 @@ app.get('/api/profile', authenticate, async (req, res) => {
     if (user) {
       user.discount_pct = await getEffectiveDiscountPct(user.id);
       user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
-      user.next_tier_at = user.locked_discount_pct != null || user.discount_pct >= 30
-        ? null
-        : (user.discount_pct >= 25 ? TIER_30_BOXES : TIER_25_BOXES);
+      user.next_tier_at = null; // pricing is per-order (pallet size), not a cumulative ladder
     }
     res.json(user);
   } catch(e) { res.status(500).json({ error: e.message }); }
