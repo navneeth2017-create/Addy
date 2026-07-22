@@ -371,15 +371,17 @@ function timeAgo(dateStr) {
 // --- Logo ---
 function renderLogo(container) {
   if (!container) return;
+  const credit = '<div id="monarch-brand-credit" style="font-size:10.5px;color:var(--text-muted);letter-spacing:0.2px;padding-left:2px;">powered by <strong style="color:#E8873B;">Monarch</strong></div>';
   try {
     const token = localStorage.getItem('addy_token');
     const role = token ? JSON.parse(atob(token.split('.')[1])).role : null;
     const href = role === 'admin' ? '/dashboard-admin.html' : '/dashboard-dsd.html';
-    container.innerHTML = `<a href="${href}" style="display:flex;align-items:center;text-decoration:none;cursor:pointer;">
+    container.innerHTML = `<a href="${href}" style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-decoration:none;cursor:pointer;">
       <img src="/images/addy-logo.svg" alt="ADDY" style="height:52px;width:auto;object-fit:contain;" onerror="this.style.display='none';this.parentElement.textContent='ADDY'">
+      ${credit}
     </a>`;
   } catch(e) {
-    container.innerHTML = '<a href="/dashboard-dsd.html" style="text-decoration:none;font-weight:900;font-size:22px;color:var(--text);">ADDY</a>';
+    container.innerHTML = '<a href="/dashboard-dsd.html" style="text-decoration:none;font-weight:900;font-size:22px;color:var(--text);">ADDY' + credit + '</a>';
   }
 }
 
