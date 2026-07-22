@@ -722,7 +722,7 @@ app.get('/api/me', authenticate, async (req, res) => {
         const prior = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [user.id]))?.c || 0;
         user.first_order_done = prior > 0;
         const lockedPct = await getLockedDiscountPct(user.id);
-        user.min_order_boxes = !prior ? 3 : (lockedPct != null && lockedPct >= 25 ? 3 : 1);
+        user.min_order_boxes = !prior ? 3 : (lockedPct != null && lockedPct >= 30 ? 3 : lockedPct != null && lockedPct >= 25 ? 2 : 1);
       }
       // How many boxes until the next discount tier (null when locked or already at the top).
       user.next_tier_at = null; // pricing is per-order (pallet size), not a cumulative ladder
@@ -747,7 +747,7 @@ app.get('/api/profile', authenticate, async (req, res) => {
         const prior = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [user.id]))?.c || 0;
         user.first_order_done = prior > 0;
         const lockedPct = await getLockedDiscountPct(user.id);
-        user.min_order_boxes = !prior ? 3 : (lockedPct != null && lockedPct >= 25 ? 3 : 1);
+        user.min_order_boxes = !prior ? 3 : (lockedPct != null && lockedPct >= 30 ? 3 : lockedPct != null && lockedPct >= 25 ? 2 : 1);
       }
       user.next_tier_at = null; // pricing is per-order (pallet size), not a cumulative ladder
     }
@@ -1912,6 +1912,25 @@ async function getOrCreateCart(userId, storeId = null) {
 // dropping below the threshold restores normal pricing automatically.
 const PALLET_FULL_BOXES = 27, PALLET_FULL_PCT = 30;
 const PALLET_HALF_BOXES = 15, PALLET_HALF_PCT = 25;
+
+// ── Shipping ─────────────────────────────────────────────────────────────────
+// Free shipping when: the order is a half/full pallet (15+ boxes), OR it
+// includes at least one master box of capsules (the blister-card box type) —
+// any tier. Otherwise we ship from Arizona and charge by distance zone based
+// on the destination state. Tune the zone prices here.
+const CAPSULE_BOX_TYPE = 'blister_card'; // the capsules master box
+const SHIPPING_ZONES = [
+  { price: 15, states: ['AZ'] },
+  { price: 25, states: ['CA', 'NV', 'UT', 'NM', 'CO', 'OR', 'WA', 'ID', 'WY', 'MT', 'TX'] },
+  { price: 35, states: ['OK', 'KS', 'NE', 'SD', 'ND', 'MN', 'IA', 'MO', 'AR', 'LA', 'WI', 'IL', 'IN', 'MI', 'OH', 'KY', 'TN', 'MS', 'AL'] },
+  { price: 45, states: ['FL', 'GA', 'SC', 'NC', 'VA', 'WV', 'MD', 'DE', 'PA', 'NJ', 'NY', 'CT', 'RI', 'MA', 'VT', 'NH', 'ME', 'DC'] },
+  { price: 60, states: ['AK', 'HI'] },
+];
+function shippingForState(state) {
+  const st = String(state || '').trim().toUpperCase();
+  for (const z of SHIPPING_ZONES) if (z.states.includes(st)) return z.price;
+  return 35; // unknown/missing state — middle zone
+}
 function palletPctForBoxes(boxes) {
   if (boxes >= PALLET_FULL_BOXES) return PALLET_FULL_PCT;
   if (boxes >= PALLET_HALF_BOXES) return PALLET_HALF_PCT;
@@ -2078,22 +2097,25 @@ app.post('/api/orders', authenticate, async (req, res) => {
         return res.status(400).json({ error: 'Your first order must be at least 3 master boxes — any mix of shots, blister cards, and gummies.' });
       }
     } else if (isRep) {
-      // Ongoing minimum depends on the rep's locked tier: 25%/30% (pallet
-      // first-order) reps re-order in 3-box minimums; 20% reps can buy one
-      // box at a time.
+      // Ongoing minimum by locked tier: 30%+ reps order 3-box minimums,
+      // 25% reps 2-box minimums, 20% reps one box at a time.
       const lockedPct = await getLockedDiscountPct(userId);
-      const minBoxes = lockedPct != null && lockedPct >= 25 ? 3 : 1;
+      const minBoxes = lockedPct != null && lockedPct >= 30 ? 3 : lockedPct != null && lockedPct >= 25 ? 2 : 1;
       if (totalBoxes < minBoxes) {
-        return res.status(400).json({ error: minBoxes === 3
-          ? 'Your minimum order is 3 master boxes (any mix).'
+        return res.status(400).json({ error: minBoxes > 1
+          ? `Your minimum order is ${minBoxes} master boxes (any mix).`
           : 'Your order must include at least one master box (shots, blister card, or gummies).' });
       }
     }
 
     const subtotal = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
     const allFreeShipping = items.every(i => i.free_shipping);
-    // Free shipping: a rep's first order, any order of 3+ master boxes, or all items flagged free.
-    const shipping_cost = (allFreeShipping || totalBoxes >= 3 || (isRep && isFirstOrder)) ? 0 : 35;
+    // Free shipping: a half/full pallet (15+ boxes), any order including a
+    // capsules master box, a rep's first order, or all items flagged free.
+    // Everything else ships from Arizona at the destination's zone rate.
+    const hasCapsuleBox = boxItems.some(i => i.box_type === CAPSULE_BOX_TYPE);
+    const shipping_cost = (allFreeShipping || totalBoxes >= PALLET_HALF_BOXES || hasCapsuleBox || (isRep && isFirstOrder))
+      ? 0 : shippingForState(shipping_state);
     // Stripe fee passthrough: customer pays fee so we receive full amount
     // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
     const processing_fee = payment_method === 'card'
