@@ -8,6 +8,8 @@ let _userId = null;
 let _currentStoreId = null;
 let _selectedPayment = 'card';
 let _storeAddress = null;
+let _minOrderBoxes = 1;   // 3 for first orders and pallet-locked reps
+let _myRate = 20;         // % off store cost (locked rate or 20 base)
 
 async function initShop() {
   const token = localStorage.getItem('addy_token');
@@ -19,6 +21,8 @@ async function initShop() {
   _role = me.role;
   _userId = me.id;
   _canPayInvoice = !!me.can_pay_invoice;
+  _minOrderBoxes = me.min_order_boxes || 1;
+  _myRate = me.discount_pct != null ? me.discount_pct : 20;
 
   // Hide Invoice/Net-30 payment option entirely for accounts not approved for it.
   // Actual default-selection logic happens in initPayment() once Stripe's state is known.
@@ -106,6 +110,7 @@ async function loadProducts() {
 // discount itself is applied server-side the moment the cart holds enough
 // boxes — these are just fast ways to get there.
 const PALLETS = {
+  starter: { label: '3 Master Boxes', boxes: 3, each: 1, pct: null, emoji: '📦' },
   half: { label: 'Half Pallet', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
   full: { label: 'Full Pallet', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
 };
@@ -119,17 +124,20 @@ function renderPalletBar() {
   const bar = document.getElementById('pallet-bar');
   if (!bar) return;
   if (_role === 'admin' || !boxProducts().length) { bar.innerHTML = ''; return; }
+  // The 3-box starter card only shows when it matters: first order, or a
+  // pallet-locked rep whose minimum is 3 boxes.
+  const kinds = Object.entries(PALLETS).filter(([kind]) => kind !== 'starter' || _minOrderBoxes >= 3);
   bar.innerHTML = `
     <div class="pallet-bar">
-      ${Object.entries(PALLETS).map(([kind, P]) => `
+      ${kinds.map(([kind, P]) => `
         <div class="pallet-card ${kind}">
           <div class="pallet-head">
             <span class="pallet-emoji">${P.emoji}</span>
             <div>
               <div class="pallet-title">${P.label}</div>
-              <div class="pallet-sub">${P.boxes} master boxes</div>
+              <div class="pallet-sub">${P.boxes} master boxes${kind === 'starter' ? ' · your minimum order' : ''}</div>
             </div>
-            <span class="pallet-badge">${P.pct}% OFF</span>
+            <span class="pallet-badge">${P.pct ? `${P.pct}% OFF` : `${_myRate}% OFF`}</span>
           </div>
           <div class="pallet-actions">
             <button class="btn-pallet primary" onclick="addClassicPallet('${kind}')">Classic mix — ${P.each} of each</button>
@@ -137,7 +145,7 @@ function renderPalletBar() {
           </div>
         </div>`).join('')}
     </div>
-    <div class="pallet-note">Your price is set by order size, off MSRP: single boxes 20% · ${PALLETS.half.boxes}+ boxes ${PALLETS.half.pct}% · ${PALLETS.full.boxes}+ boxes ${PALLETS.full.pct}%. Applied automatically, any mix of products.</div>`;
+    <div class="pallet-note">Your price is set by order size, off store cost: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 3 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ''}</div>`;
 }
 
 async function addClassicPallet(kind) {
@@ -162,7 +170,7 @@ async function addClassicPallet(kind) {
       cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
     }
     if (cart) { _cart = cart; renderCart(); }
-    showToast(`${P.emoji} ${P.label} added — ${P.pct}% pricing applied!`, 'success');
+    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% pricing applied!` : `${P.emoji} ${P.label} added to cart`, 'success');
   } finally {
     document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = false);
   }
@@ -199,7 +207,7 @@ function openPalletBuilder(kind) {
       <button class="close-btn" onclick="document.getElementById('pallet-builder-modal').classList.remove('active')">&times;</button>
       <h2>${P.emoji} Build your ${P.label.toLowerCase()}</h2>
       <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
-        Pick any mix of master boxes totaling exactly <strong>${P.boxes}</strong> — the ${P.pct}% pallet price applies automatically.</p>
+        Pick any mix of master boxes totaling exactly <strong>${P.boxes}</strong>${P.pct ? ` — the ${P.pct}% pallet price applies automatically` : ''}.</p>
       <div class="pb-progress-wrap">
         <div class="pb-progress"><div id="pb-progress-fill" style="width:0%;"></div></div>
         <div class="pb-count"><span id="pb-count">0</span> / ${P.boxes} boxes</div>
@@ -228,7 +236,7 @@ function pbStep(productId, delta) {
   const btn = document.getElementById('pb-add-btn');
   btn.disabled = total !== P.boxes;
   btn.textContent = total === P.boxes
-    ? `Add ${P.label.toLowerCase()} to cart — ${P.pct}% off`
+    ? `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% off` : ''}`
     : total < P.boxes ? `${P.boxes - total} more box${P.boxes - total === 1 ? '' : 'es'} to go` : `Select ${P.boxes} boxes`;
 }
 
@@ -246,9 +254,9 @@ async function palletBuilderAdd() {
     }
     if (cart) { _cart = cart; renderCart(); }
     document.getElementById('pallet-builder-modal').classList.remove('active');
-    showToast(`${P.emoji} ${P.label} added — ${P.pct}% pricing applied!`, 'success');
+    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% pricing applied!` : `${P.emoji} ${P.label} added to cart`, 'success');
   } catch (e) {
-    btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart — ${P.pct}% off`;
+    btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% off` : ''}`;
   }
 }
 
@@ -520,6 +528,8 @@ function showCheckout() {
   const processingFee = isCard ? Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100 : 0;
   const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
 
+  const rateEl = document.getElementById('co-rate');
+  if (rateEl) rateEl.textContent = `${Math.max(_myRate, (_cart.pallet && _cart.pallet.pct) || 0)}% off store cost`;
   document.getElementById('co-subtotal').textContent = `$${subtotal.toFixed(2)}`;
   document.getElementById('co-shipping').textContent = shipping === 0 ? 'FREE' : `$${shipping.toFixed(2)}`;
   const feeRow = document.getElementById('co-fee-row');
@@ -592,6 +602,10 @@ async function initPayment() {
 }
 
 function updateCheckoutTotals() {
+  // The rate this order is getting: the rep's locked/base rate, or the pallet
+  // rate when the cart qualifies — whichever is better.
+  const rateEl = document.getElementById('co-rate');
+  if (rateEl) rateEl.textContent = `${Math.max(_myRate, (_cart.pallet && _cart.pallet.pct) || 0)}% off store cost`;
   const items = _cart.items || [];
   if (!items.length) return;
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);

@@ -1241,7 +1241,8 @@ input[type="checkbox"] {
 .addy-logo-float { display: inline-block; }
 
 /* ── PALLET ORDERING ─────────────────────────────────────────────────────── */
-.pallet-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pallet-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.pallet-card.starter { background: linear-gradient(135deg, #1A2A50, #121F3E); border-color: rgba(148, 163, 184, 0.35); }
 .pallet-card {
   background: linear-gradient(135deg, #16294E, #0D1B38);
   border: 1px solid rgba(96, 165, 250, 0.25);

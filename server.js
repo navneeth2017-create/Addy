@@ -217,6 +217,23 @@ async function migrate() {
     }
   } catch(e) { console.log('ℹ️  box type backfill skipped:', e.message); }
 
+  // One-time: Danny is the house partner — 5% on every sale from users signed
+  // up as of this migration (grandfathered) and from anyone he refers (the
+  // normal referral 5% covers those), and a flat 2% on all other future
+  // sales. Never stacked — see calculateAndSaveCommissions.
+  try {
+    await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS house_partner BOOLEAN NOT NULL DEFAULT FALSE');
+    await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS house_5pct BOOLEAN NOT NULL DEFAULT FALSE');
+    const done = await one("SELECT 1 FROM app_migrations WHERE key='danny_house_commission_v1'");
+    if (!done) {
+      const d = await q("UPDATE users SET house_partner=TRUE WHERE role='dsd' AND (lower(trim(name))='danny' OR lower(name) LIKE 'danny %')");
+      const g = await q("UPDATE users SET house_5pct=TRUE WHERE role<>'admin' AND house_partner=FALSE");
+      await q("INSERT INTO app_migrations (key) VALUES ('danny_house_commission_v1')");
+      console.log(`✅ House partner set (${d.rowCount||0} match) · ${g.rowCount||0} existing user(s) grandfathered at 5%`);
+      if ((d.rowCount||0) !== 1) console.log(`⚠️  Expected exactly one "Danny" as house partner but matched ${d.rowCount||0} — fix in DB if needed.`);
+    }
+  } catch(e) { console.log('ℹ️  house commission migration skipped:', e.message); }
+
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
     await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
@@ -500,30 +517,44 @@ async function calculateAndSaveCommissions(orderId, buyerId, orderTotal) {
       return;
     }
 
-    const buyer = await one('SELECT id, referred_by FROM users WHERE id=$1', [buyerId]);
-    if (!buyer || !buyer.referred_by) return;
+    const buyer = await one('SELECT id, referred_by, role, house_5pct FROM users WHERE id=$1', [buyerId]);
+    if (!buyer) return;
 
-    // Guard 3: prevent self-referral
-    if (buyer.referred_by === buyer.id) return;
-
-    const recruiter = await one("SELECT id, referred_by, status FROM users WHERE id=$1 AND role='dsd'", [buyer.referred_by]);
-    if (!recruiter) return;
-
-    // Guard 4: only pay commission to active recruiters
-    if (recruiter.status !== 'active') {
-      console.log('Recruiter #' + recruiter.id + ' is not active — skipping L1 commission');
-    } else {
-      const level1Amount = Math.round(orderTotal * 0.05 * 100) / 100;
-      if (level1Amount > 0) {
-        await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,1)',
-          [recruiter.id, orderId, buyerId, level1Amount, 0.05]);
-        await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [level1Amount, recruiter.id]);
-        console.log('✅ Commission L1: $' + level1Amount + ' → user #' + recruiter.id);
+    // ── Referral commission: the direct recruiter earns 5%. Single level
+    // only — deliberately no second level.
+    if (buyer.referred_by && buyer.referred_by !== buyer.id) {
+      const recruiter = await one("SELECT id, referred_by, status FROM users WHERE id=$1 AND role='dsd'", [buyer.referred_by]);
+      if (recruiter && recruiter.status !== 'active') {
+        console.log('Recruiter #' + recruiter.id + ' is not active — skipping L1 commission');
+      } else if (recruiter) {
+        const level1Amount = Math.round(orderTotal * 0.05 * 100) / 100;
+        if (level1Amount > 0) {
+          await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,1)',
+            [recruiter.id, orderId, buyerId, level1Amount, 0.05]);
+          await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [level1Amount, recruiter.id]);
+          console.log('✅ Commission L1: $' + level1Amount + ' → user #' + recruiter.id);
+        }
       }
     }
 
-    // Single level only — the direct recruiter earns 5%. There is deliberately no
-    // second level: if a rep you brought recruits someone else, you earn nothing on that.
+    // ── House commission (Danny): 5% on grandfathered users (signed up when
+    // the deal was made), 2% on everyone after. His own referrals already pay
+    // him the 5% above, so this NEVER stacks: if he earned on this order as
+    // recruiter, the house cut is skipped.
+    const house = await one('SELECT id FROM users WHERE house_partner=TRUE LIMIT 1');
+    if (house && house.id !== buyerId && buyer.role !== 'admin') {
+      const alreadyEarned = await one('SELECT id FROM commissions WHERE order_id=$1 AND earner_id=$2', [orderId, house.id]);
+      if (!alreadyEarned) {
+        const rate = buyer.house_5pct ? 0.05 : 0.02;
+        const houseAmount = Math.round(orderTotal * rate * 100) / 100;
+        if (houseAmount > 0) {
+          await q('INSERT INTO commissions (earner_id,order_id,buyer_id,amount,rate,level) VALUES ($1,$2,$3,$4,$5,2)',
+            [house.id, orderId, buyerId, houseAmount, rate]);
+          await q('UPDATE users SET commission_balance=commission_balance+$1 WHERE id=$2', [houseAmount, house.id]);
+          console.log(`✅ House commission: $${houseAmount} (${rate * 100}%) → user #${house.id}`);
+        }
+      }
+    }
   } catch(e) { console.error('❌ Commission calculation error for order #' + orderId + ':', e.message); }
 }
 
@@ -666,6 +697,15 @@ app.get('/api/me', authenticate, async (req, res) => {
     if (user) {
       user.discount_pct = await getEffectiveDiscountPct(user.id);
       user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
+      // Minimum order size for the shop: first order is always 3 master
+      // boxes; after that, 25%/30% (pallet-locked) reps stay at 3, 20% reps
+      // can buy a single box.
+      if (user.role === 'dsd') {
+        const prior = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [user.id]))?.c || 0;
+        user.first_order_done = prior > 0;
+        const lockedPct = await getLockedDiscountPct(user.id);
+        user.min_order_boxes = !prior ? 3 : (lockedPct != null && lockedPct >= 25 ? 3 : 1);
+      }
       // How many boxes until the next discount tier (null when locked or already at the top).
       user.next_tier_at = null; // pricing is per-order (pallet size), not a cumulative ladder
     }
@@ -682,6 +722,15 @@ app.get('/api/profile', authenticate, async (req, res) => {
     if (user) {
       user.discount_pct = await getEffectiveDiscountPct(user.id);
       user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
+      // Minimum order size for the shop: first order is always 3 master
+      // boxes; after that, 25%/30% (pallet-locked) reps stay at 3, 20% reps
+      // can buy a single box.
+      if (user.role === 'dsd') {
+        const prior = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [user.id]))?.c || 0;
+        user.first_order_done = prior > 0;
+        const lockedPct = await getLockedDiscountPct(user.id);
+        user.min_order_boxes = !prior ? 3 : (lockedPct != null && lockedPct >= 25 ? 3 : 1);
+      }
       user.next_tier_at = null; // pricing is per-order (pallet size), not a cumulative ladder
     }
     res.json(user);
@@ -2003,17 +2052,23 @@ app.post('/api/orders', authenticate, async (req, res) => {
     const priorOrders = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [userId]))?.c || 0;
     const isFirstOrder = priorOrders === 0;
 
-    if (isRep) {
-      // Minimum purchase: at least one master box.
-      if (totalBoxes < 1) {
-        return res.status(400).json({ error: 'Your order must include at least one master box (shots, blister card, or gummies).' });
-      }
-    }
     if (isRep && isFirstOrder) {
-      // Onboarding: the first order must be one master box of each type, 3 boxes minimum.
-      const missing = BOX_TYPES.filter(t => !typesInCart.has(t));
-      if (missing.length > 0 || totalBoxes < 3) {
-        return res.status(400).json({ error: 'Your first order must include one master box of each type — shots, blister card, and gummies (3 boxes minimum). After that you can order freely.' });
+      // Onboarding: the first order is at least 3 master boxes — any mix (the
+      // shop's starter builder mirrors the pallet builder). Its SIZE also
+      // locks the rep's rate: 3-14 boxes → 20%, 15+ → 25%, 27+ → 30%.
+      if (totalBoxes < 3) {
+        return res.status(400).json({ error: 'Your first order must be at least 3 master boxes — any mix of shots, blister cards, and gummies.' });
+      }
+    } else if (isRep) {
+      // Ongoing minimum depends on the rep's locked tier: 25%/30% (pallet
+      // first-order) reps re-order in 3-box minimums; 20% reps can buy one
+      // box at a time.
+      const lockedPct = await getLockedDiscountPct(userId);
+      const minBoxes = lockedPct != null && lockedPct >= 25 ? 3 : 1;
+      if (totalBoxes < minBoxes) {
+        return res.status(400).json({ error: minBoxes === 3
+          ? 'Your minimum order is 3 master boxes (any mix).'
+          : 'Your order must include at least one master box (shots, blister card, or gummies).' });
       }
     }
 
@@ -2046,6 +2101,13 @@ app.post('/api/orders', authenticate, async (req, res) => {
         await client.query('UPDATE products SET stock=stock-$1 WHERE id=$2', [item.quantity, item.product_id]);
       }
       await client.query('DELETE FROM cart_items WHERE cart_id=$1', [cart.id]);
+      // First order locks the rep's rate by ITS size: 27+ boxes → 30%,
+      // 15+ → 25%, else 20%. The IS NULL guard means pre-pinned reps
+      // (30% legacy crew, Danny's 35%) are never overwritten.
+      if (isRep && isFirstOrder) {
+        const lockPct = totalBoxes >= PALLET_FULL_BOXES ? 30 : totalBoxes >= PALLET_HALF_BOXES ? 25 : 20;
+        await client.query('UPDATE users SET locked_discount_pct=$1 WHERE id=$2 AND locked_discount_pct IS NULL', [lockPct, userId]);
+      }
       await client.query('COMMIT');
     } catch(e) { await client.query('ROLLBACK'); throw e; }
     finally { client.release(); }
