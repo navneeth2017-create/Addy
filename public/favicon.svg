@@ -1,29 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- ADDY mark: geometric drawn "A" (identical on every platform — no font
+       dependence), blue accent crossbar, brand navy. -->
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0F1E3C"/>
-      <stop offset="100%" style="stop-color:#1E3A6E"/>
+      <stop offset="0%" stop-color="#16294E"/>
+      <stop offset="100%" stop-color="#0D1B38"/>
     </linearGradient>
-    <linearGradient id="stripe" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#2563EB"/>
-      <stop offset="100%" style="stop-color:#60A5FA"/>
+    <linearGradient id="accent" gradientUnits="userSpaceOnUse" x1="24" y1="0" x2="40" y2="0">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#60A5FA"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
   </defs>
-
-  <!-- Background rounded square -->
   <rect width="64" height="64" rx="14" fill="url(#bg)"/>
-
-  <!-- Blue bottom accent stripe -->
-  <rect x="0" y="50" width="64" height="14" rx="0" fill="url(#stripe)" opacity="0.9"/>
-  <rect x="0" y="50" width="64" height="14" rx="0" fill="url(#stripe)"/>
-  <!-- Round bottom corners -->
-  <rect x="0" y="50" width="64" height="6" fill="url(#bg)"/>
-  <rect x="0" y="50" width="64" height="14" rx="14" fill="url(#stripe)"/>
-
-  <!-- A letter - bold, centered -->
-  <text x="32" y="46" font-family="'Arial Black', Arial" font-weight="900"
-        font-size="38" fill="white" text-anchor="middle" letter-spacing="-1">A</text>
-
-  <!-- Small dot accent top right -->
-  <circle cx="54" cy="12" r="4" fill="#2563EB" opacity="0.8"/>
+  <rect width="64" height="32" rx="14" fill="url(#sheen)"/>
+  <line x1="24.5" y1="38.5" x2="39.5" y2="38.5" stroke="url(#accent)" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M18.5 48 L32 16.5 L45.5 48" fill="none" stroke="#ffffff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
