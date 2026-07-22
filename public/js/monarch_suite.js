@@ -67,6 +67,14 @@ async function loadMonarchSuite() {
     }
     // Comped (house) plans never show a price or any purchase/upgrade prompt.
     const compedChip = `<span style="font-size:11.5px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:20px;padding:2px 10px;font-weight:700;">Included with your partnership ✓</span>`;
+    // Quick links straight into a Suite view + a live pulse strip (low stock).
+    const quickLink = (view, label) => `<a href="/suite.html?view=${view}" style="font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;">${label}</a>`;
+    const suiteFooter = `
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+        <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:700;">Jump to</span>
+        ${quickLink('inventory','📦 Inventory')} ${quickLink('stores','👥 Customers')} ${quickLink('orders','🧾 Orders')} ${quickLink('routes','🗺 Routes')}
+        <span id="suite-pulse" style="margin-left:auto;"></span>
+      </div>`;
     // PLUS: $50/mo flat — inventory tracking on top of Free.
     if (ws.tier === 'plus') {
       card.innerHTML = `
@@ -84,7 +92,9 @@ async function loadMonarchSuite() {
             ${ws.comped ? '' : `<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="toggleMonarchBuilder()">⬆ Upgrade to Pro (AI)</button>`}
           </div>
         </div>
+        ${suiteFooter}
         <div id="monarch-builder-slot" style="display:none;"></div>`;
+      loadSuitePulse();
       return;
     }
     // PRO: the full Suite. Paid users can adjust their build-your-own plan
@@ -108,7 +118,9 @@ async function loadMonarchSuite() {
           ${ws.comped ? '' : `<button class="btn btn-sm btn-outline" onclick="toggleMonarchBuilder()">⚙ Adjust my plan</button>`}
         </div>
       </div>
+      ${suiteFooter}
       <div id="monarch-builder-slot" style="display:none;"></div>`;
+    loadSuitePulse();
     return;
   }
 
@@ -288,6 +300,25 @@ async function startMonarchFree() {
 async function upgradeMonarch(tier) {
   const r = await apiFetch('/api/monarch/checkout', { method: 'POST', body: JSON.stringify({ tier }) });
   if (r && r.url) window.location.href = r.url;
+}
+
+/**
+ * Live pulse from their Suite on the Addy card: low-stock alerts, with a
+ * one-click path back into the shop to restock. Silent when nothing's low.
+ */
+async function loadSuitePulse() {
+  const slot = document.getElementById('suite-pulse');
+  if (!slot) return;
+  try {
+    const p = await apiFetch('/api/monarch/pulse');
+    if (!p || !p.available || !p.low_stock) return;
+    const names = (p.items || []).map(i => esc(i.name)).join(', ');
+    slot.innerHTML = `
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px;background:${p.out_of_stock ? 'rgba(220,38,38,0.09)' : 'rgba(217,119,6,0.10)'};border:1px solid ${p.out_of_stock ? 'rgba(220,38,38,0.45)' : 'rgba(217,119,6,0.45)'};border-radius:20px;padding:4px 12px;">
+        <span title="${names}">⚠️ <strong>${p.low_stock}</strong> product${p.low_stock === 1 ? '' : 's'} low in your Suite</span>
+        <a href="/shop.html" style="font-weight:700;color:var(--accent);text-decoration:none;">Restock →</a>
+      </span>`;
+  } catch (e) { /* pulse is decoration — never an error state */ }
 }
 
 if (document.readyState !== 'loading') loadMonarchSuite();

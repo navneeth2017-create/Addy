@@ -490,6 +490,36 @@ function installMonarchIntegration(app) {
   });
 
   /**
+   * Suite pulse — surfaces what their Suite knows (low-stock alerts) right on
+   * the Addy dashboard card, so the two systems feel like one. Cached per
+   * user for 60s; failures return an empty pulse rather than an error so the
+   * dashboard never breaks over it.
+   */
+  const _pulseCache = new Map(); // userId -> { at, data }
+  app.get('/api/monarch/pulse', authenticate, authorize('dsd'), async (req, res) => {
+    try {
+      if (!configured()) return res.json({ available: false });
+      const hit = _pulseCache.get(req.user.id);
+      if (hit && Date.now() - hit.at < 60000) return res.json(hit.data);
+      const ws = (await pool.query(
+        `SELECT slug, status, monarch_provisioned, monarch_email FROM monarch_workspaces WHERE user_id=$1`,
+        [req.user.id]
+      )).rows[0];
+      if (!ws || !ws.monarch_provisioned || ws.status !== 'active') return res.json({ available: false });
+      const sso = await suiteSession(ws);
+      const alerts = await monarchStaffApi('/api/inventory/alerts', sso.token, null, 10000, 'GET');
+      const data = {
+        available: true,
+        low_stock: alerts.count || 0,
+        out_of_stock: alerts.out_of_stock || 0,
+        items: (alerts.items || []).slice(0, 3).map(i => ({ name: i.name, sku: i.sku, qty: i.quantity_on_hand })),
+      };
+      _pulseCache.set(req.user.id, { at: Date.now(), data });
+      res.json(data);
+    } catch (e) { res.json({ available: false }); }
+  });
+
+  /**
    * Embedded-Suite sign-on. Asks Monarch (partner-key auth, server-to-server)
    * for a short-lived session token for THIS user's workspace, and returns the
    * dashboard URL Addy's /suite.html iframe should load — token in the #hash,
