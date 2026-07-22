@@ -137,7 +137,7 @@ function renderPalletBar() {
           </div>
         </div>`).join('')}
     </div>
-    <div class="pallet-note">Pallet pricing is automatic — any mix of ${PALLETS.half.boxes}+ boxes gets ${PALLETS.half.pct}% off, ${PALLETS.full.boxes}+ gets ${PALLETS.full.pct}%.</div>`;
+    <div class="pallet-note">Your price is set by order size, off MSRP: single boxes 20% · ${PALLETS.half.boxes}+ boxes ${PALLETS.half.pct}% · ${PALLETS.full.boxes}+ boxes ${PALLETS.full.pct}%. Applied automatically, any mix of products.</div>`;
 }
 
 async function addClassicPallet(kind) {

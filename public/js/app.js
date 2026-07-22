@@ -275,34 +275,34 @@ async function renderOnboardingChecklist() {
   } catch(e) { /* non-critical */ }
 }
 
-// Visual margin progress: 20% → 25% (15 boxes) → 30% (27 boxes).
+// Pricing explainer: % off MSRP is set by the size of EACH order (by the box
+// 20% · half pallet 25% · full pallet 30%), not by purchase history.
 function renderMarginProgress(profile) {
   const el = document.getElementById('margin-progress');
   if (!el) return;
   const pct = profile.discount_pct != null ? profile.discount_pct : 20;
   if (profile.locked_discount_pct != null) {
-    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your margin is <strong>locked at ${pct}%</strong> on every order.</div>`;
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your rate is <strong>locked at ${pct}% off MSRP</strong> on every order — pallet or not.</div>`;
     return;
   }
-  const boxes = profile.boxes_bought || 0;
-  const progress = Math.min(100, (boxes / 27) * 100);
-  const toNext = profile.next_tier_at ? Math.max(0, profile.next_tier_at - boxes) : 0;
-  const nextPct = pct < 25 ? 25 : 30;
   el.innerHTML = `
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:20px;">
-      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px;">
-        <span style="font-weight:700;">Your margin: ${pct}%</span>
-        <span style="color:var(--text-muted);">${boxes} master box${boxes===1?'':'es'} bought</span>
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">How your pricing works — % off MSRP by order size</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
+        <div style="background:var(--bg-secondary,#f3f6fb);border-radius:10px;padding:12px 8px;">
+          <div style="font-size:20px;font-weight:800;">20%</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">By the box</div>
+        </div>
+        <div style="background:var(--bg-secondary,#f3f6fb);border-radius:10px;padding:12px 8px;">
+          <div style="font-size:20px;font-weight:800;color:#2563eb;">25%</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Half pallet · 15+ boxes</div>
+        </div>
+        <div style="background:var(--bg-secondary,#f3f6fb);border-radius:10px;padding:12px 8px;">
+          <div style="font-size:20px;font-weight:800;color:#2563eb;">30%</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Full pallet · 27+ boxes</div>
+        </div>
       </div>
-      <div style="position:relative;height:10px;background:var(--bg-secondary,#eef2f7);border-radius:999px;overflow:hidden;">
-        <div style="height:100%;width:${progress}%;background:linear-gradient(90deg,#22c55e,#2563eb);border-radius:999px;transition:width .5s;"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:6px;">
-        <span>20%</span><span>25% · 15 boxes</span><span>30% · 27 boxes</span>
-      </div>
-      ${profile.next_tier_at
-        ? `<div style="font-size:12px;color:var(--text);margin-top:8px;">📦 <strong>${toNext}</strong> more master box${toNext===1?'':'es'} to reach ${nextPct}% margin.</div>`
-        : `<div style="font-size:12px;color:var(--green);margin-top:8px;">🎉 You've reached the top 30% margin!</div>`}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:10px;">Applies automatically to each order in the <a href="/shop.html" style="color:var(--accent);">shop</a> — any mix of products counts.</div>
     </div>`;
 }
 
@@ -2013,9 +2013,9 @@ async function loadDSDDashboard() {
     const tierEl = document.getElementById('stat-tier');
     if (tierEl) {
       const pct = profile.discount_pct != null ? profile.discount_pct : 20;
-      let label = pct + '% margin';
+      let label = pct + '% off MSRP';
       if (profile.locked_discount_pct != null) label += ' (locked)';
-      else if (profile.next_tier_at) label += ` · ${Math.max(0, profile.next_tier_at - (profile.boxes_bought||0))} boxes to next tier`;
+      else label += ' · more on pallets';
       tierEl.textContent = label;
     }
     const commEl = document.getElementById('stat-commission');
