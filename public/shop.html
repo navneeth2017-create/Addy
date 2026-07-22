@@ -84,8 +84,18 @@
     .order-summary-total { display: flex; justify-content: space-between; font-size: 16px; font-weight: 700; color: var(--text); padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 8px; }
 
     /* Mobile overrides */
+    #mobile-cart-bar { display: none; }
     @media (max-width: 768px) {
       .shop-layout { grid-template-columns: 1fr; }
+      #mobile-cart-bar {
+        position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        z-index: 60; display: flex; align-items: center; gap: 12px;
+        background: linear-gradient(90deg, #16294E, #1D2E63); color: #fff;
+        padding: 13px 16px; border-radius: 12px; font-size: 14px; font-weight: 600;
+        box-shadow: 0 8px 28px rgba(15, 23, 42, 0.35); cursor: pointer;
+      }
+      #mobile-cart-bar strong { margin-left: auto; }
+      #mobile-cart-bar .mcb-go { font-size: 12px; opacity: 0.8; }
       .cart-sidebar { position: static; border-radius: 12px; }
       .products-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
       .product-img-wrap { height: 160px; }
@@ -221,9 +231,20 @@
       </div>
     </div>
   </div>
-      <h2>Order Placed!</h2>
-      <p id="confirm-msg" style="color:var(--text-secondary);margin:12px 0 24px;"></p>
-      <button class="btn" onclick="closeModal();location.reload()">Continue Shopping</button>
+      <h2>Order placed! 🎉</h2>
+      <p id="confirm-msg" style="color:var(--text-secondary);margin:12px 0 18px;"></p>
+      <div style="text-align:left;background:var(--bg-secondary, #f9fafb);border-radius:10px;padding:14px 16px;margin-bottom:20px;">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-muted);margin-bottom:8px;">What happens next</div>
+        <div style="font-size:13px;color:var(--text-secondary);line-height:1.9;">
+          📦 We pack your order and get it moving<br>
+          🚚 You'll see the status change to <strong>shipped</strong> in My Orders<br>
+          🔁 Next time, reorder the same boxes in one tap from My Orders
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <a class="btn btn-outline" href="/dashboard-dsd.html" style="flex:1;text-decoration:none;">View my orders</a>
+        <button class="btn" style="flex:1;" onclick="closeModal();location.reload()">Keep shopping</button>
+      </div>
     </div>
   </div>
 

@@ -431,6 +431,7 @@ function renderCart() {
     totalRow.style.display = 'none';
     shippingNote.style.display = 'none';
     checkoutBtn.disabled = true;
+    updateMobileCartBar(0);
     return;
   }
 
@@ -472,6 +473,22 @@ function renderCart() {
   totalRow.style.display = 'flex';
   shippingNote.style.display = 'block';
   checkoutBtn.disabled = false;
+  updateMobileCartBar(total);
+}
+
+// Floating cart bar for phones — on mobile the cart sidebar sits below the
+// products, so without this you can't tell anything happened when you add.
+function updateMobileCartBar(total) {
+  let bar = document.getElementById('mobile-cart-bar');
+  const count = (_cart.items || []).reduce((a, i) => a + i.quantity, 0);
+  if (!count) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'mobile-cart-bar';
+    bar.addEventListener('click', () => document.querySelector('.cart-sidebar')?.scrollIntoView({ behavior: 'smooth' }));
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = `<span>🛒 ${count} box${count === 1 ? '' : 'es'}</span><strong>$${(total ?? 0).toFixed(2)}</strong><span class="mcb-go">View cart ↓</span>`;
 }
 
 async function updateCartItem(itemId, qty) {
