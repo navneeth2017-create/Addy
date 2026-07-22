@@ -182,7 +182,7 @@ function toggleMonarchBuilder() {
   const ws = window._monarchWorkspace;
   const preset = ws && ws.custom_status === 'active' && ws.custom_plan ? ws.custom_plan.units : {};
   slot.innerHTML = `
-    <div style="margin:16px 0 4px;border:1px solid var(--accent);border-radius:14px;overflow:hidden;box-shadow:0 8px 30px -12px rgba(232,135,59,0.4);">
+    <div style="margin:16px 0 4px;border:1px solid rgba(232,135,59,0.55);border-radius:14px;overflow:hidden;box-shadow:0 8px 30px -12px rgba(232,135,59,0.4);">
       <div style="padding:16px 20px;background:linear-gradient(135deg,#E8873B,#B96A2C);color:#fff;">
         <div style="font-size:17px;font-weight:800;">⚙ Build your Pro plan</div>
         <div style="font-size:12.5px;opacity:0.92;margin-top:2px;">Slide each dial to what you'll use in a month — the price updates live. Every AI feature is unlocked on Pro.</div>
