@@ -44,7 +44,8 @@ setInterval(() => {
 // ── DB ────────────────────────────────────────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+  // Local databases (tests) don't speak SSL; Railway's does and stays verified-off.
+  ssl: /127\.0\.0\.1|localhost/.test(process.env.DATABASE_URL || '') ? false : { rejectUnauthorized: false },
   options: '-c search_path=addy,public'  // ADDY uses its own schema, isolated from WowCow
 });
 
@@ -241,6 +242,10 @@ async function migrate() {
   try {
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS house_partner BOOLEAN NOT NULL DEFAULT FALSE');
     await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS house_5pct BOOLEAN NOT NULL DEFAULT FALSE');
+    // users.created_at never existed in the original schema — the reps
+    // roster's join dates and every /api/my-reps query need it. Existing
+    // users get the migration moment as their joined date.
+    await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
     const done = await one("SELECT 1 FROM app_migrations WHERE key='danny_35_lock_v1'");
     if (!done) {
       const anyHouse = await one('SELECT id FROM users WHERE house_partner=TRUE LIMIT 1');
@@ -3034,6 +3039,23 @@ app.get('/api/my-reps/:id', authenticate, async (req, res) => {
       orders: rows.map(r => ({ ...r, amount: parseFloat(r.amount), order_total: r.order_total != null ? parseFloat(r.order_total) : null })),
     });
   } catch(e) { console.error('my-rep detail error:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+// One-click house partner setup (admin). Sets the flag + 35% lock on the
+// chosen account, clears it from anyone else, and grandfathers every other
+// existing non-admin user at 5% for him. Exists because identifying the
+// account by name proved unreliable — the admin clicks the right row instead.
+app.post('/api/admin/users/:id/house-partner', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const target = await one("SELECT id, name, role FROM users WHERE id=$1", [req.params.id]);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role !== 'dsd') return res.status(400).json({ error: 'House partner must be a DSD account' });
+    await q('UPDATE users SET house_partner=FALSE WHERE house_partner=TRUE');
+    await q('UPDATE users SET house_partner=TRUE, locked_discount_pct=35 WHERE id=$1', [target.id]);
+    await q("UPDATE users SET house_5pct=TRUE WHERE id<>$1 AND role<>'admin'", [target.id]);
+    await logActivity('set_house_partner', target.name || String(target.id), req.user.email);
+    res.json({ success: true });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 // Request a payout

@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS users (
   store_id INTEGER REFERENCES stores(id),
   name TEXT,
   phone TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'pending', 'inactive'))
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'pending', 'inactive')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS dsd_stores (
