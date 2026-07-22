@@ -73,15 +73,15 @@ async function monarchApi(path, method = 'GET', body = null, timeoutMs = 12000) 
  * partner SSO), not the partner surface — used to mirror data into the
  * tenant's own CRM through the same validated endpoints the dashboard uses.
  */
-async function monarchStaffApi(path, token, body, timeoutMs = 60000) {
+async function monarchStaffApi(path, token, body, timeoutMs = 60000, method = 'POST') {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(`${MONARCH_API}${path}`, {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify(body),
+      body: body === null || body === undefined ? undefined : JSON.stringify(body),
       signal: ctrl.signal,
     });
   } catch (e) {
@@ -146,16 +146,122 @@ async function mirrorStoresToSuite(userId, names) {
   });
   if (!mapped.length) return;
 
-  // Same sign-on path the embedded Suite uses, with the same admin fallback.
-  let sso;
-  try {
-    sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', ws.monarch_email ? { email: ws.monarch_email } : {});
-  } catch (e) {
-    if (!ws.monarch_email || !/no active user/i.test(e.message)) throw e;
-    sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', {});
-  }
+  const sso = await suiteSession(ws);
   const result = await monarchStaffApi('/api/imports/stores', sso.token, { rows: mapped });
   console.log(`🦋 Suite mirror for user ${userId}: ${result.created} created, ${result.skipped} skipped, ${result.errors} errors`);
+}
+
+/** Mint a Suite staff session for a workspace — known email first, then the
+ *  workspace's admin (linked enterprise tenants may use another address). */
+async function suiteSession(ws) {
+  try {
+    return await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', ws.monarch_email ? { email: ws.monarch_email } : {});
+  } catch (e) {
+    if (!ws.monarch_email || !/no active user/i.test(e.message)) throw e;
+    return await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', {});
+  }
+}
+
+/**
+ * Sync the ADDY catalog + this user's ADDY purchases into their Sales Suite:
+ *
+ *  - Every active ADDY shop product lands in their Suite Products (category
+ *    "ADDY", priced at store cost — what they charge stores), with inventory
+ *    seeded from the master boxes they've PAID for on Addy so far.
+ *  - After that, only the DELTA of new paid purchases is pushed, as a
+ *    'restock' movement — so their own counts (sold stock they've adjusted
+ *    down, manual corrections) are never overwritten.
+ *  - monarch_catalog_sync remembers what's been pushed per user/product.
+ *    A Suite product that predates this feature starts syncing forward only,
+ *    never retro-dumping history on top of an unknown count.
+ *
+ * Applies to every user with an active provisioned workspace — nothing here
+ * is user-specific. Best-effort: callers never let it block a response.
+ */
+async function syncAddyCatalogToSuite(userId) {
+  if (!configured()) return null;
+  const ws = (await pool.query(
+    `SELECT slug, status, monarch_provisioned, monarch_email FROM monarch_workspaces WHERE user_id=$1`,
+    [userId]
+  )).rows[0];
+  if (!ws || !ws.monarch_provisioned || ws.status !== 'active') return null;
+
+  // The ADDY catalog + how many boxes of each this user has paid for.
+  const products = (await pool.query(
+    `SELECT p.id, p.sku, p.name, p.description, p.retail_price,
+            COALESCE(b.bought, 0) AS bought, COALESCE(s.synced_qty, 0) AS synced
+     FROM products p
+     LEFT JOIN (
+       SELECT oi.product_id, SUM(oi.quantity)::int AS bought
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id
+       WHERE o.user_id = $1 AND o.payment_status = 'paid' AND o.status <> 'cancelled'
+       GROUP BY oi.product_id
+     ) b ON b.product_id = p.id
+     LEFT JOIN monarch_catalog_sync s ON s.product_id = p.id AND s.user_id = $1
+     WHERE p.active = 1`,
+    [userId]
+  )).rows;
+  if (!products.length) return null;
+
+  const sso = await suiteSession(ws);
+
+  // What's already in their Suite, by SKU (lower-cased).
+  const suiteInv = await monarchStaffApi('/api/inventory', sso.token, null, 30000, 'GET');
+  const bySku = new Map((suiteInv || []).map(r => [String(r.sku || '').toLowerCase(), r]));
+
+  const skuOf = p => (p.sku && p.sku.trim()) ? p.sku.trim() : `ADDY-${p.id}`;
+  const newRows = [];
+  const ledger = []; // [product_id, synced_qty] upserts
+
+  for (const p of products) {
+    const existing = bySku.get(skuOf(p).toLowerCase());
+    if (!existing) {
+      newRows.push({
+        sku: skuOf(p), name: p.name, category: 'ADDY',
+        unit_price: Number(p.retail_price) || 0,
+        ...(p.description ? { description: p.description } : {}),
+        quantity_on_hand: p.bought, reorder_threshold: 0,
+        _pid: p.id,
+      });
+      continue;
+    }
+    if (p.synced === 0 && !ledger.some(l => l[0] === p.id)) {
+      // Product already lived in their Suite before this feature — start the
+      // ledger at "everything so far" WITHOUT a movement, syncing forward only.
+      ledger.push([p.id, p.bought]);
+      continue;
+    }
+    const delta = p.bought - p.synced;
+    if (delta > 0) {
+      await monarchStaffApi('/api/inventory/movements', sso.token, {
+        product_id: existing.product_id, change_qty: delta, reason: 'restock',
+      });
+      ledger.push([p.id, p.bought]);
+    }
+  }
+
+  let created = 0;
+  if (newRows.length) {
+    const result = await monarchStaffApi('/api/imports/products', sso.token,
+      { rows: newRows.map(({ _pid, ...row }) => row) });
+    created = result.created || 0;
+    for (const r of result.results || []) {
+      if (r.status === 'created') {
+        const src = newRows[r.row - 1];
+        if (src) ledger.push([src._pid, src.quantity_on_hand]);
+      }
+    }
+  }
+
+  for (const [pid, qty] of ledger) {
+    await pool.query(
+      `INSERT INTO monarch_catalog_sync (user_id, product_id, synced_qty)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, product_id) DO UPDATE SET synced_qty=$3, updated_at=NOW()`,
+      [userId, pid, qty]
+    );
+  }
+  return { created, restocked: ledger.length };
 }
 
 /** Quick connectivity probe used by the status endpoints — never throws. */
@@ -195,6 +301,16 @@ async function ensureTable() {
   await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS custom_plan_prev JSONB`);
   // House/comped plans (e.g. Danny): granted by an admin, no Stripe involved.
   await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS comped BOOLEAN NOT NULL DEFAULT false`);
+  // ADDY catalog → Suite sync ledger: how many purchased boxes per product we
+  // have already pushed into each user's Suite inventory, so new purchases
+  // arrive as restock deltas and manual Suite counts are never clobbered.
+  await pool.query(`CREATE TABLE IF NOT EXISTS monarch_catalog_sync (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    synced_qty INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, product_id)
+  )`);
 }
 
 /**
@@ -392,17 +508,15 @@ function installMonarchIntegration(app) {
         return res.status(409).json({ error: 'Your workspace is still being set up — try again in a minute' });
       }
       if (ws.status !== 'active') return res.status(403).json({ error: 'Your Sales Suite plan is paused' });
-      // Prefer their known Monarch login; if that email doesn't exist on the
-      // workspace (e.g. a linked enterprise tenant set up with a different
-      // address), fall back to the workspace's admin.
-      let sso;
-      try {
-        sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST',
-          ws.monarch_email ? { email: ws.monarch_email } : {});
-      } catch (e) {
-        if (!ws.monarch_email || !/no active user/i.test(e.message)) throw e;
-        sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', {});
-      }
+      // True up their Suite before they land in it: ADDY catalog + any new
+      // paid purchases arrive as products/restocks. First-time sync gets a
+      // few seconds to finish so the catalog is there on first open; a slow
+      // sync just completes in the background instead of holding the door.
+      await Promise.race([
+        syncAddyCatalogToSuite(req.user.id).catch(e => console.error(`Catalog sync failed for user ${req.user.id}:`, e.message)),
+        new Promise(r => setTimeout(r, 8000)),
+      ]);
+      const sso = await suiteSession(ws);
       const frag = new URLSearchParams({ sso: sso.token, role: sso.role || 'admin', embed: 'addy' });
       res.json({ url: `${MONARCH_APP}/dashboard.html#${frag.toString()}` });
     } catch (e) { res.status(502).json({ error: e.message }); }
@@ -724,6 +838,9 @@ function installMonarchIntegration(app) {
       await pool.query(
         `UPDATE monarch_workspaces SET comped=true, updated_at=NOW() WHERE user_id=$1`, [user.id]
       );
+      // Fill their new Suite with the ADDY catalog + purchase history so the
+      // first open isn't empty. Background — the grant response never waits.
+      syncAddyCatalogToSuite(user.id).catch(e => console.error(`Catalog sync failed for user ${user.id}:`, e.message));
       res.json({ success: true, slug: out.slug, tier: out.tier || tier, comped: true });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
