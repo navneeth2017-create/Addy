@@ -250,6 +250,11 @@ window.runCsvImport = async function() {
              📸 <strong>24-hour photo window</strong> — when a DSD claims one of these stores, they'll be required to upload photos immediately.
            </div>`
         : '';
+    const suiteNote = data.suite_mirror
+      ? `<div style="background:#eff6ff;border:1px solid #2563eb;border-radius:10px;padding:14px;margin-top:12px;font-size:13px;">
+           🦋 <strong>Also adding these stores to your Sales Suite</strong> — they'll appear in your Suite CRM in a moment, no second import needed.
+         </div>`
+      : '';
     summary.innerHTML = `
       <div style="display:flex;gap:16px;margin-bottom:16px;">
         <div style="text-align:center;padding:16px;background:var(--greenBg,#f0fdf4);border-radius:10px;flex:1;">
@@ -265,7 +270,7 @@ window.runCsvImport = async function() {
           <div style="font-size:13px;color:var(--text-muted);">Errors</div>
         </div>
       </div>
-      ${photoNote}`;
+      ${photoNote}${suiteNote}`;
 
     // Show error/skip details if any
     const errWrap = document.getElementById('csv-result-errors');
