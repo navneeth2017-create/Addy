@@ -2977,50 +2977,63 @@ app.get('/api/commissions', authenticate, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// The people a rep earns commission on. For the house partner (Danny) that's
-// his referrals PLUS every grandfathered user (5% each) and a flat 2% on
-// everyone else's sales; for a normal rep it's just their referrals at 5%.
+// The people a rep earns commission on, with what each has earned them.
+// House partner (Danny): every grandfathered user + his referrals. Regular
+// rep: their referrals. Each row carries lifetime + this-month earnings for
+// the CALLER, so the roster can be sorted by value. The reps themselves are
+// never shown any of this — it renders only on the earner's own tab.
 app.get('/api/my-reps', authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'dsd') return res.json({ reps: [], flat_rate_others: null });
     const me = await one('SELECT id, house_partner FROM users WHERE id=$1', [req.user.id]);
     if (!me) return res.json({ reps: [], flat_rate_others: null });
-    const reps = me.house_partner
-      ? await all(
-          `SELECT id, name, email, status, created_at,
-                  CASE WHEN referred_by=$1 THEN 'Invited by you' ELSE 'ADDY network' END AS source
-           FROM users WHERE id<>$1 AND role<>'admin' AND (referred_by=$1 OR house_5pct=TRUE)
-           ORDER BY created_at ASC`, [me.id])
-      : await all(
-          `SELECT id, name, email, status, created_at, 'Invited by you' AS source
-           FROM users WHERE referred_by=$1 AND id<>$1 ORDER BY created_at ASC`, [me.id]);
+    const rosterWhere = me.house_partner
+      ? "u.id<>$1 AND u.role<>'admin' AND (u.referred_by=$1 OR u.house_5pct=TRUE)"
+      : 'u.referred_by=$1 AND u.id<>$1';
+    const reps = await all(
+      `SELECT u.id, u.name, u.email, u.status, u.created_at,
+              ${me.house_partner ? "CASE WHEN u.referred_by=$1 THEN 'Invited by you' ELSE 'ADDY network' END" : "'Invited by you'"} AS source,
+              COALESCE(SUM(c.amount), 0) AS earned_total,
+              COALESCE(SUM(c.amount) FILTER (WHERE c.created_at >= date_trunc('month', now())), 0) AS earned_month,
+              COUNT(c.id)::int AS earning_orders,
+              MAX(c.created_at) AS last_earned_at
+       FROM users u
+       LEFT JOIN commissions c ON c.buyer_id = u.id AND c.earner_id = $1
+       WHERE ${rosterWhere}
+       GROUP BY u.id, u.name, u.email, u.status, u.created_at, u.referred_by
+       ORDER BY earned_total DESC, u.created_at ASC`, [me.id]);
     res.json({
-      reps: reps.map(r => ({ ...r, your_rate: 5 })),
+      reps: reps.map(r => ({ ...r, your_rate: 5, earned_total: parseFloat(r.earned_total), earned_month: parseFloat(r.earned_month) })),
       flat_rate_others: me.house_partner ? 2 : null,
     });
   } catch(e) {
-    // Never break the Commissions tab over this list — log for diagnosis and
-    // return an empty roster instead of a 500.
     console.error('my-reps error:', e.message);
-    res.json({ reps: [], flat_rate_others: null });
+    res.json({ reps: [], flat_rate_others: null, load_error: true });
   }
 });
 
-// One-click house partner setup (admin). Sets the flag + 35% lock on the
-// chosen account, clears it from anyone else, and grandfathers every other
-// existing non-admin user at 5% for him. Exists because identifying the
-// account by name proved unreliable — the admin clicks the right row instead.
-app.post('/api/admin/users/:id/house-partner', authenticate, authorize('admin'), async (req, res) => {
+// Per-rep breakdown: every commission this rep's orders have paid the caller.
+// Scoped hard: only visible if the rep is in the caller's roster.
+app.get('/api/my-reps/:id', authenticate, async (req, res) => {
   try {
-    const target = await one("SELECT id, name, role FROM users WHERE id=$1", [req.params.id]);
-    if (!target) return res.status(404).json({ error: 'User not found' });
-    if (target.role !== 'dsd') return res.status(400).json({ error: 'House partner must be a DSD account' });
-    await q('UPDATE users SET house_partner=FALSE WHERE house_partner=TRUE');
-    await q('UPDATE users SET house_partner=TRUE, locked_discount_pct=35 WHERE id=$1', [target.id]);
-    await q("UPDATE users SET house_5pct=TRUE WHERE id<>$1 AND role<>'admin'", [target.id]);
-    await logActivity('set_house_partner', target.name || String(target.id), req.user.email);
-    res.json({ success: true });
-  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+    if (req.user.role !== 'dsd') return res.status(403).json({ error: 'Not available' });
+    const me = await one('SELECT id, house_partner FROM users WHERE id=$1', [req.user.id]);
+    const rep = await one('SELECT id, name, email, status, created_at, referred_by, house_5pct, role FROM users WHERE id=$1', [req.params.id]);
+    if (!me || !rep) return res.status(404).json({ error: 'Not found' });
+    const inRoster = me.house_partner
+      ? (rep.role !== 'admin' && rep.id !== me.id && (rep.referred_by === me.id || rep.house_5pct))
+      : rep.referred_by === me.id;
+    if (!inRoster) return res.status(403).json({ error: 'Not your rep' });
+    const rows = await all(
+      `SELECT c.order_id, c.amount, c.rate, c.status, c.created_at, o.total AS order_total
+       FROM commissions c LEFT JOIN orders o ON o.id = c.order_id
+       WHERE c.earner_id=$1 AND c.buyer_id=$2
+       ORDER BY c.created_at DESC LIMIT 100`, [me.id, rep.id]);
+    res.json({
+      rep: { id: rep.id, name: rep.name, email: rep.email, status: rep.status, created_at: rep.created_at },
+      orders: rows.map(r => ({ ...r, amount: parseFloat(r.amount), order_total: r.order_total != null ? parseFloat(r.order_total) : null })),
+    });
+  } catch(e) { console.error('my-rep detail error:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 // Request a payout

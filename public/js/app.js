@@ -392,6 +392,8 @@ function initTheme() {
 }
 
 function toggleTheme() {
+  const btn = document.getElementById('theme-toggle');
+  if (btn) { btn.classList.remove('theme-spin'); void btn.offsetWidth; btn.classList.add('theme-spin'); }
   const current = document.documentElement.getAttribute('data-theme');
   const next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
@@ -1097,42 +1099,131 @@ async function loadMyCommissions() {
   </tr>`).join('');
 }
 
-// The people this rep earns on. House partner (Danny) sees the whole
-// grandfathered network at 5% plus a note about the flat 2% on everyone else.
+// The earnings roster: every rep earning the caller commission, with tenure
+// and dollars. Sortable by column, click a row for the per-order breakdown.
+// Renders ONLY on the earner's own Commissions tab — reps never see it.
+let _myRepsData = null, _myRepsSort = { key: 'earned_total', dir: -1 };
+
 async function loadMyReps() {
   const el = document.getElementById('my-reps');
   if (!el) return;
-  // Quiet fetch: this card is a bonus — it must never throw a red error
-  // toast over the Commissions tab if the endpoint hiccups.
   let data = null;
   try {
     const res = await fetch('/api/my-reps', { headers: { 'Authorization': `Bearer ${getToken()}` } });
     if (res.ok) data = await res.json();
   } catch (e) { /* silent */ }
   if (!data || !data.reps) { el.innerHTML = ''; return; }
-  if (!data.reps.length && !data.flat_rate_others) {
-    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13px;color:var(--text-muted);">No reps yet — share your invite link (🔗 Invite, top right) and earn <strong>5%</strong> on everything they order.</div>`;
+  if (data.load_error) {
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;font-size:13px;color:var(--text-muted);">Couldn't load your reps right now — refresh to retry.</div>`;
     return;
   }
+  if (!data.reps.length) {
+    el.innerHTML = data.flat_rate_others
+      ? `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13px;color:var(--text-muted);">Your network roster is empty right now — new sign-ups appear here automatically.</div>`
+      : `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13px;color:var(--text-muted);">No reps yet — share your invite link (🔗 Invite, top right) and earn <strong>5%</strong> on everything they order.</div>`;
+    return;
+  }
+  _myRepsData = data;
+  renderMyReps();
+}
+
+function repTenure(createdAt) {
+  const days = Math.floor((Date.now() - new Date(createdAt).getTime()) / 86400000);
+  if (days < 1) return 'joined today';
+  if (days < 31) return `${days} day${days === 1 ? '' : 's'}`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'}`;
+  const years = Math.floor(months / 12);
+  return `${years} yr ${months % 12} mo`;
+}
+
+function sortMyReps(key) {
+  if (_myRepsSort.key === key) _myRepsSort.dir *= -1;
+  else _myRepsSort = { key, dir: -1 };
+  renderMyReps();
+}
+
+function renderMyReps() {
+  const el = document.getElementById('my-reps');
+  if (!el || !_myRepsData) return;
+  const { reps, flat_rate_others } = _myRepsData;
+  const { key, dir } = _myRepsSort;
+  const sorted = [...reps].sort((a, b) => {
+    const va = key === 'created_at' ? new Date(a[key]).getTime() : key === 'name' ? String(a.name || a.email).toLowerCase() : (a[key] || 0);
+    const vb = key === 'created_at' ? new Date(b[key]).getTime() : key === 'name' ? String(b.name || b.email).toLowerCase() : (b[key] || 0);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+  });
+  const totalAll = reps.reduce((s, r) => s + (r.earned_total || 0), 0);
+  const totalMonth = reps.reduce((s, r) => s + (r.earned_month || 0), 0);
+  const arrow = (k) => _myRepsSort.key === k ? (_myRepsSort.dir === -1 ? ' ↓' : ' ↑') : '';
+  const th = (label, k) => `<th style="cursor:pointer;user-select:none;white-space:nowrap;" onclick="sortMyReps('${k}')">${label}${arrow(k)}</th>`;
   el.innerHTML = `
     <div class="table-card">
-      <div class="table-toolbar"><h2>My Reps <span style="font-size:12px;font-weight:600;color:var(--text-muted);">— you earn on every order they place</span></h2></div>
+      <div class="table-toolbar">
+        <h2>My Reps <span style="font-size:12px;font-weight:600;color:var(--text-muted);">— click a rep for their order-by-order breakdown</span></h2>
+        <div style="display:flex;gap:16px;font-size:13px;">
+          <span>All-time: <strong style="color:var(--green);">$${totalAll.toFixed(2)}</strong></span>
+          <span>This month: <strong style="color:var(--green);">$${totalMonth.toFixed(2)}</strong></span>
+        </div>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Source</th><th>Your cut</th></tr></thead>
+          <thead><tr>
+            ${th('Name', 'name')}${th('Joined', 'created_at')}<th>Status</th><th>Source</th>
+            ${th('Orders', 'earning_orders')}${th('This month', 'earned_month')}${th('Earned you', 'earned_total')}
+          </tr></thead>
           <tbody>
-            ${data.reps.map(r => `<tr>
-              <td style="font-weight:600;">${esc(r.name || '—')}</td>
-              <td style="font-size:12px;">${esc(r.email)}</td>
-              <td style="font-size:12px;">${new Date(r.created_at).toLocaleDateString()}</td>
+            ${sorted.map(r => `<tr style="cursor:pointer;" onclick="openRepDetail(${r.id})">
+              <td style="font-weight:600;">${esc(r.name || '—')}<div style="font-size:11px;color:var(--text-muted);font-weight:400;">${esc(r.email)}</div></td>
+              <td style="font-size:12px;">${new Date(r.created_at).toLocaleDateString()}<div style="font-size:11px;color:var(--text-muted);">${repTenure(r.created_at)}</div></td>
               <td><span class="status-badge ${r.status === 'active' ? 'active' : 'pending'}">${esc(r.status)}</span></td>
               <td style="font-size:12px;color:var(--text-muted);">${esc(r.source)}</td>
-              <td style="font-weight:700;color:var(--green);">${r.your_rate}%</td>
+              <td>${r.earning_orders || 0}</td>
+              <td style="color:var(--green);">$${(r.earned_month || 0).toFixed(2)}</td>
+              <td style="font-weight:700;color:var(--green);">$${(r.earned_total || 0).toFixed(2)}</td>
             </tr>`).join('')}
           </tbody>
         </table>
       </div>
-      ${data.flat_rate_others ? `<div style="padding:12px 16px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary);">＋ You also earn a flat <strong>${data.flat_rate_others}%</strong> on every other sale across ADDY DSD (never stacked with the 5%).</div>` : ''}
+      ${flat_rate_others ? `<div style="padding:12px 16px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary);">＋ You also earn a flat <strong>${flat_rate_others}%</strong> on every other ADDY sale (never stacked with the 5%).</div>` : ''}
+    </div>`;
+}
+
+async function openRepDetail(repId) {
+  let modal = document.getElementById('rep-detail-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'rep-detail-modal';
+    modal.className = 'modal-overlay';
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `<div class="modal" style="max-width:560px;"><div class="loading" style="padding:40px;">Loading…</div></div>`;
+  modal.classList.add('active');
+  const data = await apiFetch(`/api/my-reps/${repId}`);
+  if (!data || !data.rep) { modal.classList.remove('active'); return; }
+  const total = data.orders.reduce((s, o) => s + o.amount, 0);
+  modal.innerHTML = `
+    <div class="modal" style="max-width:560px;">
+      <button class="close-btn" onclick="document.getElementById('rep-detail-modal').classList.remove('active')">&times;</button>
+      <h2>${esc(data.rep.name || data.rep.email)}</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        Member for ${repTenure(data.rep.created_at)} (since ${new Date(data.rep.created_at).toLocaleDateString()})
+        · has earned you <strong style="color:var(--green);">$${total.toFixed(2)}</strong> across ${data.orders.length} order${data.orders.length === 1 ? '' : 's'}</p>
+      ${data.orders.length ? `
+      <div class="table-wrap" style="max-height:340px;overflow-y:auto;">
+        <table>
+          <thead><tr><th>Date</th><th>Order</th><th>Order total</th><th>Rate</th><th>Your cut</th><th>Status</th></tr></thead>
+          <tbody>${data.orders.map(o => `<tr>
+            <td style="font-size:12px;">${new Date(o.created_at).toLocaleDateString()}</td>
+            <td style="font-size:12px;">#${o.order_id}</td>
+            <td>${o.order_total != null ? '$' + o.order_total.toFixed(2) : '—'}</td>
+            <td>${(parseFloat(o.rate) * 100).toFixed(0)}%</td>
+            <td style="font-weight:700;color:var(--green);">$${o.amount.toFixed(2)}</td>
+            <td><span class="status-badge ${o.status}">${esc(o.status)}</span></td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>` : `<p style="color:var(--text-muted);font-size:13px;padding:16px 0;">No orders yet — when they order, your commission shows up here.</p>`}
     </div>`;
 }
 

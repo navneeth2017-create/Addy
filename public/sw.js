@@ -11,7 +11,7 @@
  *     against a newer server after a deploy.
  * Bump VERSION when the shell changes shape; old caches are dropped.
  */
-const VERSION = 'addy-v3';
+const VERSION = 'addy-v4';
 const SHELL = [
   '/login.html',
   '/dashboard-dsd.html',
