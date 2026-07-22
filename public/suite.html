@@ -77,7 +77,9 @@
           if (!r.ok || !data.url) throw new Error(data.error || 'Could not open the Sales Suite');
           const frame = document.getElementById('suite-frame');
           frame.addEventListener('load', () => { msg.style.display = 'none'; }, { once: true });
-          frame.src = data.url;
+          // Deep link: /suite.html?view=inventory lands the Suite on that tab.
+          const view = new URLSearchParams(location.search).get('view');
+          frame.src = view ? data.url + '&view=' + encodeURIComponent(view) : data.url;
         })
         .catch((e) => {
           msg.innerHTML = '<div style="font-size:34px;">😕</div>'

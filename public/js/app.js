@@ -371,7 +371,7 @@ function timeAgo(dateStr) {
 // --- Logo ---
 function renderLogo(container) {
   if (!container) return;
-  const credit = '<div id="monarch-brand-credit" style="font-size:10.5px;color:var(--text-muted);letter-spacing:0.2px;padding-left:2px;">powered by <strong style="color:#E8873B;">Monarch</strong></div>';
+  const credit = '<div id="monarch-brand-credit" style="font-size:10.5px;color:var(--text-muted);letter-spacing:0.2px;padding-left:2px;">powered by <strong style="color:#E8873B;cursor:pointer;" title="🦋">Monarch</strong></div>';
   try {
     const token = localStorage.getItem('addy_token');
     const role = token ? JSON.parse(atob(token.split('.')[1])).role : null;
@@ -2181,8 +2181,10 @@ async function loadDSDDashboard() {
 
   animateValue(document.getElementById('stat-total'), _allDistStores.length);
   animateCurrency(document.getElementById('stat-dist-cost'), totalDistCost);
-  document.getElementById('stat-avg-wholesale').textContent = formatCurrency(avgWholesale);
-  document.getElementById('stat-avg-retail').textContent = formatCurrency(avgRetail);
+  const _statW = document.getElementById('stat-avg-wholesale');
+  if (_statW) _statW.textContent = formatCurrency(avgWholesale);
+  const _statR = document.getElementById('stat-avg-retail');
+  if (_statR) _statR.textContent = formatCurrency(avgRetail);
 }
 
 function renderDSDTable(stores) {
@@ -3753,3 +3755,123 @@ function markProgramDocsSeen() {
   const badge = document.getElementById('docs-new-badge');
   if (badge) badge.style.display = 'none';
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Monarch butterflies 🦋 — click the "Monarch" name under the logo and a small
+// kaleidoscope of monarchs bursts out. One of them lands on the ADDY logo,
+// rests with a slow wingbeat, then lifts off and sails off-screen.
+// Pure CSS/WAAPI — GPU-composited transforms only, honors reduced-motion.
+// ═══════════════════════════════════════════════════════════════════════════
+(function () {
+  const WING_L = 'M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z';
+  const WING_R = 'M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z';
+
+  function butterflySvg(size, hueShift) {
+    const orange = hueShift ? `hsl(${28 + hueShift}, 78%, 57%)` : '#E8873B';
+    const dim = hueShift ? `hsl(${28 + hueShift}, 62%, 42%)` : '#B96A2C';
+    return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible;display:block;">
+      <g class="bfly-l" style="transform-origin:31px 33px;"><path d="${WING_L}" fill="${orange}" stroke="${dim}" stroke-width="1"/></g>
+      <g class="bfly-r" style="transform-origin:33px 33px;"><path d="${WING_R}" fill="${orange}" stroke="${dim}" stroke-width="1"/></g>
+      <ellipse cx="32" cy="36.5" rx="2.4" ry="10.5" fill="#4a301c"/>
+      <circle cx="32" cy="24" r="2.7" fill="#4a301c"/>
+    </svg>`;
+  }
+
+  function injectButterflyStyles() {
+    if (document.getElementById('bfly-styles')) return;
+    const st = document.createElement('style');
+    st.id = 'bfly-styles';
+    st.textContent = `
+      .bfly { position: fixed; z-index: 9999; pointer-events: none; will-change: transform; left: 0; top: 0; }
+      .bfly .bfly-l { animation: bflyFlapL 0.16s ease-in-out infinite alternate; }
+      .bfly .bfly-r { animation: bflyFlapR 0.16s ease-in-out infinite alternate; }
+      .bfly.bfly-rest .bfly-l { animation: bflyFlapL 1.4s ease-in-out infinite alternate; }
+      .bfly.bfly-rest .bfly-r { animation: bflyFlapR 1.4s ease-in-out infinite alternate; }
+      @keyframes bflyFlapL { from { transform: scaleX(1); } to { transform: scaleX(0.25); } }
+      @keyframes bflyFlapR { from { transform: scaleX(1); } to { transform: scaleX(0.25); } }
+    `;
+    document.head.appendChild(st);
+  }
+
+  /** A smooth curved flight from (x0,y0) to (x1,y1) with a random arc. */
+  function flightKeyframes(x0, y0, x1, y1, wobble) {
+    const mx = (x0 + x1) / 2 + (Math.random() - 0.5) * wobble;
+    const my = Math.min(y0, y1) - (60 + Math.random() * 140); // arc upward
+    const frames = [];
+    const STEPS = 24;
+    for (let i = 0; i <= STEPS; i++) {
+      const t = i / STEPS;
+      // Quadratic bezier point
+      const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * mx + t * t * x1;
+      const y = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * my + t * t * y1;
+      // Heading (derivative) for a natural bank into the turn
+      const dx = 2 * (1 - t) * (mx - x0) + 2 * t * (x1 - mx);
+      const dy = 2 * (1 - t) * (my - y0) + 2 * t * (y1 - my);
+      const angle = Math.atan2(dy, dx) * 180 / Math.PI + 90; // svg faces up
+      frames.push({ transform: `translate(${x}px, ${y}px) rotate(${Math.max(-40, Math.min(40, angle * 0.35))}deg)` });
+    }
+    return frames;
+  }
+
+  function spawnButterfly(x, y, size, hueShift) {
+    const el = document.createElement('div');
+    el.className = 'bfly';
+    el.innerHTML = butterflySvg(size, hueShift);
+    el.style.transform = `translate(${x}px, ${y}px)`;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.monarchButterflies = function (sourceEl) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    injectButterflyStyles();
+    const src = sourceEl.getBoundingClientRect();
+    const sx = src.left + src.width / 2, sy = src.top + src.height / 2;
+    const logoImg = document.querySelector('#logo-container img');
+    const logo = logoImg ? logoImg.getBoundingClientRect() : { right: sx + 40, top: sy - 40, width: 100 };
+    const W = window.innerWidth, H = window.innerHeight;
+
+    // The flock: scatter off-screen in different directions.
+    const exits = [
+      [W + 80, -80], [W * 0.7, -100], [-90, H * 0.15], [W + 90, H * 0.35],
+    ];
+    exits.forEach(([ex, ey], i) => {
+      const el = spawnButterfly(sx - 14, sy - 14, 22 + Math.random() * 10, (Math.random() - 0.5) * 16);
+      const anim = el.animate(flightKeyframes(sx - 14, sy - 14, ex, ey, 300), {
+        duration: 1900 + Math.random() * 900,
+        delay: i * 90,
+        easing: 'cubic-bezier(0.45, 0.05, 0.55, 0.95)',
+        fill: 'forwards',
+      });
+      anim.onfinish = () => el.remove();
+    });
+
+    // The hero: flies up to the logo, lands on its top edge, rests with a
+    // slow wingbeat, then lifts off and sails away.
+    const landX = logo.right - logo.width * 0.25 - 16, landY = logo.top - 20;
+    const hero = spawnButterfly(sx - 16, sy - 16, 30, 0);
+    const toLogo = hero.animate(flightKeyframes(sx - 16, sy - 16, landX, landY, 160), {
+      duration: 1500, easing: 'cubic-bezier(0.4, 0.1, 0.3, 1)', fill: 'forwards',
+    });
+    toLogo.onfinish = () => {
+      hero.classList.add('bfly-rest'); // slow, contented wingbeat
+      setTimeout(() => {
+        hero.classList.remove('bfly-rest');
+        const off = hero.animate(flightKeyframes(landX, landY, W + 120, -120, 220), {
+          duration: 1700, easing: 'cubic-bezier(0.5, 0, 0.7, 0.4)', fill: 'forwards',
+        });
+        off.onfinish = () => hero.remove();
+      }, 1600);
+    };
+  };
+
+  // The word "Monarch" in the brand credit is the trigger — delegated, since
+  // renderLogo() rebuilds that markup on every page boot.
+  document.addEventListener('click', (e) => {
+    const strong = e.target.closest('#monarch-brand-credit strong');
+    if (!strong) return;
+    e.preventDefault();
+    e.stopPropagation();
+    monarchButterflies(strong);
+  }, true);
+})();
