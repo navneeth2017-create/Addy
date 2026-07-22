@@ -528,8 +528,16 @@ async function addToCart(productId) {
   const qty = parseInt(document.getElementById(`qty-${productId}`).value) || 1;
   const body = { product_id: productId, quantity: qty };
   if (_currentStoreId) body.store_id = _currentStoreId;
+  const btn = event?.target?.closest?.('.add-btn');
   const cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
-  if (cart) { _cart = cart; renderCart(); showToast('Added to cart', 'success'); }
+  if (cart) {
+    _cart = cart; renderCart();
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✓ Added'; btn.classList.add('added');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('added'); }, 900);
+    } else showToast('Added to cart', 'success');
+  }
 }
 
 async function loadCart() {
@@ -590,6 +598,14 @@ function renderCart() {
 
   const total = _cart.items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);
   document.getElementById('cart-total-val').textContent = `$${total.toFixed(2)}`;
+  // Bump the cart when something new lands in it.
+  const count = _cart.items.reduce((a, i) => a + i.quantity, 0);
+  if (count > (window._lastCartCount || 0)) {
+    document.querySelectorAll('.cart-header, #mobile-cart-bar').forEach(el => {
+      el.classList.remove('cart-bump'); void el.offsetWidth; el.classList.add('cart-bump');
+    });
+  }
+  window._lastCartCount = count;
   totalRow.style.display = 'flex';
   shippingNote.textContent = cartShipsFree()
     ? '✓ This order ships FREE'
