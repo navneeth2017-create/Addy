@@ -1735,7 +1735,7 @@ function switchTab(tab, btn) {
   if (tab === 'products') loadProductsTab();
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();
-  if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); loadDbSize(); }
+  if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); loadDbSize(); loadProgramDocs('admin-docs-gallery', true); }
   if (tab === 'activity') loadActivityLog();
 }
 
@@ -2769,7 +2769,7 @@ function showMyOrderDetail(orderId) {
 // TAB SWITCHER FOR NON-ADMIN DASHBOARDS
 // ==========================================
 function switchMyTab(tab, btn) {
-  ['main','orders','inventory','stores','commissions'].forEach(t => {
+  ['main','orders','inventory','stores','commissions','docs'].forEach(t => {
     const el = document.getElementById('my-tab-' + t);
     if (el) el.style.display = t === tab ? 'block' : 'none';
   });
@@ -2779,6 +2779,7 @@ function switchMyTab(tab, btn) {
   if (tab === 'inventory') loadInventory();
   if (tab === 'stores') loadMyStores();
   if (tab === 'commissions') loadMyCommissions();
+  if (tab === 'docs') loadProgramDocs('docs-gallery', false);
 }
 
 // ==========================================
@@ -3564,4 +3565,118 @@ async function triggerBackup() {
     if (status) status.textContent = '✓ Backup running — check Railway logs for progress';
     showToast('Backup started ✓', 'success');
   }
+}
+
+// ============================================================
+// PROGRAM DOCUMENTS — reps view; admins manage
+// ============================================================
+async function loadProgramDocs(containerId, manage) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '<div class="loading" style="padding:40px;">Loading…</div>';
+  let docs = [];
+  try { docs = await apiFetch('/api/program-documents') || []; } catch (e) { docs = []; }
+
+  const uploader = manage ? `
+    <div class="doc-upload-card">
+      <div style="flex:1;min-width:200px;">
+        <input type="text" id="doc-title" placeholder="Document title (e.g. Pricing Sheet)" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;">
+        <div id="doc-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+      </div>
+      <input type="file" id="doc-file" accept="image/*" style="display:none;" onchange="stageProgramDoc(this)">
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('doc-file').click()" style="white-space:nowrap;">🖼 Choose image</button>
+      <button class="btn btn-sm" id="doc-upload-btn" onclick="uploadProgramDoc()" disabled style="white-space:nowrap;">Upload</button>
+    </div>` : '';
+
+  if (!docs.length) {
+    el.innerHTML = uploader + `<div style="text-align:center;padding:48px 20px;color:var(--text-muted);">
+      <div style="font-size:44px;margin-bottom:12px;">📄</div>
+      <p style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px;">No documents yet</p>
+      <p style="font-size:13px;">${manage ? 'Upload flyers and pricing sheets above — reps will see them in their Program Docs tab.' : 'Program flyers and pricing sheets will appear here soon.'}</p>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = uploader + `<div class="docs-grid">${docs.map(d => `
+    <div class="doc-card">
+      <div class="doc-thumb" onclick="openDocLightbox(${d.id})"><img src="${d.image_data}" alt="${esc(d.title)}" loading="lazy"></div>
+      <div class="doc-meta">
+        <span class="doc-title" title="${esc(d.title)}">${esc(d.title)}</span>
+        ${manage ? `<button class="link-danger" onclick="deleteProgramDoc(${d.id}, '${esc(d.title)}')" title="Delete">🗑</button>` : `<button class="link-btn" onclick="openDocLightbox(${d.id})">View</button>`}
+      </div>
+    </div>`).join('')}</div>`;
+  window._programDocs = docs;
+}
+
+function openDocLightbox(id) {
+  const d = (window._programDocs || []).find(x => x.id === id);
+  if (!d) return;
+  let lb = document.getElementById('doc-lightbox');
+  if (!lb) {
+    lb = document.createElement('div');
+    lb.id = 'doc-lightbox';
+    lb.className = 'doc-lightbox';
+    lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('doc-lb-close')) lb.classList.remove('active'); });
+    document.body.appendChild(lb);
+  }
+  lb.innerHTML = `
+    <div class="doc-lb-bar">
+      <span>${esc(d.title)}</span>
+      <div style="display:flex;gap:8px;">
+        <a class="doc-lb-btn" href="${d.image_data}" download="${esc(d.title).replace(/[^a-z0-9]+/gi,'-')}.jpg">⬇ Download</a>
+        <button class="doc-lb-btn doc-lb-close">✕ Close</button>
+      </div>
+    </div>
+    <div class="doc-lb-img-wrap"><img src="${d.image_data}" alt="${esc(d.title)}"></div>`;
+  lb.classList.add('active');
+}
+
+let _docPending = null;
+function stageProgramDoc(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById('doc-upload-status');
+  if (status) status.textContent = 'Compressing…';
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      // Compress: max 1600px on the long edge, JPEG 0.82 — keeps flyers readable, small.
+      const MAX = 1600;
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      _docPending = canvas.toDataURL('image/jpeg', 0.82);
+      const kb = Math.round(_docPending.length / 1024);
+      if (status) status.textContent = `✓ Ready (${kb}KB)`;
+      const btn = document.getElementById('doc-upload-btn');
+      if (btn) btn.disabled = false;
+      const titleEl = document.getElementById('doc-title');
+      if (titleEl && !titleEl.value.trim()) titleEl.value = file.name.replace(/\.[^.]+$/, '');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function uploadProgramDoc() {
+  const title = (document.getElementById('doc-title')?.value || '').trim();
+  if (!title) { showToast('Give the document a title', 'error'); return; }
+  if (!_docPending) { showToast('Choose an image first', 'error'); return; }
+  const btn = document.getElementById('doc-upload-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+  const r = await apiFetch('/api/program-documents', { method: 'POST', body: JSON.stringify({ title, image_data: _docPending }) });
+  if (r && r.id) {
+    showToast('Document added ✓', 'success');
+    _docPending = null;
+    loadProgramDocs('admin-docs-gallery', true);
+  } else if (btn) { btn.disabled = false; btn.textContent = 'Upload'; }
+}
+
+async function deleteProgramDoc(id, title) {
+  if (!confirm(`Delete "${title}"? Reps will no longer see it.`)) return;
+  const r = await apiFetch(`/api/program-documents/${id}`, { method: 'DELETE' });
+  if (r && r.success) { showToast('Deleted', 'success'); loadProgramDocs('admin-docs-gallery', true); }
 }

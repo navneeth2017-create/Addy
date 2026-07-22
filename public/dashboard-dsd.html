@@ -40,6 +40,7 @@
         <button class="admin-tab" onclick="switchMyTab('commissions',this)">Commissions 💰</button>
         <button class="admin-tab" onclick="switchMyTab('orders',this)">My Orders</button>
         <button class="admin-tab" onclick="switchMyTab('inventory',this)">Inventory</button>
+        <button class="admin-tab" onclick="switchMyTab('docs',this)">📄 Program Docs</button>
       </div>
       <div id="my-tab-main">
       <div class="page-header">
@@ -116,6 +117,12 @@
             </table>
           </div>
         </div>
+      </div>
+
+      <!-- Program Docs Tab -->
+      <div id="my-tab-docs" style="display:none;">
+        <div class="page-header"><div><h1>Program Documents</h1><p>Pricing sheets, flyers, and everything about the ADDY DSD program</p></div></div>
+        <div id="docs-gallery"><div class="loading">Loading…</div></div>
       </div>
 
       <!-- My Stores Tab -->

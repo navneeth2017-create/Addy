@@ -1375,3 +1375,41 @@ button:active:not(:disabled), .btn:active { transform: scale(0.965); }
 
 /* Add-to-cart success flash */
 .add-btn.added { background: var(--green) !important; }
+
+
+/* ── PROGRAM DOCUMENTS ────────────────────────────────────────────────────── */
+.doc-upload-card {
+  display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;
+  padding: 14px; border: 1px dashed var(--border); border-radius: 12px; margin-bottom: 18px;
+  background: var(--bg-hover);
+}
+.docs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+.doc-card {
+  border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg-card);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.doc-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(15, 23, 42, 0.14); }
+.doc-thumb { cursor: pointer; aspect-ratio: 3 / 4; overflow: hidden; background: var(--bg-hover); display: block; }
+.doc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.doc-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; }
+.doc-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-danger { background: none; border: none; cursor: pointer; font-size: 15px; opacity: 0.7; }
+.link-danger:hover { opacity: 1; }
+
+.doc-lightbox {
+  position: fixed; inset: 0; z-index: 2000; display: none;
+  flex-direction: column; background: rgba(8, 15, 30, 0.94); backdrop-filter: blur(3px);
+}
+.doc-lightbox.active { display: flex; }
+.doc-lb-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; color: #fff; font-weight: 600; font-size: 15px;
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
+}
+.doc-lb-btn {
+  background: rgba(255, 255, 255, 0.14); color: #fff; border: none; border-radius: 8px;
+  padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none;
+}
+.doc-lb-btn:hover { background: rgba(255, 255, 255, 0.24); }
+.doc-lb-img-wrap { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; padding: 0 12px 24px; text-align: center; }
+.doc-lb-img-wrap img { max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }

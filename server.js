@@ -282,6 +282,19 @@ async function migrate() {
     }
   } catch(e) { console.log('ℹ️  known-reps migration skipped:', e.message); }
 
+  // Program documents: flyers/pricing sheets the admin uploads for reps to view
+  // in the "Program Docs" tab. Stored as compressed base64 (same as store photos).
+  try {
+    await q(`CREATE TABLE IF NOT EXISTS program_documents (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      image_data TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    console.log('✅ program_documents table ready');
+  } catch(e) { console.log('ℹ️  program_documents table:', e.message); }
+
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
     await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
@@ -3056,6 +3069,51 @@ app.post('/api/admin/users/:id/house-partner', authenticate, authorize('admin'),
     await logActivity('set_house_partner', target.name || String(target.id), req.user.email);
     res.json({ success: true });
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+// ── PROGRAM DOCUMENTS ────────────────────────────────────────────────────────
+// Flyers/pricing sheets. Any signed-in user can VIEW; only admins manage.
+app.get('/api/program-documents', authenticate, async (req, res) => {
+  try {
+    res.json(await all('SELECT id, title, image_data, sort_order, created_at FROM program_documents ORDER BY sort_order ASC, id ASC'));
+  } catch(e) { console.error('program-documents list:', e.message); res.json([]); }
+});
+
+app.post('/api/program-documents', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { title, image_data } = req.body;
+    if (!title || !title.trim()) return res.status(400).json({ error: 'Title is required' });
+    if (!image_data || !image_data.startsWith('data:image/')) return res.status(400).json({ error: 'A valid image is required' });
+    if (image_data.length > 4_000_000) return res.status(400).json({ error: 'Image too large — it should compress under ~3MB.' });
+    const maxRow = await one('SELECT COALESCE(MAX(sort_order), 0) AS m FROM program_documents');
+    const doc = await one(
+      'INSERT INTO program_documents (title, image_data, sort_order) VALUES ($1,$2,$3) RETURNING id, title, sort_order',
+      [title.trim(), image_data, (maxRow?.m || 0) + 1]
+    );
+    await logActivity('added_document', doc.title, req.user.email);
+    res.status(201).json(doc);
+  } catch(e) { console.error('program-documents add:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+app.patch('/api/program-documents/:id', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { title, sort_order } = req.body;
+    const doc = await one('SELECT id FROM program_documents WHERE id=$1', [req.params.id]);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (title !== undefined) await q('UPDATE program_documents SET title=$1 WHERE id=$2', [String(title).trim(), req.params.id]);
+    if (sort_order !== undefined) await q('UPDATE program_documents SET sort_order=$1 WHERE id=$2', [parseInt(sort_order) || 0, req.params.id]);
+    res.json({ success: true });
+  } catch(e) { console.error('program-documents patch:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+app.delete('/api/program-documents/:id', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const doc = await one('SELECT title FROM program_documents WHERE id=$1', [req.params.id]);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    await q('DELETE FROM program_documents WHERE id=$1', [req.params.id]);
+    await logActivity('removed_document', doc.title, req.user.email);
+    res.json({ success: true });
+  } catch(e) { console.error('program-documents delete:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 // Request a payout
