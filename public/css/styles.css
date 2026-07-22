@@ -1391,10 +1391,21 @@ button:active:not(:disabled), .btn:active { transform: scale(0.965); }
 .doc-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(15, 23, 42, 0.14); }
 .doc-thumb { cursor: pointer; aspect-ratio: 3 / 4; overflow: hidden; background: var(--bg-hover); display: flex; align-items: center; justify-content: center; }
 .doc-thumb img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; }
-.doc-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; }
-.doc-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.link-danger { background: none; border: none; cursor: pointer; font-size: 15px; opacity: 0.7; }
-.link-danger:hover { opacity: 1; }
+.doc-meta { display: flex; flex-direction: column; gap: 10px; padding: 12px 13px 13px; }
+.doc-title { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-actions { display: flex; align-items: center; gap: 6px; }
+.doc-act {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
+  font-size: 12px; font-weight: 600; line-height: 1; cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.doc-act svg { width: 14px; height: 14px; flex-shrink: 0; }
+.doc-act:hover { background: var(--bg-hover); color: var(--text); border-color: var(--text-muted); }
+.doc-act.is-public { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); background: color-mix(in srgb, var(--green) 8%, transparent); }
+.doc-act.is-public:hover { background: color-mix(in srgb, var(--green) 14%, transparent); border-color: var(--green); }
+.doc-act.doc-act-icon { margin-left: auto; padding: 6px; }
+.doc-act.danger:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, var(--border)); background: color-mix(in srgb, var(--red) 8%, transparent); }
 
 .doc-lightbox {
   position: fixed; inset: 0; z-index: 2000; display: none;
