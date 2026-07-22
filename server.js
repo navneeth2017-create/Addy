@@ -266,6 +266,17 @@ async function migrate() {
     }
   } catch(e) { console.log('ℹ️  capsules backfill skipped:', e.message); }
 
+  // One-time: grandfather the two known reps by exact email — a safety net in
+  // case the broad house_5pct migration was skipped on this database.
+  try {
+    const done = await one("SELECT 1 FROM app_migrations WHERE key='grandfather_known_reps_v1'");
+    if (!done) {
+      const r = await q("UPDATE users SET house_5pct=TRUE WHERE lower(email) IN ('kerryarbutina@gmail.com','marksullivan@usa.com')");
+      await q("INSERT INTO app_migrations (key) VALUES ('grandfather_known_reps_v1')");
+      console.log(`✅ Grandfathered known reps by email (${r.rowCount||0})`);
+    }
+  } catch(e) { console.log('ℹ️  known-reps migration skipped:', e.message); }
+
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
     await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
@@ -1178,7 +1189,7 @@ app.post('/api/users', authenticate, authorize('admin'), async (req, res) => {
 });
 
 app.get('/api/users', authenticate, authorize('admin'), async (req, res) => {
-  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,locked_discount_pct,can_pay_invoice FROM users ORDER BY role,name')); }
+  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,locked_discount_pct,can_pay_invoice,house_partner FROM users ORDER BY role,name')); }
   catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
@@ -2993,6 +3004,23 @@ app.get('/api/my-reps', authenticate, async (req, res) => {
     console.error('my-reps error:', e.message);
     res.json({ reps: [], flat_rate_others: null });
   }
+});
+
+// One-click house partner setup (admin). Sets the flag + 35% lock on the
+// chosen account, clears it from anyone else, and grandfathers every other
+// existing non-admin user at 5% for him. Exists because identifying the
+// account by name proved unreliable — the admin clicks the right row instead.
+app.post('/api/admin/users/:id/house-partner', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const target = await one("SELECT id, name, role FROM users WHERE id=$1", [req.params.id]);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role !== 'dsd') return res.status(400).json({ error: 'House partner must be a DSD account' });
+    await q('UPDATE users SET house_partner=FALSE WHERE house_partner=TRUE');
+    await q('UPDATE users SET house_partner=TRUE, locked_discount_pct=35 WHERE id=$1', [target.id]);
+    await q("UPDATE users SET house_5pct=TRUE WHERE id<>$1 AND role<>'admin'", [target.id]);
+    await logActivity('set_house_partner', target.name || String(target.id), req.user.email);
+    res.json({ success: true });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
 // Request a payout

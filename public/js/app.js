@@ -2158,6 +2158,7 @@ async function loadUsersTab() {
           : `<span style="font-size:12px;color:var(--text-muted);">—</span>`
         }
         ${u.can_pay_invoice ? `<span style="display:inline-block;margin-left:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(217,119,6,0.12);color:#d97706;" title="Can pay by Invoice/Net-30">📄 Invoice</span>` : ''}
+        ${u.house_partner ? `<span style="display:inline-block;margin-left:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(37,99,235,0.12);color:var(--accent);" title="House partner — locked 35%, earns on the network">⭐ House</span>` : ''}
       </td>
       <td onclick="event.stopPropagation()">
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -2181,11 +2182,23 @@ async function loadUsersTab() {
             ? `<button class="btn btn-sm btn-outline" onclick="pingUser(${u.id}, '${esc(u.name || u.email)}')" title="Send this user a message">📨 Ping</button>`
             : ''
           }
+          ${u.role === 'dsd' && !u.house_partner
+            ? `<button class="btn btn-sm btn-outline" onclick="makeHousePartner(${u.id}, '${esc(u.name || u.email)}')" title="Lock at 35% and grandfather everyone else at 5% for them">⭐ House</button>`
+            : ''
+          }
           <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${esc(u.name || u.email)}')">Delete</button>
         </div>
       </td>
     </tr>
   `).join('');
+}
+
+// Crown the house partner: 35% lock + grandfathers everyone else at 5% for
+// them. Only visible here in the admin — the reps themselves see nothing.
+async function makeHousePartner(id, name) {
+  if (!confirm(`Make ${name} the house partner?\n\n• Locks their margin at 35% on every order\n• They earn 5% on every existing user's orders and their invites\n• Plus a flat 2% on all other future sales\n\nThe reps themselves are never shown any of this.`)) return;
+  const r = await apiFetch(`/api/admin/users/${id}/house-partner`, { method: 'POST', body: JSON.stringify({}) });
+  if (r && r.success) { showToast(`⭐ ${name} is the house partner — 35% locked`, 'success'); if (typeof loadUsersTab === 'function') loadUsersTab(); }
 }
 
 async function pingUser(id, name) {
