@@ -109,10 +109,17 @@ async function loadProducts() {
 // mix-and-match builder that must land exactly on the pallet size. The
 // discount itself is applied server-side the moment the cart holds enough
 // boxes — these are just fast ways to get there.
+// Hand-drawn pallet icons (SVG) — the emoji squares looked cheap on the cards.
+const PALLET_ICONS = {
+  single: `<svg viewBox="0 0 48 48" fill="none"><rect x="12" y="12" width="24" height="24" rx="2" fill="#5B9BF8" stroke="#0D1B38" stroke-width="1.6"/><path d="M12 20h24" stroke="#0D1B38" stroke-width="1.4"/><path d="M22 12v8" stroke="#0D1B38" stroke-width="1.4"/><path d="M26 12v8" stroke="#0D1B38" stroke-width="1.4"/><rect x="19" y="26" width="10" height="5" rx="1" fill="#DCEBFF"/></svg>`,
+  starter: `<svg viewBox="0 0 48 48" fill="none"><rect x="8" y="24" width="15" height="14" rx="1.5" fill="#5B9BF8" stroke="#0D1B38" stroke-width="1.5"/><rect x="25" y="24" width="15" height="14" rx="1.5" fill="#3D7BE0" stroke="#0D1B38" stroke-width="1.5"/><rect x="16" y="9" width="15" height="14" rx="1.5" fill="#8FC0FF" stroke="#0D1B38" stroke-width="1.5"/><path d="M23.5 9v5" stroke="#0D1B38" stroke-width="1.3"/><path d="M15.5 24v5" stroke="#0D1B38" stroke-width="1.3"/><path d="M32.5 24v5" stroke="#0D1B38" stroke-width="1.3"/></svg>`,
+  half: `<svg viewBox="0 0 48 48" fill="none"><rect x="6" y="38" width="36" height="3" rx="1" fill="#33507E"/><rect x="9" y="34" width="7" height="4" fill="#33507E"/><rect x="20.5" y="34" width="7" height="4" fill="#33507E"/><rect x="32" y="34" width="7" height="4" fill="#33507E"/><rect x="7" y="22" width="11" height="11" rx="1.5" fill="#5B9BF8" stroke="#0D1B38" stroke-width="1.5"/><rect x="19" y="22" width="11" height="11" rx="1.5" fill="#3D7BE0" stroke="#0D1B38" stroke-width="1.5"/><rect x="31" y="22" width="11" height="11" rx="1.5" fill="#5B9BF8" stroke="#0D1B38" stroke-width="1.5"/><rect x="13" y="10" width="11" height="11" rx="1.5" fill="#8FC0FF" stroke="#0D1B38" stroke-width="1.5"/></svg>`,
+  full: `<svg viewBox="0 0 48 48" fill="none"><rect x="6" y="38" width="36" height="3" rx="1" fill="#33507E"/><rect x="9" y="34" width="7" height="4" fill="#33507E"/><rect x="20.5" y="34" width="7" height="4" fill="#33507E"/><rect x="32" y="34" width="7" height="4" fill="#33507E"/><rect x="7" y="22" width="11" height="11" rx="1.5" fill="#3D7BE0" stroke="#0D1B38" stroke-width="1.5"/><rect x="19" y="22" width="11" height="11" rx="1.5" fill="#5B9BF8" stroke="#0D1B38" stroke-width="1.5"/><rect x="31" y="22" width="11" height="11" rx="1.5" fill="#3D7BE0" stroke="#0D1B38" stroke-width="1.5"/><rect x="7" y="10" width="11" height="11" rx="1.5" fill="#8FC0FF" stroke="#0D1B38" stroke-width="1.5"/><rect x="19" y="10" width="11" height="11" rx="1.5" fill="#5B9BF8" stroke="#0D1B38" stroke-width="1.5"/><rect x="31" y="10" width="11" height="11" rx="1.5" fill="#8FC0FF" stroke="#0D1B38" stroke-width="1.5"/></svg>`,
+};
 const PALLETS = {
-  starter: { label: '3 Master Boxes', sub: 'Your minimum order', boxes: 3, each: 1, pct: null, emoji: '📦' },
-  half: { label: 'Half Pallet', sub: '15 master boxes · FREE shipping', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
-  full: { label: 'Full Pallet', sub: '27 master boxes · FREE shipping', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
+  starter: { label: '3 Master Boxes', sub: 'Your minimum order', boxes: 3, each: 1, pct: null, icon: 'starter' },
+  half: { label: 'Half Pallet', sub: '15 master boxes · FREE shipping', boxes: 15, each: 5, pct: 25, icon: 'half' },
+  full: { label: 'Full Pallet', sub: '27 master boxes · FREE shipping', boxes: 27, each: 9, pct: 30, icon: 'full' },
 };
 const BOX_TYPE_LABELS = { shots: 'Shots', blister_card: 'Capsules', gummies: 'Gummies' };
 
@@ -164,7 +171,7 @@ function renderPalletBar() {
         <div class="pallet-card starter">
           <span class="pallet-badge">${_myRate}% margin</span>
           <div class="pallet-head">
-            <span class="pallet-emoji">📦</span>
+            <span class="pallet-icon">${PALLET_ICONS.single}</span>
             <div>
               <div class="pallet-title">1 Master Box</div>
               <div class="pallet-sub">Your minimum order · packed your way</div>
@@ -182,7 +189,7 @@ function renderPalletBar() {
         <div class="pallet-card ${kind}">
           <span class="pallet-badge">${Math.max(_myRate, P.pct || 0)}% margin</span>
           <div class="pallet-head">
-            <span class="pallet-emoji">${P.emoji}</span>
+            <span class="pallet-icon">${PALLET_ICONS[P.icon] || PALLET_ICONS.starter}</span>
             <div>
               <div class="pallet-title">${P.label}</div>
               <div class="pallet-sub">${P.sub}</div>
@@ -224,7 +231,7 @@ async function addClassicPallet(kind) {
       cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
     }
     if (cart) { _cart = cart; renderCart(); }
-    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% margin locked in!` : `${P.emoji} ${P.label} added to cart`, 'success');
+    showToast(P.pct ? `${P.label} added — ${P.pct}% margin locked in! ✓` : `${P.label} added to cart ✓`, 'success');
   } finally {
     document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = false);
   }
@@ -315,7 +322,7 @@ function openPalletBuilder(kind) {
   modal.innerHTML = `
     <div class="modal" style="max-width:520px;">
       <button class="close-btn" onclick="document.getElementById('pallet-builder-modal').classList.remove('active')">&times;</button>
-      <h2>${P.emoji} Build your ${P.label.toLowerCase()}</h2>
+      <h2><span class="modal-pallet-icon">${PALLET_ICONS[P.icon] || PALLET_ICONS.starter}</span>Build your ${P.label.toLowerCase()}</h2>
       <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
         Pick any mix of master boxes totaling exactly <strong>${P.boxes}</strong>${P.pct ? ` — the ${P.pct}% pallet price applies automatically` : ''}.</p>
       <div class="pb-progress-wrap">
@@ -364,7 +371,7 @@ async function palletBuilderAdd() {
     }
     if (cart) { _cart = cart; renderCart(); }
     document.getElementById('pallet-builder-modal').classList.remove('active');
-    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% margin locked in!` : `${P.emoji} ${P.label} added to cart`, 'success');
+    showToast(P.pct ? `${P.label} added — ${P.pct}% margin locked in! ✓` : `${P.label} added to cart ✓`, 'success');
   } catch (e) {
     btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% margin` : ''}`;
   }
@@ -569,9 +576,9 @@ function renderCart() {
   let palletBanner = '';
   if (pal && pal.boxes > 0) {
     if (pal.pct === 30 && _myRate < 30) {
-      palletBanner = `<div class="cart-pallet-banner on">🟪 Full-pallet pricing — <strong>30% margin</strong> on every box</div>`;
+      palletBanner = `<div class="cart-pallet-banner on">✨ Full-pallet pricing — <strong>30% margin</strong> on every box</div>`;
     } else if (pal.pct === 25 && _myRate < 25) {
-      palletBanner = `<div class="cart-pallet-banner on">🟦 Half-pallet pricing — <strong>25% margin</strong> on every box${pal.to_full && _myRate < 30 ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
+      palletBanner = `<div class="cart-pallet-banner on">✨ Half-pallet pricing — <strong>25% margin</strong> on every box${pal.to_full && _myRate < 30 ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
     } else if (!pal.pct && pal.to_half <= 6 && _myRate < 25) {
       palletBanner = `<div class="cart-pallet-banner">📦 ${pal.to_half} more box${pal.to_half === 1 ? '' : 'es'} unlocks <strong>25% half-pallet pricing</strong></div>`;
     }
