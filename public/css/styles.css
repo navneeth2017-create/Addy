@@ -1247,20 +1247,23 @@ input[type="checkbox"] {
   background: linear-gradient(135deg, #16294E, #0D1B38);
   border: 1px solid rgba(96, 165, 250, 0.25);
   border-radius: 14px; padding: 16px 18px; color: #fff;
+  position: relative;
 }
 .pallet-card.full { background: linear-gradient(135deg, #1D2E63, #0D1B38); border-color: rgba(96, 165, 250, 0.45); }
-.pallet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.pallet-emoji { font-size: 26px; }
-.pallet-title { font-weight: 800; font-size: 16px; letter-spacing: 0.01em; }
-.pallet-sub { font-size: 12px; opacity: 0.7; }
+.pallet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding-right: 78px; }
+.pallet-emoji { font-size: 26px; flex-shrink: 0; }
+.pallet-title { font-weight: 800; font-size: 16px; letter-spacing: 0.01em; white-space: nowrap; }
+.pallet-sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
 .pallet-badge {
-  margin-left: auto; background: linear-gradient(90deg, #2563EB, #60A5FA);
+  position: absolute; top: 14px; right: 14px;
+  background: linear-gradient(90deg, #2563EB, #60A5FA);
   padding: 4px 11px; border-radius: 999px; font-weight: 800; font-size: 12px; white-space: nowrap;
 }
-.pallet-actions { display: flex; gap: 8px; }
+.pallet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .btn-pallet {
-  flex: 1; padding: 10px 8px; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer;
+  padding: 10px 8px; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer;
   background: rgba(255, 255, 255, 0.08); color: #fff; border: 1px solid rgba(255, 255, 255, 0.18);
+  white-space: nowrap;
 }
 .btn-pallet.primary { background: linear-gradient(90deg, #2563EB, #3b82f6); border: none; }
 .btn-pallet:disabled { opacity: 0.55; cursor: default; }

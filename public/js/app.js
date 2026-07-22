@@ -1074,6 +1074,7 @@ async function loadMyCommissions() {
   const tbody = document.getElementById('my-commissions-tbody');
   const reqEl = document.getElementById('my-payout-requests');
   if (!tbody) return;
+  loadMyReps(); // fire-and-forget — renders its own card
   if (reqEl) {
     const requests = await apiFetch('/api/payouts');
     if (requests && requests.length) {
@@ -1094,6 +1095,39 @@ async function loadMyCommissions() {
     <td><span class="status-badge ${r.status}">${r.status}</span></td>
     <td style="font-size:12px;color:var(--text-muted);">${new Date(r.created_at).toLocaleDateString()}</td>
   </tr>`).join('');
+}
+
+// The people this rep earns on. House partner (Danny) sees the whole
+// grandfathered network at 5% plus a note about the flat 2% on everyone else.
+async function loadMyReps() {
+  const el = document.getElementById('my-reps');
+  if (!el) return;
+  const data = await apiFetch('/api/my-reps');
+  if (!data || !data.reps) { el.innerHTML = ''; return; }
+  if (!data.reps.length && !data.flat_rate_others) {
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13px;color:var(--text-muted);">No reps yet — share your invite link (🔗 Invite, top right) and earn <strong>5%</strong> on everything they order.</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar"><h2>My Reps <span style="font-size:12px;font-weight:600;color:var(--text-muted);">— you earn on every order they place</span></h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Source</th><th>Your cut</th></tr></thead>
+          <tbody>
+            ${data.reps.map(r => `<tr>
+              <td style="font-weight:600;">${esc(r.name || '—')}</td>
+              <td style="font-size:12px;">${esc(r.email)}</td>
+              <td style="font-size:12px;">${new Date(r.created_at).toLocaleDateString()}</td>
+              <td><span class="status-badge ${r.status === 'active' ? 'active' : 'pending'}">${esc(r.status)}</span></td>
+              <td style="font-size:12px;color:var(--text-muted);">${esc(r.source)}</td>
+              <td style="font-weight:700;color:var(--green);">${r.your_rate}%</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${data.flat_rate_others ? `<div style="padding:12px 16px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary);">＋ You also earn a flat <strong>${data.flat_rate_others}%</strong> on every other sale across ADDY DSD (never stacked with the 5%).</div>` : ''}
+    </div>`;
 }
 
 async function requestPayout() {
