@@ -261,7 +261,17 @@ async function renderOnboardingChecklist() {
       { done: storesCount > 0, label: 'Claim your first store', hint: 'Lock in a store as your exclusive territory.' },
       { done: storesCount > 0 && photosPending === 0, label: 'Upload your store photos', hint: 'Required within your photo deadline.' },
     ];
-    if (steps.every(s => s.done)) { el.innerHTML = ''; return; }
+    if (steps.every(s => s.done)) {
+      el.innerHTML = '';
+      // One-time salute the first time everything's checked off.
+      const key = 'addy_onboard_done_' + (window._me?.id || 'me');
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, '1');
+        if (typeof monarchCelebrate === 'function') monarchCelebrate();
+        showToast('🎉 You\'re fully set up — welcome to the ADDY program!', 'success');
+      }
+      return;
+    }
     const completed = steps.filter(s => s.done).length;
     el.innerHTML = `
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:20px;">
@@ -2157,7 +2167,27 @@ async function loadDSDDashboard() {
       tierEl.textContent = label;
     }
     const commEl = document.getElementById('stat-commission');
-    if (commEl) commEl.textContent = '$' + parseFloat(profile.commission_balance||0).toFixed(2);
+    if (commEl) {
+      commEl.textContent = '$' + parseFloat(profile.commission_balance||0).toFixed(2);
+      // Sparkle when the balance grew since their last visit.
+      try {
+        const k = 'addy_last_bal_' + profile.id;
+        const prev = parseFloat(localStorage.getItem(k));
+        const now = parseFloat(profile.commission_balance || 0);
+        if (Number.isFinite(prev) && now > prev + 0.004) {
+          const up = document.createElement('div');
+          up.textContent = `+$${(now - prev).toFixed(2)} since your last visit`;
+          up.style.cssText = 'font-size:11px;font-weight:700;color:#059669;margin-top:3px;animation:addyRise 0.6s ease-out;';
+          if (!document.getElementById('addy-rise-kf')) {
+            const st = document.createElement('style'); st.id = 'addy-rise-kf';
+            st.textContent = '@keyframes addyRise { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }';
+            document.head.appendChild(st);
+          }
+          commEl.after(up);
+        }
+        localStorage.setItem(k, String(now));
+      } catch (e) { /* decoration only */ }
+    }
     // Show payout banner if balance > 0
     const balance = parseFloat(profile.commission_balance||0);
     const banner = document.getElementById('payout-banner');
@@ -3826,6 +3856,48 @@ function markProgramDocsSeen() {
     return el;
   }
 
+  /**
+   * A touch of season in everyone's flock: green for St. Patrick's Day,
+   * red & green in Christmas week, red-white-blue on the 4th of July.
+   * The rest of the year, classic monarch orange.
+   */
+  function seasonalHue(i) {
+    const now = new Date(), m = now.getMonth() + 1, d = now.getDate();
+    if (m === 3 && d === 17) return 112;                        // ☘ everyone's Irish today
+    if (m === 12 && d >= 20 && d <= 26) return i % 2 ? 112 : 332; // 🎄 red & green
+    if (m === 7 && d === 4) return [332, 190, 212][i % 3];        // 🎆
+    return (Math.random() - 0.5) * 16;
+  }
+
+  /**
+   * Celebration flight — a small kaleidoscope rises from an element (or the
+   * bottom of the screen) and fans out over the top edge. Used for placed
+   * orders and finished onboarding; anyone can call window.monarchCelebrate().
+   */
+  window.monarchCelebrate = function (originEl) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    injectButterflyStyles();
+    const W = window.innerWidth, H = window.innerHeight;
+    let ox = W / 2, oy = H - 40;
+    if (originEl && originEl.getBoundingClientRect) {
+      const r = originEl.getBoundingClientRect();
+      ox = r.left + r.width / 2; oy = r.top + r.height / 2;
+    }
+    const irish = !!(window._me && window._me.house_partner);
+    for (let i = 0; i < 7; i++) {
+      const ex = (W / 8) + (i / 6) * (W * 0.75) + (Math.random() - 0.5) * 80;
+      const hue = irish && i === 3 ? 112 : seasonalHue(i);
+      const el = spawnButterfly(ox - 14, oy - 14, 20 + Math.random() * 12, hue);
+      const anim = el.animate(flightKeyframes(ox - 14, oy - 14, ex, -110, 260), {
+        duration: 1700 + Math.random() * 1100,
+        delay: i * 110,
+        easing: 'cubic-bezier(0.4, 0.05, 0.5, 0.95)',
+        fill: 'forwards',
+      });
+      anim.onfinish = () => el.remove();
+    }
+  };
+
   window.monarchButterflies = function (sourceEl) {
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     injectButterflyStyles();
@@ -3842,7 +3914,7 @@ function markProgramDocsSeen() {
     const irish = !!(window._me && window._me.house_partner);
     exits.forEach(([ex, ey], i) => {
       // The house partner's flock always carries one emerald monarch. \u2618
-      const hue = irish && i === 2 ? 112 : (Math.random() - 0.5) * 16;
+      const hue = irish && i === 2 ? 112 : seasonalHue(i);
       const el = spawnButterfly(sx - 14, sy - 14, 22 + Math.random() * 10, hue);
       const anim = el.animate(flightKeyframes(sx - 14, sy - 14, ex, ey, 300), {
         duration: 1900 + Math.random() * 900,

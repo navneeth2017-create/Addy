@@ -543,8 +543,41 @@ async function addToCart(productId) {
       const orig = btn.textContent;
       btn.textContent = '✓ Added'; btn.classList.add('added');
       setTimeout(() => { btn.textContent = orig; btn.classList.remove('added'); }, 900);
+      flyToCart(btn);
     } else showToast('Added to cart', 'success');
   }
+}
+
+/** A little 📦 arcs from the Add button into the cart, which gives a happy
+ *  bump when it lands. Skipped for reduced-motion users. */
+function flyToCart(fromEl) {
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const cartHeader = document.querySelector('.cart-sidebar .cart-header') || document.querySelector('.mobile-cart-bar');
+    if (!cartHeader) return;
+    const a = fromEl.getBoundingClientRect(), b = cartHeader.getBoundingClientRect();
+    const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2;
+    const x1 = b.left + 24, y1 = b.top + b.height / 2;
+    const box = document.createElement('div');
+    box.textContent = '📦';
+    box.style.cssText = 'position:fixed;left:0;top:0;z-index:9999;pointer-events:none;font-size:20px;will-change:transform;';
+    document.body.appendChild(box);
+    const mx = (x0 + x1) / 2, my = Math.min(y0, y1) - 90;
+    const frames = [];
+    for (let i = 0; i <= 20; i++) {
+      const t = i / 20;
+      const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * mx + t * t * x1;
+      const y = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * my + t * t * y1;
+      frames.push({ transform: `translate(${x - 10}px, ${y - 10}px) scale(${1 - t * 0.5}) rotate(${t * 260}deg)`, opacity: 1 - t * 0.15 });
+    }
+    const anim = box.animate(frames, { duration: 620, easing: 'cubic-bezier(0.3, 0.1, 0.4, 1)', fill: 'forwards' });
+    anim.onfinish = () => {
+      box.remove();
+      cartHeader.animate([
+        { transform: 'scale(1)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' },
+      ], { duration: 260, easing: 'ease-out' });
+    };
+  } catch (e) { /* decoration only */ }
 }
 
 async function loadCart() {
@@ -848,6 +881,7 @@ async function placeOrder() {
         : `Order #${order.id} confirmed! Payment of $${parseFloat(order.total).toFixed(2)} processed.`;
       document.getElementById('confirm-msg').textContent = msg;
       document.getElementById('confirm-modal').classList.add('active');
+      if (typeof monarchCelebrate === 'function') setTimeout(() => monarchCelebrate(), 250);
       _cart = { items: [], total: 0 };
       _stripeCardElement = null;
       renderCart();
