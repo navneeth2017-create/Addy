@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ADDY">
+  <title>ADDY DSD — Program Documents</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any">
+  <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --blue: #2563eb; --blue-dark: #1d4ed8; --blue-light: #eff6ff;
+      --navy: #0f172a; --text: #1a1a1a; --text-secondary: #64748b;
+      --border: #e2e8f0; --white: #ffffff; --bg: #f8fafc;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    nav {
+      position: sticky; top: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 6vw; background: rgba(255,255,255,0.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
+    }
+    .nav-actions { display: flex; align-items: center; gap: 10px; }
+    .btn-nav {
+      padding: 9px 18px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-weight: 600;
+      color: var(--text); text-decoration: none; transition: all 0.2s; background: var(--white);
+    }
+    .btn-nav:hover { border-color: var(--blue); background: var(--blue-light); color: var(--blue); }
+    .btn-nav.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+    .btn-nav.primary:hover { background: var(--blue-dark); color: #fff; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 40px 6vw 72px; }
+    .page-eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--blue); margin-bottom: 10px; }
+    .page-title { font-family: 'Playfair Display', serif; font-size: clamp(30px, 5vw, 48px); font-weight: 800; color: var(--navy); line-height: 1.1; margin-bottom: 12px; }
+    .page-sub { font-size: 16px; color: var(--text-secondary); max-width: 560px; margin-bottom: 40px; }
+    .docs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 22px; }
+    .doc-card { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--white); transition: transform 0.18s ease, box-shadow 0.18s ease; }
+    .doc-card:hover { transform: translateY(-4px); box-shadow: 0 16px 38px rgba(15,23,42,.16); }
+    .doc-thumb { cursor: pointer; aspect-ratio: 3/4; overflow: hidden; background: var(--navy); display: block; }
+    .doc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .doc-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 13px 15px; }
+    .doc-title { font-size: 14px; font-weight: 700; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-view { background: none; border: none; color: var(--blue); cursor: pointer; font-weight: 700; font-size: 14px; }
+    .empty { text-align: center; padding: 80px 20px; color: var(--text-secondary); }
+    .empty-icon { font-size: 52px; margin-bottom: 14px; }
+    .doc-lightbox { position: fixed; inset: 0; z-index: 3000; display: none; flex-direction: column; background: rgba(8,15,30,.95); }
+    .doc-lightbox.active { display: flex; }
+    .doc-lb-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; color: #fff; font-weight: 700; padding-top: calc(16px + env(safe-area-inset-top,0px)); }
+    .doc-lb-btn { background: rgba(255,255,255,.15); color: #fff; border: none; border-radius: 8px; padding: 9px 15px; font-size: 13px; font-weight: 700; cursor: pointer; text-decoration: none; }
+    .doc-lb-btn:hover { background: rgba(255,255,255,.28); }
+    .doc-lb-img-wrap { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; padding: 0 14px 26px; text-align: center; }
+    .doc-lb-img-wrap img { max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,.55); }
+    @media (max-width: 600px) { nav { padding: 12px 16px; } .wrap { padding: 28px 16px 56px; } .btn-nav { padding: 8px 12px; font-size: 13px; } }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/index.html" style="text-decoration:none;"><img src="/images/addy-logo.svg" alt="ADDY DSD" style="height:46px;width:auto;object-fit:contain;"></a>
+    <div class="nav-actions">
+      <a href="/index.html" class="btn-nav">← Home</a>
+      <a href="/login.html" class="btn-nav">Log In</a>
+      <a href="/login.html" class="btn-nav primary" id="signup-btn">Sign Up</a>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="page-eyebrow">The Program</div>
+    <h1 class="page-title">Program Documents</h1>
+    <p class="page-sub">Pricing sheets, the exit strategy, and how the ADDY DSD program works — tap any flyer to view it full-screen or download it.</p>
+    <div id="docs-grid"><div class="empty"><div class="empty-icon">📄</div><p>Loading…</p></div></div>
+  </div>
+
+  <script>
+    function escHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+    let _docs = [];
+
+    // Carry a referral (?ref=) through to signup, same as the landing page.
+    const _ref = new URLSearchParams(location.search).get('ref');
+    if (_ref) sessionStorage.setItem('addy_ref', _ref);
+    const su = document.getElementById('signup-btn');
+    if (su) su.addEventListener('click', e => { e.preventDefault(); sessionStorage.setItem('open_signup','1'); location.href = '/login.html'; });
+
+    async function loadDocs() {
+      const grid = document.getElementById('docs-grid');
+      let docs = [];
+      try { docs = await fetch('/api/program-documents/public').then(r => r.json()); } catch (e) { docs = []; }
+      if (!docs || !docs.length) {
+        grid.innerHTML = '<div class="empty"><div class="empty-icon">📄</div><p>Documents are on the way — check back soon.</p></div>';
+        return;
+      }
+      _docs = docs;
+      grid.innerHTML = docs.map(d => `
+        <div class="doc-card">
+          <div class="doc-thumb" onclick="openDoc(${d.id})"><img src="${d.image_data}" alt="${escHtml(d.title)}" loading="lazy"></div>
+          <div class="doc-meta"><span class="doc-title">${escHtml(d.title)}</span><button class="doc-view" onclick="openDoc(${d.id})">View</button></div>
+        </div>`).join('');
+    }
+    window.openDoc = function(id) {
+      const d = _docs.find(x => x.id === id); if (!d) return;
+      let lb = document.getElementById('doc-lightbox');
+      if (!lb) {
+        lb = document.createElement('div'); lb.id = 'doc-lightbox'; lb.className = 'doc-lightbox';
+        lb.addEventListener('click', e => { if (e.target === lb || e.target.classList.contains('doc-lb-close')) lb.classList.remove('active'); });
+        document.body.appendChild(lb);
+      }
+      lb.innerHTML = `<div class="doc-lb-bar"><span>${escHtml(d.title)}</span><div style="display:flex;gap:8px;">`
+        + `<a class="doc-lb-btn" href="${d.image_data}" download="${escHtml(d.title).replace(/[^a-z0-9]+/gi,'-')}.jpg">⬇ Download</a>`
+        + `<button class="doc-lb-btn doc-lb-close">✕ Close</button></div></div>`
+        + `<div class="doc-lb-img-wrap"><img src="${d.image_data}" alt="${escHtml(d.title)}"></div>`;
+      lb.classList.add('active');
+    };
+    loadDocs();
+  </script>
+  <script src="/js/pwa.js" defer></script>
+</body>
+</html>
