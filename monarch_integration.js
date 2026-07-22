@@ -507,12 +507,24 @@ function installMonarchIntegration(app) {
       )).rows[0];
       if (!ws || !ws.monarch_provisioned || ws.status !== 'active') return res.json({ available: false });
       const sso = await suiteSession(ws);
-      const alerts = await monarchStaffApi('/api/inventory/alerts', sso.token, null, 10000, 'GET');
+      // Three independent reads — one slow/failed feed never blanks the rest.
+      const [alertsR, insightsR, tasksR] = await Promise.allSettled([
+        monarchStaffApi('/api/inventory/alerts', sso.token, null, 10000, 'GET'),
+        monarchStaffApi('/api/inventory/store-insights', sso.token, null, 10000, 'GET'),
+        monarchStaffApi('/api/tasks?status=open', sso.token, null, 10000, 'GET'),
+      ]);
+      const alerts = alertsR.status === 'fulfilled' ? alertsR.value : { count: 0, out_of_stock: 0, items: [] };
+      const insights = insightsR.status === 'fulfilled' ? insightsR.value : { by_severity: {} };
+      const tasks = tasksR.status === 'fulfilled' ? (Array.isArray(tasksR.value) ? tasksR.value : []) : [];
+      const today = new Date().toISOString().slice(0, 10);
+      const tasksDue = tasks.filter(t => t.overdue || (t.due_date || '').slice(0, 10) === today).length;
       const data = {
         available: true,
         low_stock: alerts.count || 0,
         out_of_stock: alerts.out_of_stock || 0,
         items: (alerts.items || []).slice(0, 3).map(i => ({ name: i.name, sku: i.sku, qty: i.quantity_on_hand })),
+        stores_hot: (insights.by_severity && insights.by_severity.high) || 0,
+        tasks_due: tasksDue,
       };
       _pulseCache.set(req.user.id, { at: Date.now(), data });
       res.json(data);

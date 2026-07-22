@@ -769,7 +769,7 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
 
 app.get('/api/me', authenticate, async (req, res) => {
   try {
-    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier,parent_id,locked_discount_pct FROM users WHERE id=$1', [req.user.id]);
+    const user = await one('SELECT id,email,role,store_id,name,can_pay_invoice,tier,parent_id,locked_discount_pct,house_partner FROM users WHERE id=$1', [req.user.id]);
     if (user) {
       user.discount_pct = await getEffectiveDiscountPct(user.id);
       user.boxes_bought = await getCumulativeBoxes(user.role === 'member' && user.parent_id ? user.parent_id : user.id);
@@ -792,7 +792,7 @@ app.get('/api/me', authenticate, async (req, res) => {
 app.get('/api/profile', authenticate, async (req, res) => {
   try {
     const user = await one(
-      'SELECT id,name,email,role,phone,status,tier,locked_discount_pct,commission_balance,referred_by,stripe_connect_id,can_pay_invoice,parent_id FROM users WHERE id=$1',
+      'SELECT id,name,email,role,phone,status,tier,locked_discount_pct,commission_balance,referred_by,stripe_connect_id,can_pay_invoice,parent_id,house_partner FROM users WHERE id=$1',
       [req.user.id]
     );
     if (user) {

@@ -5,7 +5,15 @@
  * showToast, esc).
  */
 
-const MONARCH_LOGO = `<svg width="24" height="24" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" style="flex:none;"><g transform="rotate(-6 32 32)"><path d="M31 21.5 C29 16.5 26.5 13.5 23.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M33 21.5 C35 16.5 37.5 13.5 40.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z" fill="#E8873B"/><path d="M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z" fill="#B96A2C"/><path d="M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z" fill="#E8873B"/><path d="M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z" fill="#B96A2C"/><ellipse cx="32" cy="36.5" rx="2.6" ry="10.5" fill="#5b3a1e"/><circle cx="32" cy="24" r="2.9" fill="#5b3a1e"/></g></svg>`;
+// The card's butterfly takes a gentle wingbeat every few seconds (and a
+// livelier one on hover) — same idle life as Monarch's own brand mark.
+const MONARCH_LOGO = `<style>
+  #monarch-suite-card .ms-wl { transform-origin: 31px 33px; animation: msIdleFlap 6.5s ease-in-out infinite; }
+  #monarch-suite-card .ms-wr { transform-origin: 33px 33px; animation: msIdleFlap 6.5s ease-in-out infinite; }
+  #monarch-suite-card svg:hover .ms-wl, #monarch-suite-card svg:hover .ms-wr { animation: msIdleFlap 0.5s ease-in-out infinite; }
+  @keyframes msIdleFlap { 0%, 88%, 100% { transform: scaleX(1); } 94% { transform: scaleX(0.35); } }
+  @media (prefers-reduced-motion: reduce) { #monarch-suite-card .ms-wl, #monarch-suite-card .ms-wr { animation: none !important; } }
+</style><svg width="24" height="24" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" style="flex:none;overflow:visible;"><g transform="rotate(-6 32 32)"><path d="M31 21.5 C29 16.5 26.5 13.5 23.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><path d="M33 21.5 C35 16.5 37.5 13.5 40.5 12.5" fill="none" stroke="#5b3a1e" stroke-width="2" stroke-linecap="round"/><g class="ms-wl"><path d="M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z" fill="#E8873B"/><path d="M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z" fill="#B96A2C"/></g><g class="ms-wr"><path d="M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z" fill="#E8873B"/><path d="M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z" fill="#B96A2C"/></g><ellipse cx="32" cy="36.5" rx="2.6" ry="10.5" fill="#5b3a1e"/><circle cx="32" cy="24" r="2.9" fill="#5b3a1e"/></g></svg>`;
 const SUITE_HEADER = `<div style="display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px;">${MONARCH_LOGO}<span>Sales Suite</span><span style="font-weight:500;font-size:12px;color:var(--text-muted);">powered by <strong style="color:#E8873B;">Monarch</strong></span></div>`;
 
 async function loadMonarchSuite() {
@@ -311,13 +319,30 @@ async function loadSuitePulse() {
   if (!slot) return;
   try {
     const p = await apiFetch('/api/monarch/pulse');
-    if (!p || !p.available || !p.low_stock) return;
-    const names = (p.items || []).map(i => esc(i.name)).join(', ');
-    slot.innerHTML = `
-      <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px;background:${p.out_of_stock ? 'rgba(220,38,38,0.09)' : 'rgba(217,119,6,0.10)'};border:1px solid ${p.out_of_stock ? 'rgba(220,38,38,0.45)' : 'rgba(217,119,6,0.45)'};border-radius:20px;padding:4px 12px;">
-        <span title="${names}">⚠️ <strong>${p.low_stock}</strong> product${p.low_stock === 1 ? '' : 's'} low in your Suite</span>
-        <a href="/shop.html" style="font-weight:700;color:var(--accent);text-decoration:none;">Restock →</a>
-      </span>`;
+    if (!p || !p.available) return;
+    const chip = (bg, border, inner) => `<span style="display:inline-flex;align-items:center;gap:8px;font-size:12px;background:${bg};border:1px solid ${border};border-radius:20px;padding:4px 12px;">${inner}</span>`;
+    const chips = [];
+    if (p.low_stock) {
+      const names = (p.items || []).map(i => esc(i.name)).join(', ');
+      chips.push(chip(
+        p.out_of_stock ? 'rgba(220,38,38,0.09)' : 'rgba(217,119,6,0.10)',
+        p.out_of_stock ? 'rgba(220,38,38,0.45)' : 'rgba(217,119,6,0.45)',
+        `<span title="${names}">⚠️ <strong>${p.low_stock}</strong> product${p.low_stock === 1 ? '' : 's'} low</span>
+         <a href="/shop.html" style="font-weight:700;color:var(--accent);text-decoration:none;">Restock →</a>`));
+    }
+    if (p.stores_hot) {
+      chips.push(chip('rgba(220,38,38,0.07)', 'rgba(220,38,38,0.35)',
+        `<a href="/suite.html?view=stores" style="color:inherit;text-decoration:none;">🔥 <strong>${p.stores_hot}</strong> store${p.stores_hot === 1 ? '' : 's'} need attention</a>`));
+    }
+    if (p.tasks_due) {
+      chips.push(chip('rgba(37,99,235,0.07)', 'rgba(37,99,235,0.35)',
+        `<a href="/suite.html?view=field" style="color:inherit;text-decoration:none;">📋 <strong>${p.tasks_due}</strong> for today</a>`));
+    }
+    if (!chips.length) return;
+    slot.style.display = 'inline-flex';
+    slot.style.gap = '8px';
+    slot.style.flexWrap = 'wrap';
+    slot.innerHTML = chips.join('');
   } catch (e) { /* pulse is decoration — never an error state */ }
 }
 
