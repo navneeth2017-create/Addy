@@ -282,12 +282,12 @@ function renderMarginProgress(profile) {
   if (!el) return;
   const pct = profile.discount_pct != null ? profile.discount_pct : 20;
   if (profile.locked_discount_pct != null) {
-    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your rate is <strong>locked at ${pct}% off store cost</strong> on every order — pallet or not.</div>`;
+    el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:13px;">Your margin is <strong>locked at ${pct}%</strong> on every order — pallet or not.</div>`;
     return;
   }
   el.innerHTML = `
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:20px;">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">How your pricing works — % off store cost by order size</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">How your margin works — set by order size</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center;">
         <div style="background:var(--bg-secondary,#f3f6fb);border-radius:10px;padding:12px 8px;">
           <div style="font-size:20px;font-weight:800;">20%</div>
@@ -2047,9 +2047,9 @@ async function loadDSDDashboard() {
     const tierEl = document.getElementById('stat-tier');
     if (tierEl) {
       const pct = profile.discount_pct != null ? profile.discount_pct : 20;
-      let label = pct + '% off store cost';
+      let label = pct + '% margin';
       if (profile.locked_discount_pct != null) label += ' (locked)';
-      else label += ' · more on pallets';
+      else label += ' · higher on pallets';
       tierEl.textContent = label;
     }
     const commEl = document.getElementById('stat-commission');

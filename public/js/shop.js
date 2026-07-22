@@ -114,7 +114,7 @@ const PALLETS = {
   half: { label: 'Half Pallet', sub: '15 master boxes · FREE shipping', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
   full: { label: 'Full Pallet', sub: '27 master boxes · FREE shipping', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
 };
-const BOX_TYPE_LABELS = { shots: 'Shots', blister_card: 'Blister Cards', gummies: 'Gummies' };
+const BOX_TYPE_LABELS = { shots: 'Shots', blister_card: 'Capsules', gummies: 'Gummies' };
 
 // ── Shipping (mirrors server.js — the server is the source of truth) ────────
 // Free when: half/full pallet (15+ boxes), or the order includes a capsules
@@ -162,7 +162,7 @@ function renderPalletBar() {
   // of the 3-box starter: one box, packed the way they ask.
   const singleCard = _minOrderBoxes < 2 ? `
         <div class="pallet-card starter">
-          <span class="pallet-badge">${_myRate}% OFF</span>
+          <span class="pallet-badge">${_myRate}% margin</span>
           <div class="pallet-head">
             <span class="pallet-emoji">📦</span>
             <div>
@@ -180,7 +180,7 @@ function renderPalletBar() {
       ${singleCard}
       ${kinds.map(([kind, P]) => `
         <div class="pallet-card ${kind}">
-          <span class="pallet-badge">${Math.max(_myRate, P.pct || 0)}% OFF</span>
+          <span class="pallet-badge">${Math.max(_myRate, P.pct || 0)}% margin</span>
           <div class="pallet-head">
             <span class="pallet-emoji">${P.emoji}</span>
             <div>
@@ -197,7 +197,7 @@ function renderPalletBar() {
           </div>
         </div>`).join('')}
     </div>
-    <div class="pallet-note">Your price is set by order size, off store cost: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 2 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'} Pallets ship FREE — so does any order with a capsules master box.</div>`;
+    <div class="pallet-note">Your margin is set by order size: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 2 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'} Pallets ship FREE — so does any order with a capsules master box.</div>`;
 }
 
 async function addClassicPallet(kind) {
@@ -222,7 +222,7 @@ async function addClassicPallet(kind) {
       cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
     }
     if (cart) { _cart = cart; renderCart(); }
-    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% pricing applied!` : `${P.emoji} ${P.label} added to cart`, 'success');
+    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% margin locked in!` : `${P.emoji} ${P.label} added to cart`, 'success');
   } finally {
     document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = false);
   }
@@ -344,7 +344,7 @@ function pbStep(productId, delta) {
   const btn = document.getElementById('pb-add-btn');
   btn.disabled = total !== P.boxes;
   btn.textContent = total === P.boxes
-    ? `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% off` : ''}`
+    ? `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% margin` : ''}`
     : total < P.boxes ? `${P.boxes - total} more box${P.boxes - total === 1 ? '' : 'es'} to go` : `Select ${P.boxes} boxes`;
 }
 
@@ -362,9 +362,9 @@ async function palletBuilderAdd() {
     }
     if (cart) { _cart = cart; renderCart(); }
     document.getElementById('pallet-builder-modal').classList.remove('active');
-    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% pricing applied!` : `${P.emoji} ${P.label} added to cart`, 'success');
+    showToast(P.pct ? `${P.emoji} ${P.label} added — ${P.pct}% margin locked in!` : `${P.emoji} ${P.label} added to cart`, 'success');
   } catch (e) {
-    btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% off` : ''}`;
+    btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% margin` : ''}`;
   }
 }
 
@@ -557,9 +557,9 @@ function renderCart() {
   let palletBanner = '';
   if (pal && pal.boxes > 0) {
     if (pal.pct === 30) {
-      palletBanner = `<div class="cart-pallet-banner on">🟪 Full-pallet pricing — <strong>30% off</strong> every box</div>`;
+      palletBanner = `<div class="cart-pallet-banner on">🟪 Full-pallet pricing — <strong>30% margin</strong> on every box</div>`;
     } else if (pal.pct === 25) {
-      palletBanner = `<div class="cart-pallet-banner on">🟦 Half-pallet pricing — <strong>25% off</strong> every box${pal.to_full ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
+      palletBanner = `<div class="cart-pallet-banner on">🟦 Half-pallet pricing — <strong>25% margin</strong> on every box${pal.to_full ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
     } else if (pal.to_half <= 6) {
       palletBanner = `<div class="cart-pallet-banner">📦 ${pal.to_half} more box${pal.to_half === 1 ? '' : 'es'} unlocks <strong>25% half-pallet pricing</strong></div>`;
     }
@@ -589,7 +589,7 @@ function renderCart() {
   totalRow.style.display = 'flex';
   shippingNote.textContent = cartShipsFree()
     ? '✓ This order ships FREE'
-    : 'Add a capsules master box (blister cards) for free shipping — otherwise shipping is charged by zone from Arizona';
+    : 'Add a capsules master box for free shipping — otherwise shipping is charged by zone from Arizona';
   shippingNote.style.display = 'block';
   checkoutBtn.disabled = false;
   updateMobileCartBar(total);
@@ -639,7 +639,7 @@ function showCheckout() {
   const total = Math.round((subtotal + shipping + processingFee) * 100) / 100;
 
   const rateEl = document.getElementById('co-rate');
-  if (rateEl) rateEl.textContent = `${Math.max(_myRate, (_cart.pallet && _cart.pallet.pct) || 0)}% off store cost`;
+  if (rateEl) rateEl.textContent = `${Math.max(_myRate, (_cart.pallet && _cart.pallet.pct) || 0)}% margin`;
   document.getElementById('co-subtotal').textContent = `$${subtotal.toFixed(2)}`;
   document.getElementById('co-shipping').textContent = shipping === 0 ? 'FREE' : `$${shipping.toFixed(2)}`;
   const feeRow = document.getElementById('co-fee-row');
@@ -728,7 +728,7 @@ function updateCheckoutTotals() {
   // The rate this order is getting: the rep's locked/base rate, or the pallet
   // rate when the cart qualifies — whichever is better.
   const rateEl = document.getElementById('co-rate');
-  if (rateEl) rateEl.textContent = `${Math.max(_myRate, (_cart.pallet && _cart.pallet.pct) || 0)}% off store cost`;
+  if (rateEl) rateEl.textContent = `${Math.max(_myRate, (_cart.pallet && _cart.pallet.pct) || 0)}% margin`;
   const items = _cart.items || [];
   if (!items.length) return;
   const subtotal = items.reduce((a, i) => a + i.price_at_add * i.quantity, 0);

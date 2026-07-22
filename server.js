@@ -252,6 +252,18 @@ async function migrate() {
     }
   } catch(e) { console.log('ℹ️  danny 35 lock migration skipped:', e.message); }
 
+  // One-time: the capsules product is NAMED "capsules" (not "blister"), so the
+  // original name backfill missed it — without a box_type it wouldn't count
+  // toward pallets, minimums, or free shipping. Tag it now.
+  try {
+    const done = await one("SELECT 1 FROM app_migrations WHERE key='backfill_box_types_v2'");
+    if (!done) {
+      const r = await q("UPDATE products SET box_type='blister_card' WHERE box_type IS NULL AND (name ILIKE '%capsule%' OR sku ILIKE '%capsule%')");
+      await q("INSERT INTO app_migrations (key) VALUES ('backfill_box_types_v2')");
+      console.log(`✅ Capsules box tagged (${r.rowCount||0} product(s))`);
+    }
+  } catch(e) { console.log('ℹ️  capsules backfill skipped:', e.message); }
+
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
     await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
@@ -2094,7 +2106,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
       // shop's starter builder mirrors the pallet builder). Its SIZE also
       // locks the rep's rate: 3-14 boxes → 20%, 15+ → 25%, 27+ → 30%.
       if (totalBoxes < 3) {
-        return res.status(400).json({ error: 'Your first order must be at least 3 master boxes — any mix of shots, blister cards, and gummies.' });
+        return res.status(400).json({ error: 'Your first order must be at least 3 master boxes — any mix of shots, capsules, and gummies.' });
       }
     } else if (isRep) {
       // Ongoing minimum by locked tier: 30%+ reps order 3-box minimums,
@@ -2104,7 +2116,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
       if (totalBoxes < minBoxes) {
         return res.status(400).json({ error: minBoxes > 1
           ? `Your minimum order is ${minBoxes} master boxes (any mix).`
-          : 'Your order must include at least one master box (shots, blister card, or gummies).' });
+          : 'Your order must include at least one master box (shots, capsules, or gummies).' });
       }
     }
 
