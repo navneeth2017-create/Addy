@@ -2583,11 +2583,36 @@ async function loadMyOrders(tbodyId) {
         <span class="status-badge ${invBadgeClass}" style="font-size:11px;">${displayStatus}</span>
       </td>
       <td><span class="status-badge ${statusColors[o.status]||'pending'}">${o.status}</span></td>
-      <td onclick="event.stopPropagation()">
-        ${inv ? `<button class="btn btn-sm btn-outline" style="font-size:11px;" onclick="openInvoice(${o.id})">📄 Invoice</button>` : '—'}
+      <td onclick="event.stopPropagation()" style="white-space:nowrap;">
+        <button class="btn btn-sm btn-outline" style="font-size:11px;" onclick="reorderMyOrder(${o.id}, this)" title="Add the same items to your cart again">🔁 Reorder</button>
+        ${inv ? `<button class="btn btn-sm btn-outline" style="font-size:11px;" onclick="openInvoice(${o.id})">📄 Invoice</button>` : ''}
       </td>
     </tr>`;
   }).join('');
+}
+
+// One-tap reorder: refill the cart with a past order's items, then jump to the
+// shop. Prices are whatever the rep qualifies for TODAY (set server-side at
+// add time — pallet pricing included if the quantities still add up to one).
+async function reorderMyOrder(orderId, btn) {
+  const o = (window._myOrders || []).find(x => x.id === orderId);
+  if (!o || !o.items) return;
+  const usable = o.items.filter(i => i.product_id);
+  if (!usable.length) { showToast('Those products are no longer available', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  let added = 0, failed = 0;
+  for (const item of usable) {
+    const cart = await apiFetch('/api/cart/add', {
+      method: 'POST',
+      body: JSON.stringify({ product_id: item.product_id, quantity: item.quantity }),
+    });
+    if (cart) added++; else failed++;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '🔁 Reorder'; }
+  if (!added) { showToast('Could not add those items — they may be out of stock', 'error'); return; }
+  const skipped = (o.items.length - usable.length) + failed;
+  showToast(`✓ ${added} item${added === 1 ? '' : 's'} added to your cart${skipped ? ` (${skipped} unavailable)` : ''}`, 'success');
+  setTimeout(() => { window.location.href = '/shop.html'; }, 700);
 }
 
 function showMyOrderDetail(orderId) {
