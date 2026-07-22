@@ -201,6 +201,22 @@ async function migrate() {
     }
   } catch(e) { console.log('ℹ️  discount pin migration skipped:', e.message); }
 
+  // One-time: tag existing master-box products by name/SKU so pallet pricing
+  // and the discount ladder count them. Only fills products whose box_type is
+  // still NULL — anything set by the admin (or this backfill) is never touched.
+  try {
+    const bt = await one("SELECT 1 FROM app_migrations WHERE key='backfill_box_types_v1'");
+    if (!bt) {
+      const r1 = await q("UPDATE products SET box_type='shots' WHERE box_type IS NULL AND (name ILIKE '%shot%' OR sku ILIKE '%shot%')");
+      const r2 = await q("UPDATE products SET box_type='blister_card' WHERE box_type IS NULL AND (name ILIKE '%blister%' OR sku ILIKE '%blister%')");
+      const r3 = await q("UPDATE products SET box_type='gummies' WHERE box_type IS NULL AND (name ILIKE '%gumm%' OR sku ILIKE '%gumm%')");
+      await q("INSERT INTO app_migrations (key) VALUES ('backfill_box_types_v1')");
+      console.log(`✅ Backfilled box types — shots: ${r1.rowCount||0}, blister_card: ${r2.rowCount||0}, gummies: ${r3.rowCount||0}`);
+      const untagged = await one("SELECT COUNT(*)::int AS c FROM products WHERE box_type IS NULL AND active=1");
+      if ((untagged?.c || 0) > 0) console.log(`⚠️  ${untagged.c} active product(s) still have no box type — set them in Admin → Products → Edit if they're master boxes.`);
+    }
+  } catch(e) { console.log('ℹ️  box type backfill skipped:', e.message); }
+
   // ── Add processing_fee column to orders ──────────────────────────────────────
   try {
     await q('ALTER TABLE orders ADD COLUMN IF NOT EXISTS processing_fee NUMERIC(10,2) NOT NULL DEFAULT 0');
