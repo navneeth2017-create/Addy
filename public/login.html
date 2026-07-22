@@ -132,18 +132,23 @@
   <script>
     let _forgotEmail = '';
 
-    // Auto-open signup if coming from landing page Sign Up button
-    if (sessionStorage.getItem('open_signup')) {
-      sessionStorage.removeItem('open_signup');
-      document.addEventListener('DOMContentLoaded', () => showSignup());
+    // Run a callback whether or not DOMContentLoaded has already fired (inline
+    // scripts at end of body often run after it, which silently no-op'd before).
+    function onReady(fn) {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
+      else fn();
     }
-    // Referral link: /login.html?ref=<inviter-email> opens signup with the code prefilled
-    const _refCode = new URLSearchParams(location.search).get('ref');
-    if (_refCode) {
-      document.addEventListener('DOMContentLoaded', () => {
+    const _openSignup = !!sessionStorage.getItem('open_signup');
+    if (_openSignup) sessionStorage.removeItem('open_signup');
+    // Referral: from the URL (?ref=) or carried over from the landing page.
+    const _refCode = new URLSearchParams(location.search).get('ref') || sessionStorage.getItem('addy_ref');
+    if (_openSignup || _refCode) {
+      onReady(() => {
         showSignup();
-        const el = document.querySelector('input[name="referral_code"]');
-        if (el) el.value = _refCode;
+        if (_refCode) {
+          const el = document.querySelector('input[name="referral_code"]');
+          if (el) el.value = _refCode;
+        }
       });
     }
 

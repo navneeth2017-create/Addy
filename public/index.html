@@ -283,6 +283,7 @@
   </nav>
 
   <section class="hero">
+    <div id="invite-banner" style="display:none;margin:0 auto 22px;max-width:640px;background:linear-gradient(90deg,#2563eb,#3b82f6);color:#fff;border-radius:12px;padding:12px 20px;font-weight:600;font-size:15px;box-shadow:0 8px 24px rgba(37,99,235,.35);"></div>
     <div class="hero-eyebrow">ADDY™ DSD Partner Program</div>
     <h1 class="hero-title">Earn big margins.<br><span class="blue">Build your network.</span></h1>
     <p class="hero-sub">Join the ADDY DSD program and distribute the clinically tested focus supplement your customers are asking for. Buy bulk, sell direct, and earn a flat 5% on everyone you personally refer — all tracked in your partner portal.</p>
@@ -450,7 +451,24 @@
     }, { threshold: 0.12 });
     document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 
-    // Sign up buttons — pass a flag so login.html opens the signup form
+    // Referral: /?ref=<inviter-email> — remember it through the whole visit so
+    // signup auto-fills the invite code (rep gets credit), and greet the guest.
+    const _ref = new URLSearchParams(location.search).get('ref');
+    if (_ref) {
+      sessionStorage.setItem('addy_ref', _ref);
+      fetch('/api/referrer?email=' + encodeURIComponent(_ref))
+        .then(r => r.json())
+        .then(d => {
+          const b = document.getElementById('invite-banner');
+          if (!b) return;
+          b.textContent = d && d.name
+            ? `🎉 ${d.name} invited you to the ADDY DSD partner program — sign up below to get started.`
+            : `🎉 You've been invited to the ADDY DSD partner program — sign up below to get started.`;
+          b.style.display = 'block';
+        }).catch(() => {});
+    }
+
+    // Sign up buttons — flag opens the signup form; the stored ref rides along.
     ['signup-btn','hero-signup-btn','cta-signup-btn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('click', e => {
