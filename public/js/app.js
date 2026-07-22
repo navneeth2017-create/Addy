@@ -1102,7 +1102,13 @@ async function loadMyCommissions() {
 async function loadMyReps() {
   const el = document.getElementById('my-reps');
   if (!el) return;
-  const data = await apiFetch('/api/my-reps');
+  // Quiet fetch: this card is a bonus — it must never throw a red error
+  // toast over the Commissions tab if the endpoint hiccups.
+  let data = null;
+  try {
+    const res = await fetch('/api/my-reps', { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (res.ok) data = await res.json();
+  } catch (e) { /* silent */ }
   if (!data || !data.reps) { el.innerHTML = ''; return; }
   if (!data.reps.length && !data.flat_rate_others) {
     el.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13px;color:var(--text-muted);">No reps yet — share your invite link (🔗 Invite, top right) and earn <strong>5%</strong> on everything they order.</div>`;

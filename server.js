@@ -239,6 +239,8 @@ async function migrate() {
   // seeing 30% in the shop. Re-matches house_partner by name if unset, then
   // forces the 35% lock on the house partner.
   try {
+    await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS house_partner BOOLEAN NOT NULL DEFAULT FALSE');
+    await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS house_5pct BOOLEAN NOT NULL DEFAULT FALSE');
     const done = await one("SELECT 1 FROM app_migrations WHERE key='danny_35_lock_v1'");
     if (!done) {
       const anyHouse = await one('SELECT id FROM users WHERE house_partner=TRUE LIMIT 1');
@@ -2126,7 +2128,9 @@ app.post('/api/orders', authenticate, async (req, res) => {
     // capsules master box, a rep's first order, or all items flagged free.
     // Everything else ships from Arizona at the destination's zone rate.
     const hasCapsuleBox = boxItems.some(i => i.box_type === CAPSULE_BOX_TYPE);
-    const shipping_cost = (allFreeShipping || totalBoxes >= PALLET_HALF_BOXES || hasCapsuleBox || (isRep && isFirstOrder))
+    // 6+ boxes also ships free — an unadvertised perk, deliberately absent
+    // from all site copy.
+    const shipping_cost = (allFreeShipping || totalBoxes >= 6 || hasCapsuleBox || (isRep && isFirstOrder))
       ? 0 : shippingForState(shipping_state);
     // Stripe fee passthrough: customer pays fee so we receive full amount
     // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
@@ -2983,7 +2987,12 @@ app.get('/api/my-reps', authenticate, async (req, res) => {
       reps: reps.map(r => ({ ...r, your_rate: 5 })),
       flat_rate_others: me.house_partner ? 2 : null,
     });
-  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+  } catch(e) {
+    // Never break the Commissions tab over this list — log for diagnosis and
+    // return an empty roster instead of a 500.
+    console.error('my-reps error:', e.message);
+    res.json({ reps: [], flat_rate_others: null });
+  }
 });
 
 // Request a payout
