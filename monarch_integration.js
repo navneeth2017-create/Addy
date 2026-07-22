@@ -103,6 +103,8 @@ async function ensureTable() {
   await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS custom_plan JSONB`);
   await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS custom_status TEXT`);
   await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS custom_plan_prev JSONB`);
+  // House/comped plans (e.g. Danny): granted by an admin, no Stripe involved.
+  await pool.query(`ALTER TABLE monarch_workspaces ADD COLUMN IF NOT EXISTS comped BOOLEAN NOT NULL DEFAULT false`);
 }
 
 /**
@@ -187,7 +189,7 @@ function installMonarchIntegration(app) {
     try {
       if (!configured()) return res.json({ configured: false });
       const ws = (await pool.query(
-        `SELECT slug, tier, status, temp_password, monarch_email, custom_plan, custom_status, custom_plan_prev
+        `SELECT slug, tier, status, temp_password, monarch_email, custom_plan, custom_status, custom_plan_prev, comped
          FROM monarch_workspaces WHERE user_id=$1`,
         [req.user.id]
       )).rows[0] || null;
@@ -524,6 +526,31 @@ function installMonarchIntegration(app) {
       for (const r of rows) { const out = await syncWorkspaceToMonarch(r); out.ok ? synced++ : failed++; }
       res.json({ attempted: rows.length, synced, failed, mode: all ? 'all' : 'pending' });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  /**
+   * POST /api/admin/monarch/grant { user_id, tier } — comp a Sales Suite plan
+   * (house partners like Danny get the full Pro suite without a Stripe
+   * subscription). Provisions or re-tiers the Monarch tenant through the same
+   * path a paid checkout uses, then marks the workspace comped so the DSD's
+   * card shows no purchase/upgrade prompts.
+   */
+  app.post('/api/admin/monarch/grant', authenticate, authorize('admin'), jsonParser, async (req, res) => {
+    try {
+      if (!configured()) return res.status(503).json({ error: 'Monarch integration not configured' });
+      const userId = parseInt(req.body?.user_id);
+      const tier = ['free', 'plus', 'pro'].includes(req.body?.tier) ? req.body.tier : 'pro';
+      if (!userId) return res.status(400).json({ error: 'user_id required' });
+      const user = (await pool.query(
+        `SELECT id, name, email FROM users WHERE id=$1 AND role='dsd'`, [userId]
+      )).rows[0];
+      if (!user) return res.status(404).json({ error: 'DSD user not found' });
+      const out = await provisionWorkspace(user, tier);
+      await pool.query(
+        `UPDATE monarch_workspaces SET comped=true, updated_at=NOW() WHERE user_id=$1`, [user.id]
+      );
+      res.json({ success: true, slug: out.slug, tier: out.tier || tier, comped: true });
+    } catch (e) { res.status(502).json({ error: e.message }); }
   });
 
   /** GET /api/admin/monarch/diagnose — raw connectivity probe for the admin.

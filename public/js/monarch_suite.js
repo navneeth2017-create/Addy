@@ -46,45 +46,47 @@ async function loadMonarchSuite() {
         <div id="monarch-builder-slot" style="display:none;"></div>`;
       return;
     }
-    // PLUS: $50/mo flat — inventory tracking on top of Free. Real Monarch login.
+    // Comped (house) plans never show a price or any purchase/upgrade prompt.
+    const compedChip = `<span style="font-size:11.5px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:20px;padding:2px 10px;font-weight:700;">Included with your partnership ✓</span>`;
+    // PLUS: $50/mo flat — inventory tracking on top of Free.
     if (ws.tier === 'plus') {
       card.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
           <div>
             ${SUITE_HEADER}
             <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
-              Your plan: <strong>Plus</strong> <span style="font-size:11.5px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:20px;padding:2px 10px;font-weight:700;">$50/mo</span>
-              ${ws.status !== 'active' ? ' · <span style="color:#dc2626;font-weight:700;">paused — update your payment method</span>' : ''}
+              Your plan: <strong>Plus</strong> ${ws.comped ? compedChip : '<span style="font-size:11.5px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:20px;padding:2px 10px;font-weight:700;">$50/mo</span>'}
+              ${!ws.comped && ws.status !== 'active' ? ' · <span style="color:#dc2626;font-weight:700;">paused — update your payment method</span>' : ''}
               · Inventory tracking &amp; management unlocked · Company code: <code>${esc(ws.slug)}</code>
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <a class="btn btn-sm btn-green" href="/suite.html" style="text-decoration:none;">Open Sales Suite →</a>
-            <button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="toggleMonarchBuilder()">⬆ Upgrade to Pro (AI)</button>
+            ${ws.comped ? '' : `<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="toggleMonarchBuilder()">⬆ Upgrade to Pro (AI)</button>`}
           </div>
         </div>
         <div id="monarch-builder-slot" style="display:none;"></div>`;
       return;
     }
-    // PAID (Pro): real Monarch workspace — show login + open the Suite, and let
-    // them adjust their build-your-own plan (a new Stripe checkout).
+    // PRO: the full Suite. Paid users can adjust their build-your-own plan
+    // (a new Stripe checkout); comped users just get the Suite, no billing UI.
     const livePlan = ws.custom_status === 'active' ? ws.custom_plan : null;
-    const customChip = livePlan ? `
-      <span style="font-size:11.5px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:20px;padding:2px 10px;font-weight:700;">$${Number(livePlan.monthly_usd).toFixed(2)}/mo</span>` : '';
+    const customChip = ws.comped ? ` ${compedChip}` : (livePlan ? `
+      <span style="font-size:11.5px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:20px;padding:2px 10px;font-weight:700;">$${Number(livePlan.monthly_usd).toFixed(2)}/mo</span>` : '');
     card.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
         <div>
           ${SUITE_HEADER}
           <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
             Your plan: <strong>Pro</strong> ${customChip}
-            ${ws.status !== 'active' ? ' · <span style="color:#dc2626;font-weight:700;">paused — update your payment method</span>' : ''}
+            ${!ws.comped && ws.status !== 'active' ? ' · <span style="color:#dc2626;font-weight:700;">paused — update your payment method</span>' : ''}
             · Company code: <code>${esc(ws.slug)}</code>
-            ${livePlan ? `<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">Includes monthly: ${esc(monarchUnitsSummary(livePlan.units))}</div>` : ''}
+            ${!ws.comped && livePlan ? `<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">Includes monthly: ${esc(monarchUnitsSummary(livePlan.units))}</div>` : ''}
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <a class="btn btn-sm btn-green" href="/suite.html" style="text-decoration:none;">Open Sales Suite →</a>
-          <button class="btn btn-sm btn-outline" onclick="toggleMonarchBuilder()">⚙ Adjust my plan</button>
+          ${ws.comped ? '' : `<button class="btn btn-sm btn-outline" onclick="toggleMonarchBuilder()">⚙ Adjust my plan</button>`}
         </div>
       </div>
       <div id="monarch-builder-slot" style="display:none;"></div>`;
