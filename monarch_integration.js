@@ -149,15 +149,38 @@ async function provisionWorkspace(user, tier, stripeSubId = null, customPlan = n
 
   const existing = (await pool.query(`SELECT * FROM monarch_workspaces WHERE user_id=$1`, [user.id])).rows[0];
   if (existing) {
-    await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
+    let login = null;
+    try {
+      await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
+    } catch (e) {
+      // Local row but no tenant on Monarch — happens when the background
+      // provisioning after "Start free" never landed (Monarch down, key
+      // missing, old build). Self-heal: create the tenant now, on the same
+      // slug and at the requested tier, instead of failing the upgrade.
+      if (!/not found/i.test(e.message)) throw e;
+      const created = await monarchApi('/tenants', 'POST', {
+        company_name: user.name ? `${user.name} Distribution` : `Addy Partner ${user.id}`,
+        slug: existing.slug,
+        admin_email: existing.monarch_email || user.email,
+        admin_name: user.name || user.email,
+        plan_tier: effectiveTier,
+      });
+      login = created.login || null;
+      if (customPlan) await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
+    }
     await pool.query(
       `UPDATE monarch_workspaces SET tier=$1, status='active',
          stripe_subscription_id=COALESCE($2, stripe_subscription_id),
-         custom_plan=$3, custom_status=$4, custom_plan_prev=NULL, updated_at=NOW() WHERE user_id=$5`,
+         custom_plan=$3, custom_status=$4, custom_plan_prev=NULL,
+         monarch_provisioned=true,
+         temp_password=COALESCE($6, temp_password),
+         monarch_email=COALESCE($7, monarch_email),
+         updated_at=NOW() WHERE user_id=$5`,
       [effectiveTier, stripeSubId, customPlan ? JSON.stringify(customPlan) : null,
-       customPlan ? 'active' : null, user.id]
+       customPlan ? 'active' : null, user.id,
+       login?.temp_password ?? null, login?.email ?? null]
     );
-    return { slug: existing.slug, tier: effectiveTier, upgraded: true };
+    return { slug: existing.slug, tier: effectiveTier, upgraded: true, healed: !!login };
   }
   const slug = slugify(user.name || user.email.split('@')[0], user.id);
   const created = await monarchApi('/tenants', 'POST', {
