@@ -12,13 +12,32 @@ async function loadMonarchSuite() {
   const anchor = document.getElementById('margin-progress');
   if (!anchor || document.getElementById('monarch-suite-card')) return;
 
+  // A little "powered by Monarch" credit under the ADDY logo — only once the
+  // integration is confirmed configured (below), so unbranded installs of
+  // this dashboard never mention Monarch.
+  function brandCredit() {
+    const logo = document.getElementById('logo-container');
+    if (!logo || document.getElementById('monarch-brand-credit')) return;
+    // .logo-mark is a flex ROW — stack the credit UNDER the logo by putting
+    // it inside the brand link and turning just that link into a column.
+    const link = logo.querySelector('a') || logo;
+    if (link.style) { link.style.flexDirection = 'column'; link.style.alignItems = 'flex-start'; link.style.gap = '2px'; }
+    const credit = document.createElement('div');
+    credit.id = 'monarch-brand-credit';
+    credit.style.cssText = 'font-size:10.5px;color:var(--text-muted);letter-spacing:0.2px;padding-left:2px;';
+    credit.innerHTML = 'powered by <strong style="color:#E8873B;">Monarch</strong>';
+    link.appendChild(credit);
+  }
+
   const status = await apiFetch('/api/monarch/status');
   if (!status || !status.configured) return; // not set up — show nothing
+  brandCredit();
 
   const card = document.createElement('div');
   card.id = 'monarch-suite-card';
   card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:20px;';
-  anchor.after(card);
+  // The Suite sits right under the stat tiles, above the margin-lock bar.
+  anchor.before(card);
 
   const ws = status.workspace;
   const tierNames = { free: 'Free', starter: 'Starter', pro: 'Pro' };
