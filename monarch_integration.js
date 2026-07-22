@@ -206,6 +206,32 @@ function installMonarchIntegration(app) {
   });
 
   /**
+   * Embedded-Suite sign-on. Asks Monarch (partner-key auth, server-to-server)
+   * for a short-lived session token for THIS user's workspace, and returns the
+   * dashboard URL Addy's /suite.html iframe should load — token in the #hash,
+   * so it never appears in server logs. The user never sees a Monarch login.
+   */
+  app.get('/api/monarch/sso', authenticate, authorize('dsd', 'admin'), async (req, res) => {
+    try {
+      if (!configured()) return res.status(503).json({ error: 'Sales Suite is not configured yet' });
+      const ws = (await pool.query(
+        `SELECT slug, tier, status, monarch_email, monarch_provisioned
+         FROM monarch_workspaces WHERE user_id=$1`,
+        [req.user.id]
+      )).rows[0];
+      if (!ws) return res.status(404).json({ error: 'No Sales Suite workspace yet' });
+      if (!ws.monarch_provisioned) {
+        return res.status(409).json({ error: 'Your workspace is still being set up — try again in a minute' });
+      }
+      if (ws.status !== 'active') return res.status(403).json({ error: 'Your Sales Suite plan is paused' });
+      const sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST',
+        ws.monarch_email ? { email: ws.monarch_email } : {});
+      const frag = new URLSearchParams({ sso: sso.token, role: sso.role || 'admin', embed: 'addy' });
+      res.json({ url: `${MONARCH_APP}/dashboard.html#${frag.toString()}` });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
+  /**
    * Free tier — INSTANT and fully local to Addy. The free features (claim
    * stores, customer list, order history) already live in Addy; free users
    * just get the Monarch-branded experience here. We do NOT call Monarch on

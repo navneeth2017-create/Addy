@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <title>Sales Suite — ADDY</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any">
+  <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    html, body { height: 100%; }
+    body { margin: 0; display: flex; flex-direction: column; background: var(--bg); }
+    .suite-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border);
+      padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    }
+    .suite-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .suite-brand img { height: 34px; width: auto; object-fit: contain; }
+    .suite-title { font-weight: 800; font-size: 15px; color: var(--text); white-space: nowrap; }
+    .suite-powered { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+    .suite-back {
+      display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg-card); color: var(--text);
+      font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap;
+    }
+    .suite-back:hover { border-color: var(--accent); color: var(--accent); }
+    .suite-frame-wrap { flex: 1; min-height: 0; position: relative; }
+    #suite-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .suite-msg {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 10px; color: var(--text-secondary); font-size: 14px;
+      text-align: center; padding: 20px;
+    }
+    .suite-spinner {
+      width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--border);
+      border-top-color: var(--accent); animation: suite-spin 0.8s linear infinite;
+    }
+    @keyframes suite-spin { to { transform: rotate(360deg); } }
+    @media (max-width: 560px) { .suite-powered { display: none; } .suite-brand img { height: 28px; } }
+  </style>
+</head>
+<body>
+  <div class="suite-bar">
+    <div class="suite-brand">
+      <img src="/images/addy-logo.svg" alt="ADDY">
+      <div>
+        <div class="suite-title">Sales Suite</div>
+        <div class="suite-powered">powered by <strong style="color:#E8873B;">Monarch</strong></div>
+      </div>
+    </div>
+    <a class="suite-back" href="javascript:history.length > 1 ? history.back() : location.assign('/login.html')">← Back to my dashboard</a>
+  </div>
+
+  <div class="suite-frame-wrap">
+    <div class="suite-msg" id="suite-msg"><div class="suite-spinner"></div><div>Opening your Sales Suite…</div></div>
+    <iframe id="suite-frame" title="Sales Suite" allow="clipboard-write"></iframe>
+  </div>
+
+  <script>
+    (function () {
+      const saved = localStorage.getItem('addy_theme') || 'light';
+      document.documentElement.setAttribute('data-theme', saved);
+
+      const token = sessionStorage.getItem('addy_preview_token') || localStorage.getItem('addy_token');
+      const msg = document.getElementById('suite-msg');
+      if (!token) { window.location.replace('/login.html'); return; }
+
+      fetch('/api/monarch/sso', { headers: { Authorization: 'Bearer ' + token } })
+        .then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          if (r.status === 401) { window.location.replace('/login.html'); return; }
+          if (!r.ok || !data.url) throw new Error(data.error || 'Could not open the Sales Suite');
+          const frame = document.getElementById('suite-frame');
+          frame.addEventListener('load', () => { msg.style.display = 'none'; }, { once: true });
+          frame.src = data.url;
+        })
+        .catch((e) => {
+          msg.innerHTML = '<div style="font-size:34px;">😕</div>'
+            + '<div style="font-weight:700;color:var(--text);">Couldn\'t open the Sales Suite</div>'
+            + '<div>' + String(e.message).replace(/[<>]/g, '') + '</div>'
+            + '<a class="suite-back" href="javascript:location.reload()">Try again</a>';
+        });
+    })();
+  </script>
+  <script src="/js/pwa.js" defer></script>
+</body>
+</html>
