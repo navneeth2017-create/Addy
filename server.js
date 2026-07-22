@@ -660,6 +660,20 @@ app.post('/api/login', rateLimit(10, 60 * 1000), async (req, res) => {
   } catch(e) { console.error('Login error:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
+// Public — resolve an invite code (recruiter email) to their first name so
+// the landing page can greet an invited prospect. Only active DSDs; returns
+// nothing identifying beyond a first name.
+app.get('/api/referrer', async (req, res) => {
+  try {
+    const email = String(req.query.email || '').trim().toLowerCase();
+    if (!email) return res.json({});
+    const r = await one("SELECT name FROM users WHERE LOWER(email)=LOWER($1) AND role='dsd' AND status='active'", [email]);
+    if (!r) return res.json({});
+    const first = (r.name || '').trim().split(/\s+/)[0] || '';
+    res.json({ name: first });
+  } catch(e) { console.error('referrer lookup:', e.message); res.json({}); }
+});
+
 app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
   try {
     const { email, password, name, phone, referral_code } = req.body;

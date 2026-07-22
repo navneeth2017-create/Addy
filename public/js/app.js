@@ -310,7 +310,7 @@ function renderMarginProgress(profile) {
 function copyReferralLink() {
   const email = window._myEmail;
   if (!email) { showToast('Still loading — try again in a moment', 'info'); return; }
-  const link = `${location.origin}/login.html?ref=${encodeURIComponent(email)}`;
+  const link = `${location.origin}/?ref=${encodeURIComponent(email)}`;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(link).then(
       () => showToast('Invite link copied! Share it — you earn 5% on their orders.', 'success'),
