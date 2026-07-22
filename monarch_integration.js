@@ -153,20 +153,31 @@ async function provisionWorkspace(user, tier, stripeSubId = null, customPlan = n
     try {
       await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
     } catch (e) {
-      // Local row but no tenant on Monarch — happens when the background
-      // provisioning after "Start free" never landed (Monarch down, key
-      // missing, old build). Self-heal: create the tenant now, on the same
-      // slug and at the requested tier, instead of failing the upgrade.
+      // Local row but the PATCH found no partner-manageable tenant. Two ways
+      // that happens, and Monarch's PATCH reports both as "not found" (it
+      // filters enterprise tenants out of partner management):
+      //   1. The tenant truly doesn't exist — background provisioning after
+      //      "Start free" never landed (Monarch down, key missing, old
+      //      build). Self-heal: create it now, same slug, requested tier.
+      //   2. The tenant EXISTS but is an enterprise workspace set up directly
+      //      on Monarch (Danny's case) — the create then 409s "already
+      //      exists". Link to it as-is: enterprise already outranks any tier
+      //      we could set, and it's the workspace holding the user's API
+      //      keys. Never fail the grant over it.
       if (!/not found/i.test(e.message)) throw e;
-      const created = await monarchApi('/tenants', 'POST', {
-        company_name: user.name ? `${user.name} Distribution` : `Addy Partner ${user.id}`,
-        slug: existing.slug,
-        admin_email: existing.monarch_email || user.email,
-        admin_name: user.name || user.email,
-        plan_tier: effectiveTier,
-      });
-      login = created.login || null;
-      if (customPlan) await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
+      try {
+        const created = await monarchApi('/tenants', 'POST', {
+          company_name: user.name ? `${user.name} Distribution` : `Addy Partner ${user.id}`,
+          slug: existing.slug,
+          admin_email: existing.monarch_email || user.email,
+          admin_name: user.name || user.email,
+          plan_tier: effectiveTier,
+        });
+        login = created.login || null;
+        if (customPlan) await monarchApi(`/tenants/${existing.slug}`, 'PATCH', patch);
+      } catch (e2) {
+        if (!/already exists/i.test(e2.message)) throw e2;
+      }
     }
     await pool.query(
       `UPDATE monarch_workspaces SET tier=$1, status='active',
@@ -249,8 +260,17 @@ function installMonarchIntegration(app) {
         return res.status(409).json({ error: 'Your workspace is still being set up — try again in a minute' });
       }
       if (ws.status !== 'active') return res.status(403).json({ error: 'Your Sales Suite plan is paused' });
-      const sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST',
-        ws.monarch_email ? { email: ws.monarch_email } : {});
+      // Prefer their known Monarch login; if that email doesn't exist on the
+      // workspace (e.g. a linked enterprise tenant set up with a different
+      // address), fall back to the workspace's admin.
+      let sso;
+      try {
+        sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST',
+          ws.monarch_email ? { email: ws.monarch_email } : {});
+      } catch (e) {
+        if (!ws.monarch_email || !/no active user/i.test(e.message)) throw e;
+        sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', {});
+      }
       const frag = new URLSearchParams({ sso: sso.token, role: sso.role || 'admin', embed: 'addy' });
       res.json({ url: `${MONARCH_APP}/dashboard.html#${frag.toString()}` });
     } catch (e) { res.status(502).json({ error: e.message }); }
