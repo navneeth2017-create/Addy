@@ -59,8 +59,7 @@ async function loadMonarchSuite() {
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            ${ws.temp_password !== null && ws.temp_password !== undefined ? `<button class="btn btn-sm btn-outline" onclick="revealMonarchCreds()">🔑 Show my login</button>` : ''}
-            <a class="btn btn-sm btn-green" href="${esc(status.app_url)}" target="_blank" rel="noopener" style="text-decoration:none;">Open Sales Suite →</a>
+            <a class="btn btn-sm btn-green" href="/suite.html" style="text-decoration:none;">Open Sales Suite →</a>
             <button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="toggleMonarchBuilder()">⬆ Upgrade to Pro (AI)</button>
           </div>
         </div>
@@ -84,8 +83,7 @@ async function loadMonarchSuite() {
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${ws.temp_password !== null && ws.temp_password !== undefined ? `<button class="btn btn-sm btn-outline" onclick="revealMonarchCreds()">🔑 Show my login</button>` : ''}
-          <a class="btn btn-sm btn-green" href="${esc(status.app_url)}" target="_blank" rel="noopener" style="text-decoration:none;">Open Sales Suite →</a>
+          <a class="btn btn-sm btn-green" href="/suite.html" style="text-decoration:none;">Open Sales Suite →</a>
           <button class="btn btn-sm btn-outline" onclick="toggleMonarchBuilder()">⚙ Adjust my plan</button>
         </div>
       </div>
@@ -269,28 +267,6 @@ async function startMonarchFree() {
 async function upgradeMonarch(tier) {
   const r = await apiFetch('/api/monarch/checkout', { method: 'POST', body: JSON.stringify({ tier }) });
   if (r && r.url) window.location.href = r.url;
-}
-
-async function revealMonarchCreds() {
-  const r = await apiFetch('/api/monarch/credentials/reveal', { method: 'POST' });
-  if (!r || !r.temp_password) return;
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:14px;padding:24px;max-width:420px;width:92%;">
-      <div style="font-weight:800;font-size:16px;margin-bottom:8px;">🔑 Your Sales Suite login</div>
-      <p style="font-size:13px;color:#6b7280;margin:0 0 12px;">Save this now — it's shown <strong>once</strong>. You'll be asked to keep this password or change it after signing in.</p>
-      <div style="font-size:14px;line-height:2;background:#f3f4f6;border-radius:8px;padding:12px 14px;">
-        Company code: <code>${esc(r.company)}</code><br>
-        Email: <code>${esc(r.email)}</code><br>
-        Password: <code>${esc(r.temp_password)}</code>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <a class="btn btn-green" style="flex:1;text-align:center;text-decoration:none;" href="${esc(r.app_url)}" target="_blank" rel="noopener">Open &amp; sign in</a>
-        <button class="btn btn-outline" onclick="this.closest('div[style*=fixed]').remove()">Saved it</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
 }
 
 if (document.readyState !== 'loading') loadMonarchSuite();
