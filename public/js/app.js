@@ -3605,6 +3605,7 @@ async function loadProgramDocs(containerId, manage) {
         <span class="doc-title" title="${esc(d.title)}">${esc(d.title)}</span>
         ${manage
           ? `<div style="display:flex;gap:8px;align-items:center;">
+               <button class="link-btn" onclick="renameProgramDoc(${d.id})" title="Rename">✏️ Rename</button>
                <button class="link-btn" onclick="toggleDocPublic(${d.id}, ${d.is_public ? 'false' : 'true'})" title="${d.is_public ? 'Showing on the public landing page — click to hide' : 'Hidden from the public site — click to show'}" style="${d.is_public ? 'color:var(--green);' : 'color:var(--text-muted);'}">${d.is_public ? '🌐 Public' : '🔒 Hidden'}</button>
                <button class="link-danger" onclick="deleteProgramDoc(${d.id}, '${esc(d.title)}')" title="Delete">🗑</button>
              </div>`
@@ -3690,6 +3691,18 @@ async function deleteProgramDoc(id, title) {
 async function toggleDocPublic(id, makePublic) {
   const r = await apiFetch(`/api/program-documents/${id}`, { method: 'PATCH', body: JSON.stringify({ is_public: makePublic }) });
   if (r && r.success) { showToast(makePublic ? 'Now showing on the landing page' : 'Hidden from the public site', 'success'); loadProgramDocs('admin-docs-gallery', true); }
+}
+
+async function renameProgramDoc(id) {
+  const doc = (window._programDocs || []).find(x => x.id === id);
+  const current = doc ? doc.title : '';
+  const next = prompt('Rename this document:', current);
+  if (next === null) return;                       // cancelled
+  const title = next.trim();
+  if (!title) { showToast('Give the document a title', 'error'); return; }
+  if (title === current) return;                   // no change
+  const r = await apiFetch(`/api/program-documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+  if (r && r.success) { showToast('Renamed ✓', 'success'); loadProgramDocs('admin-docs-gallery', true); }
 }
 
 // "New" badge on the Program Docs tab: count docs added since the rep last
