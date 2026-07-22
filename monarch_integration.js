@@ -68,6 +68,96 @@ async function monarchApi(path, method = 'GET', body = null, timeoutMs = 12000) 
   return data;
 }
 
+/**
+ * Call Monarch's USER-FACING API as the tenant (staff Bearer token from the
+ * partner SSO), not the partner surface — used to mirror data into the
+ * tenant's own CRM through the same validated endpoints the dashboard uses.
+ */
+async function monarchStaffApi(path, token, body, timeoutMs = 60000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${MONARCH_API}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? `Monarch timed out after ${timeoutMs / 1000}s` : e.message);
+  } finally {
+    clearTimeout(timer);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Monarch API error ${res.status}`);
+  return data;
+}
+
+/** Addy's free-text store categories → Monarch's store_type enum. */
+function suiteStoreType(category) {
+  const c = String(category || '').toLowerCase();
+  if (/gas|fuel|petro/.test(c)) return 'gas_station';
+  if (/smoke|vape|tobacc/.test(c)) return 'smoke_shop';
+  if (/conven|c.store|corner|market|deli|grocer/.test(c)) return 'c_store';
+  return 'other';
+}
+
+/**
+ * Mirror freshly imported Addy stores into the user's Sales Suite CRM, so one
+ * import fills both systems. Background + best-effort: a slow or down Monarch
+ * never blocks or fails the Addy import.
+ *
+ * `names` are the store names the import created or claimed for this user —
+ * we mirror the CANONICAL store records from Addy's DB, not the raw CSV rows,
+ * so the Suite gets the fullest data even when a re-imported CSV row was
+ * sparse. That completeness is also what makes Monarch's duplicate detection
+ * reliable (it matches on phone/email/address, or name+city+zip): the
+ * canonical record carries those fields, so re-imports no-op instead of
+ * duplicating.
+ */
+async function mirrorStoresToSuite(userId, names) {
+  if (!configured() || !names.length) return;
+  const ws = (await pool.query(
+    `SELECT slug, status, monarch_provisioned, monarch_email FROM monarch_workspaces WHERE user_id=$1`,
+    [userId]
+  )).rows[0];
+  if (!ws || !ws.monarch_provisioned || ws.status !== 'active') return;
+
+  // Only stores actually linked to this user — a flagged claim conflict
+  // (store owned by another rep) never reaches their Suite.
+  const stores = (await pool.query(
+    `SELECT name, owner_name, email, address, city, state, zip, phone, category
+     FROM stores WHERE exclusive_rep_id=$1 AND LOWER(name) = ANY($2)
+     LIMIT 500`,
+    [userId, names.map(n => n.toLowerCase())]
+  )).rows;
+
+  const mapped = stores.map(r => {
+    const out = { name: r.name.trim(), relationship_status: 'current', store_type: suiteStoreType(r.category) };
+    if ((r.address || '').trim()) out.address_line1 = r.address.trim();
+    if ((r.city || '').trim()) out.city = r.city.trim();
+    if ((r.state || '').trim()) out.state = r.state.trim();
+    if ((r.zip || '').trim()) out.zip = r.zip.trim();
+    if ((r.phone || '').trim()) out.phone = r.phone.trim();
+    if ((r.owner_name || '').trim()) out.contact_name = r.owner_name.trim();
+    if ((r.email || '').trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r.email.trim())) out.email = r.email.trim();
+    return out;
+  });
+  if (!mapped.length) return;
+
+  // Same sign-on path the embedded Suite uses, with the same admin fallback.
+  let sso;
+  try {
+    sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', ws.monarch_email ? { email: ws.monarch_email } : {});
+  } catch (e) {
+    if (!ws.monarch_email || !/no active user/i.test(e.message)) throw e;
+    sso = await monarchApi(`/tenants/${ws.slug}/sso`, 'POST', {});
+  }
+  const result = await monarchStaffApi('/api/imports/stores', sso.token, { rows: mapped });
+  console.log(`🦋 Suite mirror for user ${userId}: ${result.created} created, ${result.skipped} skipped, ${result.errors} errors`);
+}
+
 /** Quick connectivity probe used by the status endpoints — never throws. */
 async function monarchPing() {
   try { await monarchApi('/plans', 'GET', null, 6000); return { ok: true }; }
@@ -217,6 +307,48 @@ function installMonarchIntegration(app) {
   const jsonParser = express.json({ limit: '1mb' });
   ensureTable().then(() => console.log('🚀 Monarch integration ready (monarch_workspaces table ensured)'))
     .catch(e => console.error('monarch_workspaces ensure failed:', e.message));
+
+  /**
+   * When a DSD with an active Sales Suite imports stores on Addy, mirror the
+   * same rows into their Suite CRM automatically — one import, both systems.
+   * Installed as path middleware (this runs before server.js registers the
+   * real handler), intercepting res.json so the mirror kicks off only after
+   * the Addy import succeeded. Background: the response is never delayed.
+   */
+  app.use('/api/stores/bulk-import', (req, res, next) => {
+    const origJson = res.json.bind(res);
+    res.json = (body) => {
+      const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+      const eligible = res.statusCode === 200 && body && !body.error && rows && rows.length
+        && req.user?.role === 'dsd' && configured();
+      if (!eligible) return origJson(body);
+      // Mirror what this import actually gave the user: rows the handler
+      // reports as created or claimed (skipped = "already exists — claimed to
+      // you"). Flagged conflicts belong to another rep and are excluded; the
+      // canonical-record lookup in mirrorStoresToSuite double-checks that.
+      const names = (body.results || [])
+        .filter(r => r.status === 'created' || r.status === 'skipped')
+        .map(r => (rows[r.row - 2]?.name || '').trim())
+        .filter(Boolean);
+      if (!names.length) return origJson(body);
+      // One quick local lookup so the "also adding to your Sales Suite" banner
+      // only shows for users who actually HAVE a suite; the mirror itself
+      // still runs in the background and never delays the response further.
+      pool.query(
+        `SELECT 1 FROM monarch_workspaces WHERE user_id=$1 AND monarch_provisioned AND status='active'`,
+        [req.user.id]
+      ).then(r => {
+        if (r.rows.length) {
+          body.suite_mirror = true;
+          mirrorStoresToSuite(req.user.id, names)
+            .catch(e => console.error(`Suite mirror failed for user ${req.user.id}:`, e.message));
+        }
+        origJson(body);
+      }).catch(() => origJson(body));
+      return res;
+    };
+    next();
+  });
 
   /** Status + tier catalog for the DSD dashboard card. */
   app.get('/api/monarch/status', authenticate, authorize('dsd', 'admin'), async (req, res) => {
