@@ -251,6 +251,22 @@
       .products-header { flex-direction: column; }
       .products-header .section-sub { text-align: left !important; max-width: none !important; }
     }
+
+    /* Program document gallery + lightbox (landing) */
+    #program .docs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
+    #program .doc-card { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--white); transition: transform .18s ease, box-shadow .18s ease; }
+    #program .doc-card:hover { transform: translateY(-4px); box-shadow: 0 14px 34px rgba(15,23,42,.16); }
+    #program .doc-thumb { cursor: pointer; aspect-ratio: 3/4; overflow: hidden; background: var(--navy); display: block; }
+    #program .doc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    #program .doc-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; }
+    #program .doc-title { font-size: 14px; font-weight: 700; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-lightbox { position: fixed; inset: 0; z-index: 3000; display: none; flex-direction: column; background: rgba(8,15,30,.95); }
+    .doc-lightbox.active { display: flex; }
+    .doc-lb-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; color: #fff; font-weight: 700; padding-top: calc(16px + env(safe-area-inset-top,0px)); }
+    .doc-lb-btn { background: rgba(255,255,255,.15); color: #fff; border: none; border-radius: 8px; padding: 9px 15px; font-size: 13px; font-weight: 700; cursor: pointer; text-decoration: none; }
+    .doc-lb-btn:hover { background: rgba(255,255,255,.28); }
+    .doc-lb-img-wrap { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; padding: 0 14px 26px; text-align: center; }
+    .doc-lb-img-wrap img { max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,.55); }
   </style>
 </head>
 <body>
@@ -260,6 +276,7 @@
       <img src="/images/addy-logo.svg" alt="ADDY DSD" class="addy-logo-float" style="height:52px;width:auto;object-fit:contain;">
     </a>
     <div class="nav-actions">
+      <a href="#program" class="btn-nav-login" id="program-nav-link" style="display:none;">Program Docs</a>
       <a href="/login.html" class="btn-nav-login">Log In</a>
       <a href="/login.html" class="btn-nav-signup" id="signup-btn">Sign Up</a>
     </div>
@@ -294,6 +311,19 @@
         <p class="section-sub reveal" style="text-align:right;max-width:340px;">ADDY™ is the clinically tested focus supplement with WGCP® as its active ingredient — tested by the Cleveland Clinic and backed by real results. Fast-moving SKUs built for c-stores, smoke shops, and independent retailers.</p>
       </div>
       <div class="products-grid" id="products-grid"></div>
+    </div>
+  </section>
+
+  <section class="section" id="program" style="display:none;">
+    <div class="section-inner">
+      <div class="products-header">
+        <div>
+          <div class="section-label reveal">The Program</div>
+          <h2 class="section-title reveal">Everything about<br>the ADDY DSD program.</h2>
+        </div>
+        <p class="section-sub reveal" style="text-align:right;max-width:340px;">Pricing sheets, the exit strategy, and how the program works — tap any flyer to view it full-screen.</p>
+      </div>
+      <div class="docs-grid" id="landing-docs-grid"></div>
     </div>
   </section>
 
@@ -460,6 +490,42 @@
         console.log('Could not load products:', e.message);
       }
     }
+    // Program documents — public flyers/pricing sheets. Section stays hidden
+    // until at least one public doc exists.
+    function escHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+    let _landingDocs = [];
+    async function loadLandingDocs() {
+      try {
+        const docs = await fetch('/api/program-documents/public').then(r => r.json());
+        if (!docs || !docs.length) return;
+        _landingDocs = docs;
+        const sec = document.getElementById('program');
+        const link = document.getElementById('program-nav-link');
+        if (sec) sec.style.display = '';
+        if (link) link.style.display = '';
+        document.getElementById('landing-docs-grid').innerHTML = docs.map(d => `
+          <div class="doc-card reveal">
+            <div class="doc-thumb" onclick="openLandingDoc(${d.id})"><img src="${d.image_data}" alt="${escHtml(d.title)}" loading="lazy"></div>
+            <div class="doc-meta"><span class="doc-title">${escHtml(d.title)}</span><button class="link-btn" onclick="openLandingDoc(${d.id})" style="background:none;border:none;color:var(--blue);cursor:pointer;font-weight:600;">View</button></div>
+          </div>`).join('');
+        document.querySelectorAll('#program .reveal').forEach(el => observer.observe(el));
+      } catch(e) { console.log('Could not load program docs:', e.message); }
+    }
+    window.openLandingDoc = function(id) {
+      const d = _landingDocs.find(x => x.id === id); if (!d) return;
+      let lb = document.getElementById('doc-lightbox');
+      if (!lb) {
+        lb = document.createElement('div'); lb.id = 'doc-lightbox'; lb.className = 'doc-lightbox';
+        lb.addEventListener('click', e => { if (e.target === lb || e.target.classList.contains('doc-lb-close')) lb.classList.remove('active'); });
+        document.body.appendChild(lb);
+      }
+      lb.innerHTML = `<div class="doc-lb-bar"><span>${escHtml(d.title)}</span><div style="display:flex;gap:8px;">`
+        + `<a class="doc-lb-btn" href="${d.image_data}" download="${escHtml(d.title).replace(/[^a-z0-9]+/gi,'-')}.jpg">\u2b07 Download</a>`
+        + `<button class="doc-lb-btn doc-lb-close">\u2715 Close</button></div></div>`
+        + `<div class="doc-lb-img-wrap"><img src="${d.image_data}" alt="${escHtml(d.title)}"></div>`;
+      lb.classList.add('active');
+    };
+    loadLandingDocs();
     loadLandingProducts();
   </script>
   <script src="/js/pwa.js" defer></script>

@@ -3603,7 +3603,12 @@ async function loadProgramDocs(containerId, manage) {
       <div class="doc-thumb" onclick="openDocLightbox(${d.id})"><img src="${d.image_data}" alt="${esc(d.title)}" loading="lazy"></div>
       <div class="doc-meta">
         <span class="doc-title" title="${esc(d.title)}">${esc(d.title)}</span>
-        ${manage ? `<button class="link-danger" onclick="deleteProgramDoc(${d.id}, '${esc(d.title)}')" title="Delete">🗑</button>` : `<button class="link-btn" onclick="openDocLightbox(${d.id})">View</button>`}
+        ${manage
+          ? `<div style="display:flex;gap:8px;align-items:center;">
+               <button class="link-btn" onclick="toggleDocPublic(${d.id}, ${d.is_public ? 'false' : 'true'})" title="${d.is_public ? 'Showing on the public landing page — click to hide' : 'Hidden from the public site — click to show'}" style="${d.is_public ? 'color:var(--green);' : 'color:var(--text-muted);'}">${d.is_public ? '🌐 Public' : '🔒 Hidden'}</button>
+               <button class="link-danger" onclick="deleteProgramDoc(${d.id}, '${esc(d.title)}')" title="Delete">🗑</button>
+             </div>`
+          : `<button class="link-btn" onclick="openDocLightbox(${d.id})">View</button>`}
       </div>
     </div>`).join('')}</div>`;
   window._programDocs = docs;
@@ -3680,6 +3685,11 @@ async function deleteProgramDoc(id, title) {
   if (!confirm(`Delete "${title}"? Reps will no longer see it.`)) return;
   const r = await apiFetch(`/api/program-documents/${id}`, { method: 'DELETE' });
   if (r && r.success) { showToast('Deleted', 'success'); loadProgramDocs('admin-docs-gallery', true); }
+}
+
+async function toggleDocPublic(id, makePublic) {
+  const r = await apiFetch(`/api/program-documents/${id}`, { method: 'PATCH', body: JSON.stringify({ is_public: makePublic }) });
+  if (r && r.success) { showToast(makePublic ? 'Now showing on the landing page' : 'Hidden from the public site', 'success'); loadProgramDocs('admin-docs-gallery', true); }
 }
 
 // "New" badge on the Program Docs tab: count docs added since the rep last
