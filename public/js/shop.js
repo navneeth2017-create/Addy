@@ -137,7 +137,7 @@ function cartShipsFree() {
   if (!items.length) return false;
   if (items.every(i => _products.find(p => p.id === i.product_id)?.free_shipping)) return true;
   const boxes = items.filter(i => i.box_type).reduce((a, i) => a + i.quantity, 0);
-  if (boxes >= 15) return true;
+  if (boxes >= 6) return true; // unadvertised — don't mention this rule in copy
   return items.some(i => i.box_type === CAPSULE_BOX_TYPE);
 }
 function currentShipping() {
@@ -197,7 +197,9 @@ function renderPalletBar() {
           </div>
         </div>`).join('')}
     </div>
-    <div class="pallet-note">Your margin is set by order size: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.${_minOrderBoxes >= 2 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'} Pallets ship FREE — so does any order with a capsules master box.</div>`;
+    <div class="pallet-note">${_myRate >= 30
+      ? `Your margin is locked at ${_myRate}% on every order — any mix of products.`
+      : `Your margin is set by order size: single boxes ${_myRate}% · ${PALLETS.half.boxes}+ boxes ${Math.max(_myRate, PALLETS.half.pct)}% · ${PALLETS.full.boxes}+ boxes ${Math.max(_myRate, PALLETS.full.pct)}%. Applied automatically, any mix of products.`}${_minOrderBoxes >= 2 ? ` Minimum order: ${_minOrderBoxes} master boxes.` : ' Minimum order: 1 master box — customizable.'} Pallets ship FREE — so does any order with a capsules master box.</div>`;
 }
 
 async function addClassicPallet(kind) {
@@ -553,14 +555,16 @@ function renderCart() {
 
   // Pallet status: celebrate an active pallet discount, and nudge toward the
   // next threshold when it's close (that's the whole upsell).
+  // Pallet banners only make sense when the pallet rate BEATS the rep's own
+  // margin — a 35% Danny never sees "unlock 25%".
   const pal = _cart.pallet;
   let palletBanner = '';
   if (pal && pal.boxes > 0) {
-    if (pal.pct === 30) {
+    if (pal.pct === 30 && _myRate < 30) {
       palletBanner = `<div class="cart-pallet-banner on">🟪 Full-pallet pricing — <strong>30% margin</strong> on every box</div>`;
-    } else if (pal.pct === 25) {
-      palletBanner = `<div class="cart-pallet-banner on">🟦 Half-pallet pricing — <strong>25% margin</strong> on every box${pal.to_full ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
-    } else if (pal.to_half <= 6) {
+    } else if (pal.pct === 25 && _myRate < 25) {
+      palletBanner = `<div class="cart-pallet-banner on">🟦 Half-pallet pricing — <strong>25% margin</strong> on every box${pal.to_full && _myRate < 30 ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
+    } else if (!pal.pct && pal.to_half <= 6 && _myRate < 25) {
       palletBanner = `<div class="cart-pallet-banner">📦 ${pal.to_half} more box${pal.to_half === 1 ? '' : 'es'} unlocks <strong>25% half-pallet pricing</strong></div>`;
     }
   }
