@@ -292,6 +292,7 @@ async function migrate() {
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+    await q('ALTER TABLE program_documents ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT TRUE');
     console.log('✅ program_documents table ready');
   } catch(e) { console.log('ℹ️  program_documents table:', e.message); }
 
@@ -3075,8 +3076,15 @@ app.post('/api/admin/users/:id/house-partner', authenticate, authorize('admin'),
 // Flyers/pricing sheets. Any signed-in user can VIEW; only admins manage.
 app.get('/api/program-documents', authenticate, async (req, res) => {
   try {
-    res.json(await all('SELECT id, title, image_data, sort_order, created_at FROM program_documents ORDER BY sort_order ASC, id ASC'));
+    res.json(await all('SELECT id, title, image_data, sort_order, is_public, created_at FROM program_documents ORDER BY sort_order ASC, id ASC'));
   } catch(e) { console.error('program-documents list:', e.message); res.json([]); }
+});
+
+// Public — the marketing flyers shown on the landing page. No auth.
+app.get('/api/program-documents/public', async (req, res) => {
+  try {
+    res.json(await all('SELECT id, title, image_data FROM program_documents WHERE is_public=TRUE ORDER BY sort_order ASC, id ASC'));
+  } catch(e) { console.error('program-documents public:', e.message); res.json([]); }
 });
 
 app.get('/api/program-documents/meta', authenticate, async (req, res) => {
@@ -3108,6 +3116,7 @@ app.patch('/api/program-documents/:id', authenticate, authorize('admin'), async 
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     if (title !== undefined) await q('UPDATE program_documents SET title=$1 WHERE id=$2', [String(title).trim(), req.params.id]);
     if (sort_order !== undefined) await q('UPDATE program_documents SET sort_order=$1 WHERE id=$2', [parseInt(sort_order) || 0, req.params.id]);
+    if (req.body.is_public !== undefined) await q('UPDATE program_documents SET is_public=$1 WHERE id=$2', [!!req.body.is_public, req.params.id]);
     res.json({ success: true });
   } catch(e) { console.error('program-documents patch:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
