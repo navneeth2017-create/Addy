@@ -2135,6 +2135,7 @@ async function loadDSDDashboard() {
   renderImpersonationBanner();
   // Check for stores with pending photos and show reminder banner
   checkPhotoPendingBanner();
+  checkNewProgramDocs();
   // Load user profile to show tier and commission balance
   renderOnboardingChecklist();
   const profile = await apiFetch('/api/profile');
@@ -2779,7 +2780,7 @@ function switchMyTab(tab, btn) {
   if (tab === 'inventory') loadInventory();
   if (tab === 'stores') loadMyStores();
   if (tab === 'commissions') loadMyCommissions();
-  if (tab === 'docs') loadProgramDocs('docs-gallery', false);
+  if (tab === 'docs') { loadProgramDocs('docs-gallery', false); markProgramDocsSeen(); }
 }
 
 // ==========================================
@@ -3679,4 +3680,31 @@ async function deleteProgramDoc(id, title) {
   if (!confirm(`Delete "${title}"? Reps will no longer see it.`)) return;
   const r = await apiFetch(`/api/program-documents/${id}`, { method: 'DELETE' });
   if (r && r.success) { showToast('Deleted', 'success'); loadProgramDocs('admin-docs-gallery', true); }
+}
+
+// "New" badge on the Program Docs tab: count docs added since the rep last
+// opened the tab (tracked per-device in localStorage). The meta endpoint is
+// image-free so this is cheap to run on every dashboard load.
+async function checkNewProgramDocs() {
+  const badge = document.getElementById('docs-new-badge');
+  if (!badge) return;
+  let docs = [];
+  try { docs = await apiFetch('/api/program-documents/meta') || []; } catch (e) { return; }
+  const seen = Number(localStorage.getItem('addy_docs_seen_ts') || 0);
+  const unseen = docs.filter(d => new Date(d.created_at).getTime() > seen).length;
+  if (unseen > 0) {
+    badge.textContent = unseen > 9 ? '9+' : String(unseen);
+    badge.style.display = 'inline';
+    window._latestDocTs = Math.max(0, ...docs.map(d => new Date(d.created_at).getTime()));
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function markProgramDocsSeen() {
+  // Stamp "seen" at the newest doc's time (or now) and clear the badge.
+  const ts = window._latestDocTs || Date.now();
+  localStorage.setItem('addy_docs_seen_ts', String(ts));
+  const badge = document.getElementById('docs-new-badge');
+  if (badge) badge.style.display = 'none';
 }

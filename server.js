@@ -3079,6 +3079,12 @@ app.get('/api/program-documents', authenticate, async (req, res) => {
   } catch(e) { console.error('program-documents list:', e.message); res.json([]); }
 });
 
+app.get('/api/program-documents/meta', authenticate, async (req, res) => {
+  try {
+    res.json(await all('SELECT id, title, created_at FROM program_documents ORDER BY sort_order ASC, id ASC'));
+  } catch(e) { console.error('program-documents meta:', e.message); res.json([]); }
+});
+
 app.post('/api/program-documents', authenticate, authorize('admin'), async (req, res) => {
   try {
     const { title, image_data } = req.body;
