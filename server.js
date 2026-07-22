@@ -1821,21 +1821,74 @@ async function getOrCreateCart(userId, storeId = null) {
   return cart;
 }
 
+// ── Pallet pricing ───────────────────────────────────────────────────────────
+// A half pallet (15+ master boxes) is an automatic 25% off; a full pallet
+// (27+) an automatic 30% — for THAT order, regardless of the rep's earned
+// tier. Implemented as a FLOOR: each box item's price becomes
+// min(their normal price, retail × (1 − palletPct)) — a pinned rep with a
+// better rate (e.g. 35%) keeps it, and prices can only ever go DOWN from
+// this feature. Runs after every cart change and again at checkout, so
+// dropping below the threshold restores normal pricing automatically.
+const PALLET_FULL_BOXES = 27, PALLET_FULL_PCT = 30;
+const PALLET_HALF_BOXES = 15, PALLET_HALF_PCT = 25;
+function palletPctForBoxes(boxes) {
+  if (boxes >= PALLET_FULL_BOXES) return PALLET_FULL_PCT;
+  if (boxes >= PALLET_HALF_BOXES) return PALLET_HALF_PCT;
+  return null;
+}
+async function repriceCartForPallets(cartId, userId, role) {
+  try {
+    const items = await all(
+      `SELECT ci.id, ci.product_id, ci.quantity, ci.price_at_add, p.box_type, p.retail_price
+       FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1`,
+      [cartId]
+    );
+    const boxItems = items.filter(i => i.box_type);
+    if (!boxItems.length) return;
+    const boxes = boxItems.reduce((a, i) => a + i.quantity, 0);
+    const palletPct = palletPctForBoxes(boxes);
+    for (const item of boxItems) {
+      const base = await getPriceForUser(item.product_id, userId, role);
+      if (!base) continue;
+      const retail = parseFloat(item.retail_price || 0);
+      const palletPrice = palletPct && retail > 0
+        ? Math.round(retail * (1 - palletPct / 100) * 100) / 100
+        : Infinity;
+      const finalPrice = Math.min(base, palletPrice);
+      if (Math.abs(finalPrice - parseFloat(item.price_at_add)) >= 0.005) {
+        await q('UPDATE cart_items SET price_at_add=$1 WHERE id=$2', [finalPrice, item.id]);
+      }
+    }
+  } catch (e) { console.error('repriceCartForPallets error:', e.message); }
+}
+
 async function getCartWithItems(cartId) {
   const cart = await one('SELECT * FROM carts WHERE id=$1', [cartId]);
   if (!cart) return null;
   const items = await all(
-    'SELECT ci.*,p.name,p.image_url,p.sku,p.stock FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1',
+    'SELECT ci.*,p.name,p.image_url,p.sku,p.stock,p.box_type FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1',
     [cartId]
   );
   const total = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
-  return { ...cart, items, total };
+  // Pallet status for the UI: current box count, the active pallet discount,
+  // and how far to the next threshold (the upsell nudge).
+  const boxes = items.filter(i => i.box_type).reduce((a, i) => a + i.quantity, 0);
+  const pct = palletPctForBoxes(boxes);
+  const pallet = {
+    boxes,
+    pct,
+    label: pct === PALLET_FULL_PCT ? 'Full pallet' : pct === PALLET_HALF_PCT ? 'Half pallet' : null,
+    to_half: boxes < PALLET_HALF_BOXES ? PALLET_HALF_BOXES - boxes : 0,
+    to_full: boxes < PALLET_FULL_BOXES ? PALLET_FULL_BOXES - boxes : 0,
+  };
+  return { ...cart, items, total, pallet };
 }
 
 app.get('/api/cart', authenticate, async (req, res) => {
   try {
     const storeId = req.query.store_id ? parseInt(req.query.store_id) : null;
     const cart = await getOrCreateCart(req.user.id, storeId);
+    await repriceCartForPallets(cart.id, req.user.id, req.user.role);
     res.json(await getCartWithItems(cart.id));
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
@@ -1858,6 +1911,7 @@ app.post('/api/cart/add', authenticate, async (req, res) => {
     } else {
       await q('INSERT INTO cart_items (cart_id,product_id,quantity,price_at_add) VALUES ($1,$2,$3,$4)', [cart.id, product_id, qty, price]);
     }
+    await repriceCartForPallets(cart.id, userId, role);
     res.json(await getCartWithItems(cart.id));
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
@@ -1869,6 +1923,7 @@ app.patch('/api/cart/item/:id', authenticate, async (req, res) => {
     if (!item || item.user_id !== req.user.id) return res.status(404).json({ error: 'Item not found' });
     if (quantity <= 0) { await q('DELETE FROM cart_items WHERE id=$1', [req.params.id]); }
     else { await q('UPDATE cart_items SET quantity=$1 WHERE id=$2', [quantity, req.params.id]); }
+    await repriceCartForPallets(item.cart_id, req.user.id, req.user.role);
     res.json(await getCartWithItems(item.cart_id));
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
@@ -1878,6 +1933,7 @@ app.delete('/api/cart/item/:id', authenticate, async (req, res) => {
     const item = await one('SELECT ci.*,c.user_id FROM cart_items ci JOIN carts c ON c.id=ci.cart_id WHERE ci.id=$1', [req.params.id]);
     if (!item || item.user_id !== req.user.id) return res.status(404).json({ error: 'Item not found' });
     await q('DELETE FROM cart_items WHERE id=$1', [req.params.id]);
+    await repriceCartForPallets(item.cart_id, req.user.id, req.user.role);
     res.json(await getCartWithItems(item.cart_id));
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
@@ -1913,6 +1969,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
       ? await one('SELECT * FROM carts WHERE user_id=$1 AND store_id=$2', [userId, store_id])
       : await one('SELECT * FROM carts WHERE user_id=$1 AND store_id IS NULL', [userId]);
     if (!cart) return res.status(400).json({ error: 'Cart not found' });
+
+    // Pallet pricing is settled server-side one final time before totals, so
+    // the charged amounts are correct even if the UI skipped a refresh.
+    await repriceCartForPallets(cart.id, userId, role);
 
     const items = await all('SELECT ci.*,p.name,p.stock,p.free_shipping,p.box_type FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1', [cart.id]);
     if (!items.length) return res.status(400).json({ error: 'Cart is empty' });

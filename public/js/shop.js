@@ -92,9 +92,164 @@ function updateShoppingForBanner() {
 async function loadProducts() {
   const products = await apiFetch('/api/products');
   _products = products || [];
+  renderPalletBar();
   renderProducts();
   await initPayment();
   checkReorderIntent(); // Show low stock reorder modal if coming from inventory
+}
+
+// ── PALLET ORDERING ──────────────────────────────────────────────────────────
+// Half pallet = 15 master boxes (5 of each type) → automatic 25% off.
+// Full pallet = 27 master boxes (9 of each type) → automatic 30% off.
+// "Classic mix" adds the even split in one tap; "Build your own" opens a
+// mix-and-match builder that must land exactly on the pallet size. The
+// discount itself is applied server-side the moment the cart holds enough
+// boxes — these are just fast ways to get there.
+const PALLETS = {
+  half: { label: 'Half Pallet', boxes: 15, each: 5, pct: 25, emoji: '🟦' },
+  full: { label: 'Full Pallet', boxes: 27, each: 9, pct: 30, emoji: '🟪' },
+};
+const BOX_TYPE_LABELS = { shots: 'Shots', blister_card: 'Blister Cards', gummies: 'Gummies' };
+
+function boxProducts() {
+  return _products.filter(p => p.box_type && p.active === 1 && p.my_price != null && !isNaN(parseFloat(p.my_price)));
+}
+
+function renderPalletBar() {
+  const bar = document.getElementById('pallet-bar');
+  if (!bar) return;
+  if (_role === 'admin' || !boxProducts().length) { bar.innerHTML = ''; return; }
+  bar.innerHTML = `
+    <div class="pallet-bar">
+      ${Object.entries(PALLETS).map(([kind, P]) => `
+        <div class="pallet-card ${kind}">
+          <div class="pallet-head">
+            <span class="pallet-emoji">${P.emoji}</span>
+            <div>
+              <div class="pallet-title">${P.label}</div>
+              <div class="pallet-sub">${P.boxes} master boxes</div>
+            </div>
+            <span class="pallet-badge">${P.pct}% OFF</span>
+          </div>
+          <div class="pallet-actions">
+            <button class="btn-pallet primary" onclick="addClassicPallet('${kind}')">Classic mix — ${P.each} of each</button>
+            <button class="btn-pallet" onclick="openPalletBuilder('${kind}')">Build your own</button>
+          </div>
+        </div>`).join('')}
+    </div>
+    <div class="pallet-note">Pallet pricing is automatic — any mix of ${PALLETS.half.boxes}+ boxes gets ${PALLETS.half.pct}% off, ${PALLETS.full.boxes}+ gets ${PALLETS.full.pct}%.</div>`;
+}
+
+async function addClassicPallet(kind) {
+  const P = PALLETS[kind];
+  const byType = {};
+  for (const p of boxProducts()) {
+    if (!byType[p.box_type] && p.stock >= P.each) byType[p.box_type] = p;
+  }
+  const types = Object.keys(BOX_TYPE_LABELS);
+  const missing = types.filter(t => !byType[t]);
+  if (missing.length) {
+    showToast('Not enough stock for the classic mix — build your own instead', 'error');
+    openPalletBuilder(kind);
+    return;
+  }
+  document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = true);
+  try {
+    let cart = null;
+    for (const t of types) {
+      const body = { product_id: byType[t].id, quantity: P.each };
+      if (_currentStoreId) body.store_id = _currentStoreId;
+      cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
+    }
+    if (cart) { _cart = cart; renderCart(); }
+    showToast(`${P.emoji} ${P.label} added — ${P.pct}% pricing applied!`, 'success');
+  } finally {
+    document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = false);
+  }
+}
+
+let _builderKind = null, _builderQty = {};
+
+function openPalletBuilder(kind) {
+  const P = PALLETS[kind];
+  _builderKind = kind;
+  _builderQty = {};
+  let modal = document.getElementById('pallet-builder-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'pallet-builder-modal';
+    modal.className = 'modal-overlay';
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    document.body.appendChild(modal);
+  }
+  const rows = boxProducts().map(p => `
+    <div class="pb-row">
+      <div class="pb-info">
+        <div class="pb-name">${esc(p.name)}</div>
+        <div class="pb-meta">${BOX_TYPE_LABELS[p.box_type] || esc(p.box_type)} · $${parseFloat(p.my_price).toFixed(2)}/box · ${p.stock} in stock</div>
+      </div>
+      <div class="pb-stepper">
+        <button onclick="pbStep(${p.id}, -1)">−</button>
+        <span id="pb-qty-${p.id}">0</span>
+        <button onclick="pbStep(${p.id}, 1)">+</button>
+      </div>
+    </div>`).join('');
+  modal.innerHTML = `
+    <div class="modal" style="max-width:520px;">
+      <button class="close-btn" onclick="document.getElementById('pallet-builder-modal').classList.remove('active')">&times;</button>
+      <h2>${P.emoji} Build your ${P.label.toLowerCase()}</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        Pick any mix of master boxes totaling exactly <strong>${P.boxes}</strong> — the ${P.pct}% pallet price applies automatically.</p>
+      <div class="pb-progress-wrap">
+        <div class="pb-progress"><div id="pb-progress-fill" style="width:0%;"></div></div>
+        <div class="pb-count"><span id="pb-count">0</span> / ${P.boxes} boxes</div>
+      </div>
+      ${rows || '<p style="color:var(--text-muted);">No box products available.</p>'}
+      <button class="checkout-btn" id="pb-add-btn" disabled onclick="palletBuilderAdd()" style="margin-top:16px;">Select ${P.boxes} boxes</button>
+    </div>`;
+  modal.classList.add('active');
+}
+
+function pbStep(productId, delta) {
+  const P = PALLETS[_builderKind];
+  const p = _products.find(x => x.id === productId);
+  if (!p) return;
+  const cur = _builderQty[productId] || 0;
+  const totalNow = Object.values(_builderQty).reduce((a, b) => a + b, 0);
+  let next = cur + delta;
+  if (next < 0) next = 0;
+  if (next > p.stock) { showToast(`Only ${p.stock} in stock`, 'error'); next = p.stock; }
+  if (delta > 0 && totalNow >= P.boxes) { showToast(`That's the full ${P.boxes} — remove one to swap`, 'error'); return; }
+  _builderQty[productId] = next;
+  document.getElementById(`pb-qty-${productId}`).textContent = next;
+  const total = Object.values(_builderQty).reduce((a, b) => a + b, 0);
+  document.getElementById('pb-count').textContent = total;
+  document.getElementById('pb-progress-fill').style.width = `${Math.min(100, (total / P.boxes) * 100)}%`;
+  const btn = document.getElementById('pb-add-btn');
+  btn.disabled = total !== P.boxes;
+  btn.textContent = total === P.boxes
+    ? `Add ${P.label.toLowerCase()} to cart — ${P.pct}% off`
+    : total < P.boxes ? `${P.boxes - total} more box${P.boxes - total === 1 ? '' : 'es'} to go` : `Select ${P.boxes} boxes`;
+}
+
+async function palletBuilderAdd() {
+  const P = PALLETS[_builderKind];
+  const picks = Object.entries(_builderQty).filter(([, q]) => q > 0);
+  const btn = document.getElementById('pb-add-btn');
+  btn.disabled = true; btn.textContent = 'Adding…';
+  try {
+    let cart = null;
+    for (const [pid, qty] of picks) {
+      const body = { product_id: parseInt(pid), quantity: qty };
+      if (_currentStoreId) body.store_id = _currentStoreId;
+      cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
+    }
+    if (cart) { _cart = cart; renderCart(); }
+    document.getElementById('pallet-builder-modal').classList.remove('active');
+    showToast(`${P.emoji} ${P.label} added — ${P.pct}% pricing applied!`, 'success');
+  } catch (e) {
+    btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart — ${P.pct}% off`;
+  }
 }
 
 function renderProducts() {
@@ -279,7 +434,21 @@ function renderCart() {
     return;
   }
 
-  wrap.innerHTML = _cart.items.map(item => `
+  // Pallet status: celebrate an active pallet discount, and nudge toward the
+  // next threshold when it's close (that's the whole upsell).
+  const pal = _cart.pallet;
+  let palletBanner = '';
+  if (pal && pal.boxes > 0) {
+    if (pal.pct === 30) {
+      palletBanner = `<div class="cart-pallet-banner on">🟪 Full-pallet pricing — <strong>30% off</strong> every box</div>`;
+    } else if (pal.pct === 25) {
+      palletBanner = `<div class="cart-pallet-banner on">🟦 Half-pallet pricing — <strong>25% off</strong> every box${pal.to_full ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
+    } else if (pal.to_half <= 6) {
+      palletBanner = `<div class="cart-pallet-banner">📦 ${pal.to_half} more box${pal.to_half === 1 ? '' : 'es'} unlocks <strong>25% half-pallet pricing</strong></div>`;
+    }
+  }
+
+  wrap.innerHTML = palletBanner + _cart.items.map(item => `
     <div class="cart-item">
       ${item.image_url ? `<img class="cart-item-img" src="${item.image_url}" alt="">` : '<div class="cart-item-img" style="background:var(--bg-secondary);border-radius:6px;"></div>'}
       <div class="cart-item-info">
