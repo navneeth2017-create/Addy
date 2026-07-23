@@ -1468,3 +1468,25 @@ button:active:not(:disabled), .btn:active { transform: scale(0.965); }
 #logo-container img { transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
 #logo-container a:hover img { transform: rotate(-2.5deg) scale(1.03); }
 @media (prefers-reduced-motion: reduce) { #logo-container a:hover img { transform: none; } }
+
+/* Pallet progress toward the next margin tier (shop cart). */
+.pal-progress {
+  position: relative; height: 20px; border-radius: 999px; overflow: hidden;
+  background: var(--bg-hover); border: 1px solid var(--border); margin: 8px 0 10px;
+}
+.pal-progress-fill {
+  position: absolute; inset: 0 auto 0 0; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #059669);
+  opacity: 0.35; /* muted so the centered label meets AA contrast in both themes */
+  transition: width 0.5s cubic-bezier(0.3, 0.7, 0.3, 1);
+}
+.pal-progress-label {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--text); text-shadow: 0 1px 2px var(--bg-card);
+}
+
+/* The empty cart's resting monarch takes a slow bob. */
+.cart-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.cart-empty-fly { animation: cartBob 3.2s ease-in-out infinite; }
+@keyframes cartBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .cart-empty-fly { animation: none; } }

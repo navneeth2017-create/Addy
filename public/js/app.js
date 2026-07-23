@@ -243,6 +243,40 @@ async function dismissAdminMessages() {
 }
 
 // Getting-started checklist for new reps — hides itself once all steps are done.
+/**
+ * Quiet milestone tracker: the first visit after crossing an order or store
+ * threshold gets one toast (and butterflies for the big ones). Each fires
+ * once, ever; catching up past several at once only announces the highest.
+ */
+function checkAddyMilestones(ordersCount, storesCount, _retry = 0) {
+  try {
+    // The checklist fetches race the profile fetch — wait for the real user
+    // id so milestone keys are always per-user (never a shared 'me' bucket
+    // that could double-fire or leak across accounts on one device).
+    if (!window._me?.id) {
+      if (_retry < 6) setTimeout(() => checkAddyMilestones(ordersCount, storesCount, _retry + 1), 600);
+      return;
+    }
+    const uid = window._me.id;
+    const fire = (kind, thresholds, count, label) => {
+      const hit = thresholds.filter(t => count >= t);
+      if (!hit.length) return;
+      const unseen = hit.filter(t => !localStorage.getItem(`addy_ms_${uid}_${kind}_${t}`));
+      if (!unseen.length) { hit.forEach(t => localStorage.setItem(`addy_ms_${uid}_${kind}_${t}`, '1')); return; }
+      // One announcement per page load — a suppressed kind stays unmarked so
+      // it gets its moment on the next visit instead of piling toasts now.
+      if (window._addyToastedThisLoad) return;
+      window._addyToastedThisLoad = true;
+      hit.forEach(t => localStorage.setItem(`addy_ms_${uid}_${kind}_${t}`, '1'));
+      const top = Math.max(...unseen);
+      showToast(label(top), 'success');
+      if (top >= (kind === 'orders' ? 25 : 10) && typeof monarchCelebrate === 'function') monarchCelebrate();
+    };
+    fire('orders', [10, 25, 50, 100], ordersCount, t => `🏆 ${t} orders placed — you're building something real.`);
+    fire('stores', [5, 10, 25], storesCount, t => `🏪 ${t} stores in your territory — route royalty.`);
+  } catch (e) { /* decoration */ }
+}
+
 async function renderOnboardingChecklist() {
   const el = document.getElementById('onboarding-checklist');
   if (!el) return;
@@ -255,6 +289,7 @@ async function renderOnboardingChecklist() {
     ]);
     const ordersCount = Array.isArray(orders) ? orders.length : (orders?.orders?.length || 0);
     const storesCount = storesData?.stores?.length || 0;
+    checkAddyMilestones(ordersCount, storesCount);
     const photosPending = Array.isArray(photos) ? photos.length : 0;
     const steps = [
       { done: ordersCount > 0, label: 'Place your first order', hint: 'At least 3 master boxes, any mix — its size locks in your rate (3+ boxes → 20%, half pallet → 25%, full pallet → 30%).' },
@@ -265,7 +300,8 @@ async function renderOnboardingChecklist() {
       el.innerHTML = '';
       // One-time salute the first time everything's checked off.
       const key = 'addy_onboard_done_' + (window._me?.id || 'me');
-      if (!localStorage.getItem(key)) {
+      if (!localStorage.getItem(key) && !window._addyToastedThisLoad) {
+        window._addyToastedThisLoad = true;
         localStorage.setItem(key, '1');
         if (typeof monarchCelebrate === 'function') monarchCelebrate();
         showToast('🎉 You\'re fully set up — welcome to the ADDY program!', 'success');
@@ -323,7 +359,7 @@ function copyReferralLink() {
   const link = `${location.origin}/?ref=${encodeURIComponent(email)}`;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(link).then(
-      () => showToast('Invite link copied! Share it — you earn 5% on their orders.', 'success'),
+      () => { showToast('Invite link copied! Share it — you earn 5% on their orders.', 'success'); addyPaperPlane(); },
       () => prompt('Copy your invite link:', link)
     );
   } else {
@@ -1243,6 +1279,7 @@ async function requestPayout() {
   const result = await apiFetch('/api/payouts/request', { method: 'POST', body: JSON.stringify({}) });
   if (result && result.success) {
     showToast('Payout request of $' + parseFloat(result.amount).toFixed(2) + ' submitted ✓', 'success');
+    addyCashFlight();
     const banner = document.getElementById('payout-banner');
     if (banner) banner.style.display = 'none';
     loadMyCommissions();
@@ -1487,6 +1524,7 @@ function ownerLoadStore(store, networkAvg) {
 }
 
 function renderOwnerRevenueChart(baseRevenue) {
+  if (typeof Chart === 'undefined') return; // chart.js CDN unavailable — skip the chart, keep the view
   const ctx = document.getElementById('chart-revenue');
   if (!ctx) return;
   
@@ -1557,6 +1595,7 @@ async function handleEditStore(e) {
 // ==========================================
 
 function renderProductRevenueChart(canvasId, byProduct) {
+  if (typeof Chart === 'undefined') return;
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
   if (ctx._chart) ctx._chart.destroy();
@@ -1584,6 +1623,7 @@ function renderProductRevenueChart(canvasId, byProduct) {
 }
 
 function renderOrdersOverTimeChart(canvasId, ordersOverTime) {
+  if (typeof Chart === 'undefined') return;
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
   if (ctx._chart) ctx._chart.destroy();
@@ -1614,6 +1654,7 @@ function renderOrdersOverTimeChart(canvasId, ordersOverTime) {
 }
 
 function renderDistributionChart(canvasId, distribution) {
+  if (typeof Chart === 'undefined') return;
   const ctx = document.getElementById(canvasId);
   if (!ctx || !distribution) return;
   if (ctx._chart) ctx._chart.destroy();
@@ -1719,7 +1760,7 @@ async function handleSignup(e) {
 // ADMIN: TABS
 // ==========================================
 function switchTab(tab, btn) {
-  ['stores', 'pending', 'reps', 'users', 'products', 'orders', 'inventory', 'commissions', 'store-claims', 'settings'].forEach(t => {
+  ['stores', 'pending', 'reps', 'users', 'products', 'orders', 'inventory', 'commissions', 'store-claims', 'activity', 'settings'].forEach(t => {
     const el = document.getElementById('tab-' + t);
     if (!el) return;
     if (t === tab) {
@@ -2154,6 +2195,20 @@ async function loadDSDDashboard() {
   if (profile) {
     window._myEmail = profile.email;
     window._me = profile;
+    // A human hello: "Good morning, Mark ☀️" above the overview header.
+    try {
+      const h1 = [...document.querySelectorAll('h1')].find(h => h.textContent.includes('My Assigned Stores'));
+      if (h1 && !document.getElementById('addy-greeting')) {
+        const hr = new Date().getHours();
+        const [word, emoji] = hr < 5 ? ['Burning the midnight oil', '🌙'] : hr < 12 ? ['Good morning', '☀️'] : hr < 17 ? ['Good afternoon', '👋'] : ['Good evening', '🌆'];
+        const first = (profile.name || '').trim().split(/\s+/)[0];
+        const g = document.createElement('div');
+        g.id = 'addy-greeting';
+        g.style.cssText = 'font-size:14px;font-weight:600;color:var(--text-secondary);margin-bottom:2px;';
+        g.textContent = `${word}${first ? ', ' + first : ''} ${emoji}`;
+        h1.before(g);
+      }
+    } catch (e) { /* decoration */ }
     if (profile.house_partner) {
       console.log('%c\u2618 S\u00e1inte doesn\u2019t pay the bills \u2014 but 35% locked does. F\u00e1ilte, Danny.'.replace('S\u00e1inte','Sl\u00e1inte'), 'color:#169B62;font-size:13px;font-weight:700;');
     }
@@ -2168,7 +2223,18 @@ async function loadDSDDashboard() {
     }
     const commEl = document.getElementById('stat-commission');
     if (commEl) {
-      commEl.textContent = '$' + parseFloat(profile.commission_balance||0).toFixed(2);
+      // Count the balance up from $0 — cents-accurate (animateCurrency rounds).
+      const balNow = parseFloat(profile.commission_balance || 0);
+      if (balNow > 0 && !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+        const t0 = performance.now(), dur = 750;
+        (function tick(t) {
+          const p = Math.min((t - t0) / dur, 1), e = 1 - Math.pow(1 - p, 3);
+          commEl.textContent = '$' + (balNow * e).toFixed(2);
+          if (p < 1) requestAnimationFrame(tick);
+        })(t0);
+      } else {
+        commEl.textContent = '$' + balNow.toFixed(2);
+      }
       // Sparkle when the balance grew since their last visit.
       try {
         const k = 'addy_last_bal_' + profile.id;
@@ -3987,3 +4053,49 @@ function markProgramDocsSeen() {
     }
   }, true);
 })();
+
+// ── Small flights (shared style with the butterflies: WAAPI, self-cleaning,
+//    reduced-motion aware, wrapped so decoration can never break a flow) ──
+function addyPaperPlane() {
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const btn = document.querySelector('button[onclick="copyReferralLink()"]');
+    const r = btn ? btn.getBoundingClientRect() : { left: innerWidth / 2, top: 80, width: 0, height: 0 };
+    const x0 = r.left + r.width / 2, y0 = r.top + r.height / 2;
+    const plane = document.createElement('div');
+    plane.textContent = '✈️';
+    plane.style.cssText = 'position:fixed;left:0;top:0;z-index:9999;pointer-events:none;font-size:22px;will-change:transform;';
+    document.body.appendChild(plane);
+    const x1 = innerWidth + 90, y1 = -70, mx = (x0 + x1) / 2, my = Math.min(y0, y1) - 110;
+    const frames = [];
+    for (let i = 0; i <= 20; i++) {
+      const t = i / 20;
+      const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * mx + t * t * x1;
+      const y = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * my + t * t * y1;
+      frames.push({ transform: `translate(${x}px, ${y}px) rotate(${-8 + t * 14}deg)` });
+    }
+    const anim = plane.animate(frames, { duration: 1300, easing: 'cubic-bezier(0.35, 0.1, 0.45, 1)', fill: 'forwards' });
+    anim.onfinish = () => plane.remove();
+  } catch (e) { /* decoration */ }
+}
+
+function addyCashFlight() {
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const src = document.getElementById('stat-commission') || document.body;
+    const r = src.getBoundingClientRect();
+    const cx = r.left + r.width / 2 || innerWidth / 2, cy = r.top || innerHeight / 2;
+    for (let i = 0; i < 6; i++) {
+      const bill = document.createElement('div');
+      bill.textContent = '💸';
+      bill.style.cssText = `position:fixed;left:0;top:0;z-index:9999;pointer-events:none;font-size:${17 + Math.random() * 10}px;will-change:transform;`;
+      document.body.appendChild(bill);
+      const dx = (Math.random() - 0.5) * 260, rise = 140 + Math.random() * 180;
+      const anim = bill.animate([
+        { transform: `translate(${cx}px, ${cy}px) rotate(0deg)`, opacity: 1 },
+        { transform: `translate(${cx + dx}px, ${cy - rise}px) rotate(${(Math.random() - 0.5) * 300}deg)`, opacity: 0 },
+      ], { duration: 1100 + Math.random() * 600, delay: i * 70, easing: 'cubic-bezier(0.3, 0.2, 0.5, 1)', fill: 'both' });
+      anim.onfinish = () => bill.remove();
+    }
+  } catch (e) { /* decoration */ }
+}
