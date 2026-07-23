@@ -3183,6 +3183,19 @@ app.post('/api/program-documents', authenticate, authorize('admin'), async (req,
   } catch(e) { console.error('program-documents add:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
+// Bulk reorder: client sends the full list of doc ids in the desired order;
+// each row's sort_order becomes its position. One clean write of the order.
+app.post('/api/program-documents/reorder', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(n => parseInt(n)).filter(Number.isInteger) : null;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'Send { ids: [...] } in the new order' });
+    for (let i = 0; i < ids.length; i++) {
+      await q('UPDATE program_documents SET sort_order=$1 WHERE id=$2', [i, ids[i]]);
+    }
+    res.json({ success: true });
+  } catch(e) { console.error('program-documents reorder:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
 app.patch('/api/program-documents/:id', authenticate, authorize('admin'), async (req, res) => {
   try {
     const { title, sort_order } = req.body;
