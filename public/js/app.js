@@ -3693,6 +3693,8 @@ const DOC_ICONS = {
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>',
   eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  arrowUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>',
+  arrowDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>',
 };
 
 async function loadProgramDocs(containerId, manage) {
@@ -3722,13 +3724,15 @@ async function loadProgramDocs(containerId, manage) {
     return;
   }
 
-  el.innerHTML = uploader + `<div class="docs-grid">${docs.map(d => `
+  el.innerHTML = uploader + `<div class="docs-grid">${docs.map((d, i) => `
     <div class="doc-card">
       <div class="doc-thumb" onclick="openDocLightbox(${d.id})"><img src="${d.image_data}" alt="${esc(d.title)}" loading="lazy"></div>
       <div class="doc-meta">
         <span class="doc-title" title="${esc(d.title)}">${esc(d.title)}</span>
         ${manage
           ? `<div class="doc-actions">
+               <button class="doc-act doc-act-icon" onclick="moveProgramDoc(${d.id}, -1)" title="Move earlier" ${i === 0 ? 'disabled' : ''}>${DOC_ICONS.arrowUp}</button>
+               <button class="doc-act doc-act-icon" onclick="moveProgramDoc(${d.id}, 1)" title="Move later" ${i === docs.length - 1 ? 'disabled' : ''}>${DOC_ICONS.arrowDown}</button>
                <button class="doc-act" onclick="renameProgramDoc(${d.id})" title="Rename">${DOC_ICONS.pencil}<span>Rename</span></button>
                <button class="doc-act ${d.is_public ? 'is-public' : ''}" onclick="toggleDocPublic(${d.id}, ${d.is_public ? 'false' : 'true'})" title="${d.is_public ? 'Visible on the public landing page — click to hide' : 'Hidden from the public site — click to show'}">${d.is_public ? DOC_ICONS.globe : DOC_ICONS.lock}<span>${d.is_public ? 'Public' : 'Hidden'}</span></button>
                <button class="doc-act doc-act-icon danger" onclick="deleteProgramDoc(${d.id}, '${esc(d.title)}')" title="Delete">${DOC_ICONS.trash}</button>
@@ -3827,6 +3831,22 @@ async function renameProgramDoc(id) {
   if (title === current) return;                   // no change
   const r = await apiFetch(`/api/program-documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
   if (r && r.success) { showToast('Renamed ✓', 'success'); loadProgramDocs('admin-docs-gallery', true); }
+}
+
+// Reorder the flyers: move a doc one slot earlier (-1) or later (+1). Sends the
+// whole new id order so sort_order is always clean and consecutive.
+async function moveProgramDoc(id, dir) {
+  const docs = (window._programDocs || []).slice();
+  const i = docs.findIndex(x => x.id === id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= docs.length) return;
+  [docs[i], docs[j]] = [docs[j], docs[i]];       // swap
+  window._programDocs = docs;                     // optimistic
+  const r = await apiFetch('/api/program-documents/reorder', {
+    method: 'POST', body: JSON.stringify({ ids: docs.map(d => d.id) }),
+  });
+  if (r && r.success) loadProgramDocs('admin-docs-gallery', true);
+  else loadProgramDocs('admin-docs-gallery', true); // reload either way to reflect truth
 }
 
 // "New" badge on the Program Docs tab: count docs added since the rep last
