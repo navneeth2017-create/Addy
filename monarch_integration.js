@@ -954,4 +954,41 @@ function installMonarchIntegration(app) {
   console.log('🚀 Monarch integration routes installed');
 }
 
-module.exports = { installMonarchIntegration };
+/**
+ * Send one email through the HOUSE partner's Sales Suite SendGrid (their
+ * connected key on Monarch — keys never leave Monarch; we ask it to send).
+ * Used as Addy's mail fallback so "everything related to Addy" still lands
+ * when Addy has no mailer of its own. Throws when unavailable — callers
+ * treat mail as best-effort.
+ */
+async function suiteHouseEmail({ to, subject, html, text }) {
+  if (!configured()) throw new Error('Monarch integration not configured');
+  const ws = (await pool.query(
+    `SELECT w.slug FROM monarch_workspaces w JOIN users u ON u.id = w.user_id
+     WHERE u.house_partner = TRUE AND w.monarch_provisioned AND w.status = 'active'
+     LIMIT 1`
+  )).rows[0];
+  if (!ws) throw new Error('No house partner workspace to send through');
+  // Monarch's mailer takes plain text and builds its own branded HTML shell —
+  // flatten Addy's HTML bodies to text.
+  const body = (text && String(text).trim()) || String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!body) throw new Error('Empty email body');
+  await monarchApi(`/tenants/${ws.slug}/email`, 'POST', {
+    to_email: Array.isArray(to) ? to[0] : to, subject, body,
+  }, 20000);
+}
+
+/** True when the integration is configured enough for suiteHouseEmail to be
+ *  worth attempting (env-level check; the house workspace is checked live). */
+function suiteMailConfigured() { return configured(); }
+
+module.exports = { installMonarchIntegration, suiteHouseEmail, suiteMailConfigured };
