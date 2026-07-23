@@ -38,6 +38,10 @@
     <div class="form-group"><label>Company code</label><input id="company" autocomplete="organization" placeholder="e.g. kelly-distribution" autocapitalize="none" spellcheck="false"></div>
     <div class="form-group"><label>Email</label><input id="email" type="email" autocomplete="email" placeholder="you@company.com"></div>
     <div class="form-group"><label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="One-time or your own password"></div>
+    <label style="display:flex;align-items:center;gap:9px;font-size:13.5px;color:var(--text-secondary);margin:2px 0 18px;cursor:pointer;user-select:none;">
+      <input type="checkbox" id="remember" checked style="width:17px;height:17px;accent-color:var(--accent);cursor:pointer;">
+      Keep me signed in on this device
+    </label>
     <button class="btn" id="go">Sign in to the Suite →</button>
     <div class="hint-line">ADDY rep or admin? <a href="/login.html">Sign in here instead</a></div>
   </div>
@@ -49,21 +53,40 @@
       const err = document.getElementById('err');
       const show = (m) => { err.textContent = m; err.style.display = 'block'; };
 
-      // Prefill from the invite link (?company=&email=) so they only enter
-      // the one-time password. Focus straight on the password field.
-      const qs = new URLSearchParams(location.search);
       const companyEl = document.getElementById('company');
       const emailEl = document.getElementById('email');
       const pwEl = document.getElementById('password');
-      if (qs.get('company')) companyEl.value = qs.get('company').trim().toLowerCase();
-      if (qs.get('email')) emailEl.value = qs.get('email').trim();
+      const rememberEl = document.getElementById('remember');
+
+      // Already signed in on this device? Skip the form entirely — the whole
+      // point of "keep me signed in" is not logging in again. A JWT that's
+      // past its exp is treated as no session.
+      function tokenAlive(tok) {
+        try { return JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).exp * 1000 > Date.now() + 5000; }
+        catch (e) { return false; }
+      }
+      try {
+        const kept = JSON.parse(localStorage.getItem('suite_team') || 'null');
+        if (kept && kept.token && kept.app_url && tokenAlive(kept.token)) {
+          window.location.replace('/suite.html?team=1'); return;
+        }
+      } catch (e) {}
+
+      // Prefill from the invite link (?company=&email=) OR a remembered login,
+      // so a returning teammate only types their password. Focus the password.
+      let remembered = {};
+      try { remembered = JSON.parse(localStorage.getItem('suite_remember') || '{}'); } catch (e) {}
+      const qs = new URLSearchParams(location.search);
+      companyEl.value = (qs.get('company') || remembered.company || '').trim().toLowerCase();
+      emailEl.value = (qs.get('email') || remembered.email || '').trim();
       if (companyEl.value && emailEl.value) { setTimeout(() => pwEl.focus(), 60); }
 
       async function signIn() {
         err.style.display = 'none';
-        const company = document.getElementById('company').value.trim().toLowerCase();
-        const email = document.getElementById('email').value.trim();
-        const password = document.getElementById('password').value;
+        const company = companyEl.value.trim().toLowerCase();
+        const email = emailEl.value.trim();
+        const password = pwEl.value;
+        const remember = rememberEl.checked;
         if (!company || !email || !password) { show('Fill in all three fields — they were given to you together.'); return; }
         const btn = document.getElementById('go');
         btn.disabled = true; btn.textContent = 'Signing in…';
@@ -73,11 +96,21 @@
           const r = await fetch(cfg.app_url + '/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company, email, password }),
+            body: JSON.stringify({ company, email, password, remember }),
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok || !data.token) throw new Error(data.error || 'Invalid company, email, or password');
-          sessionStorage.setItem('suite_team', JSON.stringify({ token: data.token, role: data.role || 'employee', app_url: cfg.app_url, name: data.fullName || '' }));
+          const session = JSON.stringify({ token: data.token, role: data.role || 'employee', app_url: cfg.app_url, name: data.fullName || '' });
+          // Remember → localStorage (survives closing the browser, 30-day
+          // token). Otherwise sessionStorage (gone when the tab closes).
+          if (remember) {
+            localStorage.setItem('suite_team', session);
+            localStorage.setItem('suite_remember', JSON.stringify({ company, email }));
+            sessionStorage.removeItem('suite_team');
+          } else {
+            sessionStorage.setItem('suite_team', session);
+            localStorage.removeItem('suite_team');
+          }
           window.location.replace('/suite.html?team=1');
         } catch (e) {
           show(e.message);

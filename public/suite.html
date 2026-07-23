@@ -69,15 +69,23 @@
       const params = new URLSearchParams(location.search);
 
       // Team mode: employees/admins signed in on /suite-login.html carry a
-      // Suite session in sessionStorage — no Addy account involved at all.
+      // Suite session — no Addy account involved at all. "Keep me signed in"
+      // stores it in localStorage (survives browser close); otherwise it's in
+      // sessionStorage (this tab only).
       if (params.get('team') === '1') {
         let sess = null;
-        try { sess = JSON.parse(sessionStorage.getItem('suite_team')); } catch (e) {}
+        try { sess = JSON.parse(localStorage.getItem('suite_team') || sessionStorage.getItem('suite_team')); } catch (e) {}
         if (!sess || !sess.token || !sess.app_url) { window.location.replace('/suite-login.html'); return; }
         const back = document.getElementById('suite-back-btn');
         back.textContent = 'Sign out';
         back.href = 'javascript:void(0)';
-        back.addEventListener('click', () => { sessionStorage.removeItem('suite_team'); window.location.replace('/suite-login.html'); });
+        back.addEventListener('click', () => {
+          // Full sign-out clears the kept session AND the remembered prefill.
+          sessionStorage.removeItem('suite_team');
+          localStorage.removeItem('suite_team');
+          localStorage.removeItem('suite_remember');
+          window.location.replace('/suite-login.html');
+        });
         const frame = document.getElementById('suite-frame');
         frame.addEventListener('load', () => { msg.style.display = 'none'; }, { once: true });
         const frag = new URLSearchParams({ sso: sess.token, role: sess.role || 'employee', embed: 'addy' });
