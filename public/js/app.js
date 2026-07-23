@@ -2295,16 +2295,16 @@ function renderDSDTable(stores) {
   }
   tbody.innerHTML = stores.map(s => `
     <tr>
-      <td><span class="status-dot ${s.status}"></span>${esc(s.name)}</td>
-      <td>${esc(s.owner_name)}</td>
-      <td>${esc(s.city)}</td>
-      <td>${esc(s.state)}</td>
-      <td>${esc(s.category)}</td>
-      <td>${formatCurrency(s.wholesale_price)}</td>
-      <td>${formatCurrency(s.retail_price)}</td>
-      <td class="revenue-cell">${formatCurrency(s.distribution_cost)}</td>
-      <td><span class="status-badge ${s.status}">${s.status}</span></td>
-      <td><a href="/shop.html?store_id=${s.id}" style="display:inline-block;padding:5px 12px;background:#2563eb;color:#fff;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;">🛒 Buy</a></td>
+      <td data-label="Store"><span class="status-dot ${s.status}"></span>${esc(s.name)}</td>
+      <td data-label="Owner">${esc(s.owner_name)}</td>
+      <td data-label="City">${esc(s.city)}</td>
+      <td data-label="State">${esc(s.state)}</td>
+      <td data-label="Category">${esc(s.category)}</td>
+      <td data-label="Wholesale">${formatCurrency(s.wholesale_price)}</td>
+      <td data-label="Retail">${formatCurrency(s.retail_price)}</td>
+      <td class="revenue-cell" data-label="Dist. cost">${formatCurrency(s.distribution_cost)}</td>
+      <td data-label="Status"><span class="status-badge ${s.status}">${s.status}</span></td>
+      <td data-label=""><a href="/shop.html?store_id=${s.id}" style="display:inline-block;padding:5px 12px;background:#2563eb;color:#fff;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;">🛒 Buy</a></td>
     </tr>
   `).join('');
 }
