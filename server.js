@@ -2283,6 +2283,44 @@ app.post('/api/orders', authenticate, async (req, res) => {
       </div>`
     );
 
+    // Order confirmation to the BUYER — best-effort, never blocks the order.
+    if (resend && req.user.email) {
+      try {
+        const invoiceLine = order.payment_method === 'invoice'
+          ? `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Invoice</td><td style="padding:6px 0;font-size:13px;">${invoice?.invoice_number || ''} — due in 30 days</td></tr>`
+          : `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Payment</td><td style="padding:6px 0;font-size:13px;">Card — paid ✓</td></tr>`;
+        await resend.emails.send({
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          to: [req.user.email],
+          subject: `Order #${order.id} confirmed — $${parseFloat(order.total).toFixed(2)}`,
+          html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+            <div style="background:#2563eb;padding:24px 28px;">
+              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#93c5fd;">ADDY Distribution</p>
+              <h1 style="margin:8px 0 0;font-size:22px;color:#ffffff;">Order confirmed — thank you!</h1>
+            </div>
+            <div style="padding:24px 28px;">
+              <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Order #</td><td style="padding:6px 0;font-weight:700;font-size:13px;">#${order.id}</td></tr>
+                ${invoiceLine}
+                <tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Ship to</td><td style="padding:6px 0;font-size:13px;">${order.shipping_address}, ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}</td></tr>
+              </table>
+              <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                <thead><tr style="background:#f8fafc;"><th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;">Product</th><th style="padding:8px 12px;text-align:center;font-size:12px;color:#64748b;">Qty</th><th style="padding:8px 12px;text-align:right;font-size:12px;color:#64748b;">Amount</th></tr></thead>
+                <tbody>${itemList}</tbody>
+              </table>
+              <table style="width:100%;border-collapse:collapse;">
+                <tr><td style="padding:4px 0;color:#64748b;font-size:13px;">Subtotal</td><td style="padding:4px 0;text-align:right;font-size:13px;">$${parseFloat(order.subtotal).toFixed(2)}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;font-size:13px;">Shipping</td><td style="padding:4px 0;text-align:right;font-size:13px;">${parseFloat(order.shipping_cost) === 0 ? 'FREE' : '$' + parseFloat(order.shipping_cost).toFixed(2)}</td></tr>
+                ${parseFloat(order.processing_fee||0) > 0 ? `<tr><td style="padding:4px 0;color:#64748b;font-size:13px;">Processing Fee</td><td style="padding:4px 0;text-align:right;font-size:13px;">$${parseFloat(order.processing_fee).toFixed(2)}</td></tr>` : ''}
+                <tr style="border-top:2px solid #e2e8f0;"><td style="padding:10px 0 0;font-weight:700;font-size:15px;">Total</td><td style="padding:10px 0 0;text-align:right;font-weight:700;font-size:15px;color:#2563eb;">$${parseFloat(order.total).toFixed(2)}</td></tr>
+              </table>
+            </div>
+            <div style="background:#f8fafc;padding:16px 28px;text-align:center;font-size:12px;color:#94a3b8;">We'll email you again when it ships. Track it any time in your ADDY dashboard.</div>
+          </div>`,
+        });
+      } catch (e) { console.warn('Buyer order-confirmation email failed:', e.message); }
+    }
+
     res.status(201).json({ ...order, invoice_number: invoice?.invoice_number });
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
