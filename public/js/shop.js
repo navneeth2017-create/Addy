@@ -232,7 +232,7 @@ async function addClassicPallet(kind) {
       cart = await apiFetch('/api/cart/add', { method: 'POST', body: JSON.stringify(body) });
     }
     if (cart) { _cart = cart; renderCart(); }
-    showToast(P.pct ? `${P.label} added — ${P.pct}% margin locked in! ✓` : `${P.label} added to cart ✓`, 'success');
+    showToast(`${P.label} added to cart ✓`, 'success');
   } finally {
     document.querySelectorAll('.btn-pallet').forEach(b => b.disabled = false);
   }
@@ -372,7 +372,7 @@ async function palletBuilderAdd() {
     }
     if (cart) { _cart = cart; renderCart(); }
     document.getElementById('pallet-builder-modal').classList.remove('active');
-    showToast(P.pct ? `${P.label} added — ${P.pct}% margin locked in! ✓` : `${P.label} added to cart ✓`, 'success');
+    showToast(`${P.label} added to cart ✓`, 'success');
   } catch (e) {
     btn.disabled = false; btn.textContent = `Add ${P.label.toLowerCase()} to cart${P.pct ? ` — ${P.pct}% margin` : ''}`;
   }
@@ -616,7 +616,11 @@ function renderCart() {
   const checkoutBtn = document.getElementById('checkout-btn');
 
   if (!_cart.items || !_cart.items.length) {
-    wrap.innerHTML = '<div class="cart-empty">Your cart is empty</div>';
+    // Empty cart: arm the tier tracker at 0 so a one-tap pallet add (classic
+    // mix / builder / reorder) celebrates its 0→25/30 crossing, and so the
+    // next cart after a checkout or clear can celebrate again.
+    window._lastPalPct = 0;
+    wrap.innerHTML = `<div class="cart-empty"><svg class="cart-empty-fly" viewBox="0 0 64 64" width="34" height="34" aria-hidden="true"><g transform="rotate(-6 32 32)"><path d="M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z" fill="#E8873B" opacity="0.85"/><path d="M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z" fill="#B96A2C" opacity="0.85"/><path d="M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z" fill="#E8873B" opacity="0.85"/><path d="M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z" fill="#B96A2C" opacity="0.85"/><ellipse cx="32" cy="36.5" rx="2.4" ry="10.5" fill="#5b3a1e"/><circle cx="32" cy="24" r="2.7" fill="#5b3a1e"/></g></svg><div>Your cart is empty</div></div>`;
     totalRow.style.display = 'none';
     shippingNote.style.display = 'none';
     checkoutBtn.disabled = true;
@@ -629,6 +633,25 @@ function renderCart() {
   // Pallet banners only make sense when the pallet rate BEATS the rep's own
   // margin — a 35% Danny never sees "unlock 25%".
   const pal = _cart.pallet;
+  // The moment the cart crosses into a better pallet rate, celebrate it —
+  // that's the exact second the whole pricing model clicks for a rep.
+  // (First render only records, so loading a saved cart stays quiet.)
+  const palPctNow = (pal && pal.pct && _myRate < pal.pct) ? pal.pct : 0;
+  // High-water semantics: celebrate only a NEW best tier for this cart, so
+  // nudging quantities back and forth across a threshold never replays it.
+  const prevPal = window._lastPalPct;
+  if (prevPal !== undefined && palPctNow > prevPal) {
+    if (typeof monarchCelebrate === 'function') monarchCelebrate();
+    showToast(`🎉 ${palPctNow}% margin unlocked on this whole order!`, 'success');
+  }
+  window._lastPalPct = Math.max(prevPal ?? 0, palPctNow);
+  // A slim progress bar toward the next tier keeps the goal visible from the
+  // very first box, not just when they're 6 away.
+  const palBar = (boxes, target, goal) => `
+    <div class="pal-progress" title="${boxes} of ${target} boxes toward ${goal}">
+      <div class="pal-progress-fill" style="width:${Math.min(100, Math.round(boxes / target * 100))}%"></div>
+      <span class="pal-progress-label">${boxes}/${target} boxes → ${goal}</span>
+    </div>`;
   let palletBanner = '';
   if (pal && pal.boxes > 0) {
     if (pal.pct === 30 && _myRate < 30) {
@@ -637,6 +660,12 @@ function renderCart() {
       palletBanner = `<div class="cart-pallet-banner on">✨ Half-pallet pricing — <strong>25% margin</strong> on every box${pal.to_full && _myRate < 30 ? `<span class="nudge">${pal.to_full} more box${pal.to_full === 1 ? '' : 'es'} → 30%</span>` : ''}</div>`;
     } else if (!pal.pct && pal.to_half <= 6 && _myRate < 25) {
       palletBanner = `<div class="cart-pallet-banner">📦 ${pal.to_half} more box${pal.to_half === 1 ? '' : 'es'} unlocks <strong>25% half-pallet pricing</strong></div>`;
+    }
+    // Progress toward whichever tier is next (and still an upgrade for them).
+    if (pal.pct === 25 && _myRate < 30 && pal.to_full) {
+      palletBanner += palBar(pal.boxes, pal.boxes + pal.to_full, '30% full pallet');
+    } else if (!pal.pct && _myRate < 25 && pal.to_half) {
+      palletBanner += palBar(pal.boxes, pal.boxes + pal.to_half, '25% half pallet');
     }
   }
 
