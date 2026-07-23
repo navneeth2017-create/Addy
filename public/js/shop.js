@@ -17,6 +17,7 @@ async function initShop() {
 
   const me = await apiFetch('/api/me');
   if (!me) { window.location.href = '/login.html'; return; }
+  window._me = me;
   try {
   _role = me.role;
   _userId = me.id;
@@ -548,18 +549,38 @@ async function addToCart(productId) {
   }
 }
 
-/** A little 📦 arcs from the Add button into the cart, which gives a happy
- *  bump when it lands. Skipped for reduced-motion users. */
+// A tiny leprechaun — green top hat, gold buckle, orange beard — hugging a
+// parcel. Only the house partner ever sees him; everyone else gets the 📦.
+const LEPRECHAUN_COURIER = `<svg viewBox="0 0 64 64" width="34" height="34" style="display:block;overflow:visible;">
+  <rect x="14" y="19" width="36" height="4" rx="2" fill="#169B62"/>
+  <rect x="20" y="5" width="24" height="15" rx="3" fill="#169B62"/>
+  <rect x="20" y="14" width="24" height="6" fill="#0E7A4B"/>
+  <rect x="29" y="14" width="6" height="6" rx="1" fill="#F5C04A"/>
+  <circle cx="32" cy="30" r="9" fill="#F8C99B"/>
+  <path d="M23 30 Q32 47 41 30 Q40 41 32 41.5 Q24 41 23 30 Z" fill="#D96B27"/>
+  <circle cx="28.5" cy="28" r="1.4" fill="#3B2A1A"/><circle cx="35.5" cy="28" r="1.4" fill="#3B2A1A"/>
+  <path d="M24 40 Q32 44 40 40 L42 52 Q32 56 22 52 Z" fill="#169B62"/>
+  <rect x="22" y="44" width="20" height="14" rx="2" fill="#C98A4B" stroke="#9A6633" stroke-width="1.5"/>
+  <rect x="30.5" y="44" width="3" height="14" fill="#9A6633"/>
+  <circle cx="21" cy="49" r="2.8" fill="#F8C99B"/><circle cx="43" cy="49" r="2.8" fill="#F8C99B"/>
+</svg>`;
+
+/** A little courier arcs from the Add button into the cart, which gives a
+ *  happy bump when it lands. The house partner's parcels are hand-delivered
+ *  by a leprechaun; everyone else's box makes the trip solo. Skipped for
+ *  reduced-motion users. */
 function flyToCart(fromEl) {
   try {
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const cartHeader = document.querySelector('.cart-sidebar .cart-header') || document.querySelector('.mobile-cart-bar');
     if (!cartHeader) return;
+    const irish = !!(window._me && window._me.house_partner);
     const a = fromEl.getBoundingClientRect(), b = cartHeader.getBoundingClientRect();
     const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2;
     const x1 = b.left + 24, y1 = b.top + b.height / 2;
     const box = document.createElement('div');
-    box.textContent = '📦';
+    if (irish) { box.innerHTML = LEPRECHAUN_COURIER; box.className = 'lep-courier'; }
+    else box.textContent = '📦';
     box.style.cssText = 'position:fixed;left:0;top:0;z-index:9999;pointer-events:none;font-size:20px;will-change:transform;';
     document.body.appendChild(box);
     const mx = (x0 + x1) / 2, my = Math.min(y0, y1) - 90;
@@ -568,9 +589,11 @@ function flyToCart(fromEl) {
       const t = i / 20;
       const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * mx + t * t * x1;
       const y = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * my + t * t * y1;
-      frames.push({ transform: `translate(${x - 10}px, ${y - 10}px) scale(${1 - t * 0.5}) rotate(${t * 260}deg)`, opacity: 1 - t * 0.15 });
+      // The box tumbles; the wee man just leans into his leap.
+      const spin = irish ? Math.sin(t * Math.PI * 3) * 11 : t * 260;
+      frames.push({ transform: `translate(${x - 10}px, ${y - 10}px) scale(${1 - t * (irish ? 0.35 : 0.5)}) rotate(${spin}deg)`, opacity: 1 - t * 0.15 });
     }
-    const anim = box.animate(frames, { duration: 620, easing: 'cubic-bezier(0.3, 0.1, 0.4, 1)', fill: 'forwards' });
+    const anim = box.animate(frames, { duration: irish ? 760 : 620, easing: 'cubic-bezier(0.3, 0.1, 0.4, 1)', fill: 'forwards' });
     anim.onfinish = () => {
       box.remove();
       cartHeader.animate([
