@@ -1432,7 +1432,8 @@ button:active:not(:disabled), .btn:active { transform: scale(0.965); }
 .doc-thumb img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; }
 .doc-meta { display: flex; flex-direction: column; gap: 10px; padding: 12px 13px 13px; }
 .doc-title { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.doc-actions { display: flex; align-items: center; gap: 6px; }
+/* Wrap so every action stays on the card — no button ever clips off the edge. */
+.doc-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .doc-act {
   display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
@@ -1441,9 +1442,11 @@ button:active:not(:disabled), .btn:active { transform: scale(0.965); }
 }
 .doc-act svg { width: 14px; height: 14px; flex-shrink: 0; }
 .doc-act:hover { background: var(--bg-hover); color: var(--text); border-color: var(--text-muted); }
+.doc-act:disabled { opacity: 0.4; cursor: not-allowed; }
+.doc-act:disabled:hover { background: var(--bg-card); color: var(--text-secondary); border-color: var(--border); }
 .doc-act.is-public { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); background: color-mix(in srgb, var(--green) 8%, transparent); }
 .doc-act.is-public:hover { background: color-mix(in srgb, var(--green) 14%, transparent); border-color: var(--green); }
-.doc-act.doc-act-icon { margin-left: auto; padding: 6px; }
+.doc-act.doc-act-icon { padding: 6px; }
 .doc-act.danger:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, var(--border)); background: color-mix(in srgb, var(--red) 8%, transparent); }
 
 .doc-lightbox {
