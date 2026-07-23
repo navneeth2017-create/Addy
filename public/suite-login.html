@@ -49,6 +49,16 @@
       const err = document.getElementById('err');
       const show = (m) => { err.textContent = m; err.style.display = 'block'; };
 
+      // Prefill from the invite link (?company=&email=) so they only enter
+      // the one-time password. Focus straight on the password field.
+      const qs = new URLSearchParams(location.search);
+      const companyEl = document.getElementById('company');
+      const emailEl = document.getElementById('email');
+      const pwEl = document.getElementById('password');
+      if (qs.get('company')) companyEl.value = qs.get('company').trim().toLowerCase();
+      if (qs.get('email')) emailEl.value = qs.get('email').trim();
+      if (companyEl.value && emailEl.value) { setTimeout(() => pwEl.focus(), 60); }
+
       async function signIn() {
         err.style.display = 'none';
         const company = document.getElementById('company').value.trim().toLowerCase();
