@@ -58,7 +58,29 @@ async function one(text, params) { const r = await q(text, params); return r.row
 async function all(text, params) { const r = await q(text, params); return r.rows; }
 
 const { Resend } = require('resend');
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const _resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+// Mail facade, same call shape as the Resend client (resend.emails.send).
+// Prefers Resend; when it's absent or a send fails, delivery falls back to
+// the house partner's Sales Suite SendGrid via Monarch — so "everything
+// related to Addy" still lands even with no Resend key configured. Falsy
+// (like the old client) only when NEITHER transport is available, so the
+// dev-mode branches (e.g. password reset code in the response) still work.
+const { suiteHouseEmail, suiteMailConfigured } = require('./monarch_integration');
+const resend = (_resendClient || suiteMailConfigured()) ? {
+  emails: {
+    send: async (opts) => {
+      if (_resendClient) {
+        try { return await _resendClient.emails.send(opts); }
+        catch (e) {
+          if (!suiteMailConfigured()) throw e;
+          console.warn('Resend send failed — retrying via Sales Suite mail:', e.message);
+        }
+      }
+      await suiteHouseEmail({ to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
+      return { via: 'suite' };
+    },
+  },
+} : null;
 
 // ── STRIPE (activates automatically when STRIPE_SECRET_KEY env var is set) ──
 const Stripe = require('stripe');
