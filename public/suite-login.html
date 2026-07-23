@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <title>Team Sign In — Sales Suite · ADDY</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any">
+  <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .team-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: var(--shadow-lg); width: 100%; max-width: 420px; padding: 40px 36px; margin: 20px;
+    }
+    .team-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-bottom: 22px; }
+    .team-brand img { height: 48px; width: auto; object-fit: contain; }
+    .team-powered { font-size: 10.5px; color: var(--text-muted); letter-spacing: 0.2px; padding-left: 2px; }
+    .team-card h1 { font-size: 22px; font-weight: 800; margin-bottom: 4px; color: var(--text); }
+    .team-sub { font-size: 13.5px; color: var(--text-secondary); margin-bottom: 22px; }
+    .hint-line { font-size: 12px; color: var(--text-muted); margin-top: 14px; text-align: center; }
+    .hint-line a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="team-card">
+    <div class="team-brand">
+      <img src="/images/addy-logo.svg" alt="ADDY">
+      <div class="team-powered">powered by <strong style="color:#E8873B;">Monarch</strong></div>
+    </div>
+    <h1>Sales Suite — team sign in</h1>
+    <p class="team-sub">For employees &amp; admins added by your team lead. Use the company code and one-time password they gave you.</p>
+    <div class="error-msg" id="err"></div>
+    <div class="form-group"><label>Company code</label><input id="company" autocomplete="organization" placeholder="e.g. kelly-distribution" autocapitalize="none" spellcheck="false"></div>
+    <div class="form-group"><label>Email</label><input id="email" type="email" autocomplete="email" placeholder="you@company.com"></div>
+    <div class="form-group"><label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="One-time or your own password"></div>
+    <button class="btn" id="go">Sign in to the Suite →</button>
+    <div class="hint-line">ADDY rep or admin? <a href="/login.html">Sign in here instead</a></div>
+  </div>
+
+  <script>
+    (function () {
+      const saved = localStorage.getItem('addy_theme') || 'light';
+      document.documentElement.setAttribute('data-theme', saved);
+      const err = document.getElementById('err');
+      const show = (m) => { err.textContent = m; err.style.display = 'block'; };
+
+      async function signIn() {
+        err.style.display = 'none';
+        const company = document.getElementById('company').value.trim().toLowerCase();
+        const email = document.getElementById('email').value.trim();
+        const password = document.getElementById('password').value;
+        if (!company || !email || !password) { show('Fill in all three fields — they were given to you together.'); return; }
+        const btn = document.getElementById('go');
+        btn.disabled = true; btn.textContent = 'Signing in…';
+        try {
+          const cfg = await fetch('/api/monarch/app-url').then(r => r.json());
+          if (!cfg.app_url) throw new Error('The Sales Suite isn\'t set up yet — ask your team lead.');
+          const r = await fetch(cfg.app_url + '/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company, email, password }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.token) throw new Error(data.error || 'Invalid company, email, or password');
+          sessionStorage.setItem('suite_team', JSON.stringify({ token: data.token, role: data.role || 'employee', app_url: cfg.app_url, name: data.fullName || '' }));
+          window.location.replace('/suite.html?team=1');
+        } catch (e) {
+          show(e.message);
+          btn.disabled = false; btn.textContent = 'Sign in to the Suite →';
+        }
+      }
+      document.getElementById('go').addEventListener('click', signIn);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Enter') signIn(); });
+    })();
+  </script>
+</body>
+</html>
