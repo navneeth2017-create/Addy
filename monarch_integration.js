@@ -490,6 +490,16 @@ function installMonarchIntegration(app) {
   });
 
   /**
+   * Public: where the Suite lives (the embed origin). Not a secret — it's
+   * visible as the iframe src — but teammates' sign-in page needs it before
+   * any authentication exists.
+   */
+  app.get('/api/monarch/app-url', (req, res) => {
+    if (!configured() || !MONARCH_APP) return res.status(404).json({ error: 'Sales Suite not configured' });
+    res.json({ app_url: MONARCH_APP });
+  });
+
+  /**
    * Suite pulse — surfaces what their Suite knows (low-stock alerts) right on
    * the Addy dashboard card, so the two systems feel like one. Cached per
    * user for 60s; failures return an empty pulse rather than an error so the
