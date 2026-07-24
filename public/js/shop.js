@@ -620,7 +620,12 @@ function renderCart() {
     // mix / builder / reorder) celebrates its 0→25/30 crossing, and so the
     // next cart after a checkout or clear can celebrate again.
     window._lastPalPct = 0;
-    wrap.innerHTML = `<div class="cart-empty"><svg class="cart-empty-fly" viewBox="0 0 64 64" width="34" height="34" aria-hidden="true"><g transform="rotate(-6 32 32)"><path d="M30.5 30 C26 13 9 4 5 11 C1 18 11 30 29 34.5 Z" fill="#E8873B" opacity="0.85"/><path d="M29.5 35 C16 34 5 43 8.5 51 C12 58.5 26 52 30.5 38 Z" fill="#B96A2C" opacity="0.85"/><path d="M33.5 30 C38 13 55 4 59 11 C63 18 53 30 35 34.5 Z" fill="#E8873B" opacity="0.85"/><path d="M34.5 35 C48 34 59 43 55.5 51 C52 58.5 38 52 33.5 38 Z" fill="#B96A2C" opacity="0.85"/><ellipse cx="32" cy="36.5" rx="2.4" ry="10.5" fill="#5b3a1e"/><circle cx="32" cy="24" r="2.7" fill="#5b3a1e"/></g></svg><div>Your cart is empty</div></div>`;
+    // Empty-cart illustration: the house partner gets his leprechaun; everyone
+    // else gets a simple cart icon.
+    const emptyArt = (window._me && window._me.house_partner)
+      ? LEPRECHAUN_COURIER
+      : `<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="var(--text-muted)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="21" r="1.4"/><circle cx="18" cy="21" r="1.4"/><path d="M1 1h3.2l2.1 12.4a1.6 1.6 0 0 0 1.6 1.3h8.7a1.6 1.6 0 0 0 1.6-1.3L21 6H5.5"/></svg>`;
+    wrap.innerHTML = `<div class="cart-empty"><div class="cart-empty-art">${emptyArt}</div><div>Your cart is empty</div></div>`;
     totalRow.style.display = 'none';
     shippingNote.style.display = 'none';
     checkoutBtn.disabled = true;
