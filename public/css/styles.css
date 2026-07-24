@@ -1490,6 +1490,6 @@ button:active:not(:disabled), .btn:active { transform: scale(0.965); }
 
 /* The empty cart's resting monarch takes a slow bob. */
 .cart-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.cart-empty-fly { animation: cartBob 3.2s ease-in-out infinite; }
-@keyframes cartBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-@media (prefers-reduced-motion: reduce) { .cart-empty-fly { animation: none; } }
+.cart-empty-art { display: flex; animation: cartBob 3.2s ease-in-out infinite; }
+@keyframes cartBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@media (prefers-reduced-motion: reduce) { .cart-empty-art { animation: none; } }
