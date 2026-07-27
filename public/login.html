@@ -37,6 +37,10 @@
 
       <div id="error-msg" class="error-msg"></div>
       <div id="success-msg" class="success-msg"></div>
+      <!-- Explains an unexpected bounce back to this page. Populated by
+           recordSignout() in app.js — without it, being kicked out of the
+           dashboard is silent and undiagnosable without a devtools console. -->
+      <div id="signout-reason" style="display:none;margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#fef3c7;border:1px solid #fcd34d;color:#78350f;font-size:13px;line-height:1.5;text-align:left;"></div>
 
       <div id="login-form-wrap">
         <form onsubmit="handleLogin(event)">
@@ -261,6 +265,21 @@ function hideAll() {
         errorEl.style.display = 'block';
       }
     }
+
+    // If the dashboard bounced us back here, say why. Shown once, then cleared
+    // so it doesn't reappear on a normal visit.
+    (function showSignoutReason() {
+      let reason = null;
+      try {
+        reason = sessionStorage.getItem('addy_signout_reason');
+        sessionStorage.removeItem('addy_signout_reason');
+      } catch (e) { /* storage blocked — nothing to show */ }
+      if (!reason) return;
+      const el = document.getElementById('signout-reason');
+      if (!el) return;
+      el.textContent = 'Signed out: ' + reason;
+      el.style.display = 'block';
+    })();
   </script>
   <script src="/js/pwa.js" defer></script>
 </body>

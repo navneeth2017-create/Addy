@@ -190,11 +190,31 @@ function logout() {
   setTimeout(() => { window.location.replace('/index.html'); }, 2600);
 }
 
+/**
+ * Records WHY we're sending someone back to sign in, so the login page can
+ * tell them. Being bounced with no explanation — dashboard flashes, then
+ * you're back at login — is impossible to diagnose without a devtools console,
+ * which is exactly the situation this exists for. sessionStorage, so it shows
+ * once and doesn't linger.
+ */
+function recordSignout(reason) {
+  try { sessionStorage.setItem('addy_signout_reason', reason); } catch (e) {}
+  console.warn('[addy] signed out:', reason);
+}
+
 function requireAuth(allowedRoles) {
   const token = getToken();
   const role = getRole();
-  if (!token || !role) { window.location.href = '/login.html'; return false; }
-  if (allowedRoles && !allowedRoles.includes(role)) { window.location.href = '/login.html'; return false; }
+  if (!token || !role) {
+    recordSignout(`No saved session on this page (token ${token ? 'present' : 'MISSING'}, role ${role ? '"' + role + '"' : 'MISSING'}).`);
+    window.location.href = '/login.html';
+    return false;
+  }
+  if (allowedRoles && !allowedRoles.includes(role)) {
+    recordSignout(`This page is for ${allowedRoles.join(' or ')} accounts, but your saved role is "${role}".`);
+    window.location.href = '/login.html';
+    return false;
+  }
   if (role !== 'admin') checkAdminMessages();
   return true;
 }
@@ -373,7 +393,11 @@ async function apiFetch(url, options = {}) {
     ...options,
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...options.headers }
   });
-  if (res.status === 401) { logout(); return null; }
+  if (res.status === 401) {
+    recordSignout(`The server rejected your session on ${(options.method || 'GET')} ${url} (401).`);
+    logout();
+    return null;
+  }
   const data = await res.json();
   if (!res.ok && data.error) { showToast(data.error, 'error'); }
   return data;
@@ -571,6 +595,7 @@ function initSessionTimeout() {
       const now = Date.now();
       if (now >= expiry) {
         clearInterval(checkInterval);
+        recordSignout('Your session reached its 24-hour limit.');
         logout();
       } else if (now >= warnAt) {
         let warning = document.getElementById('session-warning');
@@ -641,17 +666,32 @@ async function handleLogin(e) {
       errorEl.style.display = 'block';
       return;
     }
+    const t = data.token;
+    // An UNRECOGNISED role used to fall through to the admin dashboard, which
+    // requires role 'admin' — so the dashboard flashed for a moment and
+    // requireAuth threw you straight back to this page. Forever, with nothing
+    // on screen explaining it. A missing or unexpected role is now a clear
+    // message instead of an invisible loop.
+    const DASHBOARDS = {
+      admin: 'dashboard-admin',
+      dsd: 'dashboard-dsd',
+      member: 'dashboard-dsd',
+      investor: 'dashboard-dsd',
+      rep: 'dashboard-dsd',
+    };
+    const dest = DASHBOARDS[data.role];
+    if (!dest) {
+      localStorage.removeItem('addy_token');
+      localStorage.removeItem('addy_role');
+      errorEl.textContent = data.role
+        ? `Signed in, but your account role ("${data.role}") isn't one this site recognises, so there's no dashboard to open. An admin needs to fix the role on your account.`
+        : `Signed in, but your account has no role set, so there's no dashboard to open. An admin needs to set the role on your account.`;
+      errorEl.style.display = 'block';
+      return;
+    }
     localStorage.setItem('addy_token', data.token);
     localStorage.setItem('addy_role', data.role);
-    const t = data.token;
-    switch (data.role) {
-      case 'admin':       window.location.href = `/dashboard-admin.html?t=${t}`; break;
-      case 'investor':    window.location.href = `/dashboard-dsd.html?t=${t}`; break;
-      case 'dsd':
-      case 'member': window.location.href = `/dashboard-dsd.html?t=${t}`; break;
-      case 'rep':         window.location.href = `/dashboard-dsd.html?t=${t}`; break;
-      default:            window.location.href = `/dashboard-admin.html?t=${t}`;
-    }
+    window.location.href = `/${dest}.html?t=${t}`;
   } catch {
     errorEl.textContent = 'Connection error';
     errorEl.style.display = 'block';
