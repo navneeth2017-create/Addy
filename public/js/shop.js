@@ -34,12 +34,17 @@ async function initShop() {
     document.getElementById('payment-options-wrap')?.classList.add('single-option');
   }
 
-  // Set dashboard link
-  const roleMap = { admin: 'admin', investor: 'investor', dsd: 'owner', dsd: 'dsd', rep: 'rep' };
+  // Set dashboard link. There are only TWO dashboard pages — admin and dsd.
+  // The old map named dashboard-investor/-rep/-owner, none of which exist (and
+  // it had a duplicate `dsd` key), with no `member` entry at all — so members
+  // were sent to /dashboard-undefined.html and reps/investors to a 404.
+  // Everyone who isn't an admin lands on the DSD dashboard, which gates its
+  // own contents by role.
   const token2 = token;
-  document.getElementById('dashboard-link').href = `/dashboard-${roleMap[_role]}.html?t=${token2}`;
+  document.getElementById('dashboard-link').href =
+    `/dashboard-${_role === 'admin' ? 'admin' : 'dsd'}.html?t=${token2}`;
 
-  const roleLabels = { dsd: 'DSD', dsd: 'DSD', rep: 'DSD', admin: 'Admin' };
+  const roleLabels = { dsd: 'DSD', rep: 'DSD', member: 'Team', investor: 'Investor', admin: 'Admin' };
   document.getElementById('user-role').textContent = roleLabels[_role] || _role;
   document.getElementById('user-role').className = `role-badge ${_role}`;
 
@@ -897,12 +902,27 @@ async function placeOrder() {
     // If paying by card with Stripe, create payment intent first
     let stripePaymentIntentId = null;
     if (_selectedPayment === 'card' && _stripeActive && _stripeCardElement) {
-      const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-      const shipping = subtotal >= 350 ? 0 : 35;
-      const processingFee = Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100;
-      const totalCents = Math.round((subtotal + shipping + processingFee) * 100);
-      const intentRes = await apiFetch('/api/payment/intent', { method: 'POST', body: JSON.stringify({ amount_cents: totalCents }) });
+      // The SERVER prices the cart and tells us what it will charge. This used
+      // to compute the amount here and send it, so the charge was whatever
+      // this file calculated — and a stale flat-rate rule once charged a
+      // different amount than the invoice recorded.
+      const intentRes = await apiFetch('/api/payment/intent', {
+        method: 'POST',
+        body: JSON.stringify({ store_id: _currentStoreId || null, shipping_state: state }),
+      });
       if (!intentRes?.clientSecret) { showToast('Card payment error. Please try invoice instead.', 'error'); return; }
+
+      // Never charge a number they didn't see. If the server's total differs
+      // from what's on screen, refresh the totals and make them confirm.
+      const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
+      const shipping = currentShipping();
+      const shownFee = Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100;
+      const shownCents = Math.round((subtotal + shipping + shownFee) * 100);
+      if (Math.abs(intentRes.amount_cents - shownCents) > 1) {
+        showToast(`Your total is $${(intentRes.amount_cents / 100).toFixed(2)} — please review and place the order again.`, 'error');
+        await loadCart();
+        return;
+      }
 
       const { error: stripeError, paymentIntent } = await _stripe.confirmCardPayment(intentRes.clientSecret, {
         payment_method: { card: _stripeCardElement }

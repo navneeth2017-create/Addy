@@ -80,6 +80,9 @@
       companyEl.value = (qs.get('company') || remembered.company || '').trim().toLowerCase();
       emailEl.value = (qs.get('email') || remembered.email || '').trim();
       if (companyEl.value && emailEl.value) { setTimeout(() => pwEl.focus(), 60); }
+      // Arriving here because a kept session ran out — say so, otherwise being
+      // bounced back to a sign-in screen just looks like something broke.
+      if (qs.get('expired') === '1') show('Your session expired — please sign in again.');
 
       async function signIn() {
         err.style.display = 'none';

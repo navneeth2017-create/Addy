@@ -20,6 +20,13 @@ async function loadMonarchSuite() {
   const anchor = document.getElementById('margin-progress');
   if (!anchor || document.getElementById('monarch-suite-card')) return;
 
+  // The Suite belongs to the account OWNER, not their employees —
+  // /api/monarch/status is admin+dsd only. Members were still requesting it on
+  // every dashboard load and eating a 403; only ask when the answer could be
+  // yes.
+  const suiteRole = localStorage.getItem('addy_role');
+  if (suiteRole !== 'dsd' && suiteRole !== 'admin') return;
+
   // A little "powered by Monarch" credit under the ADDY logo — only once the
   // integration is confirmed configured (below), so unbranded installs of
   // this dashboard never mention Monarch.

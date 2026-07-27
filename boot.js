@@ -11,6 +11,17 @@ const express = require('express');
 const { installServerPatches, installPgHotfixes } = require('./server_patches');
 const { installMonarchIntegration } = require('./monarch_integration');
 
+// Node exits the process on an unhandled rejection, so one stray async error
+// anywhere (a background sync, a mail retry, a handler that escaped its
+// try/catch) would take the whole site down mid-order. Log loudly and stay up
+// — the same guard Monarch already runs.
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION (kept alive):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION (kept alive):', err);
+});
+
 // SQL-level hotfixes must be in place before server.js creates its pool.
 installPgHotfixes();
 

@@ -76,6 +76,19 @@
         let sess = null;
         try { sess = JSON.parse(localStorage.getItem('suite_team') || sessionStorage.getItem('suite_team')); } catch (e) {}
         if (!sess || !sess.token || !sess.app_url) { window.location.replace('/suite-login.html'); return; }
+        // A kept session lasts 30 days, so it CAN go stale. Without this the
+        // iframe loaded and Monarch silently rejected the token, leaving a
+        // blank panel with no way forward. Check the expiry here and send them
+        // back to sign in instead.
+        try {
+          const claims = JSON.parse(atob(sess.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+          if (claims.exp && claims.exp * 1000 <= Date.now()) {
+            sessionStorage.removeItem('suite_team');
+            localStorage.removeItem('suite_team');
+            window.location.replace('/suite-login.html?expired=1');
+            return;
+          }
+        } catch (e) { /* unreadable token — let the iframe try and re-auth */ }
         const back = document.getElementById('suite-back-btn');
         back.textContent = 'Sign out';
         back.href = 'javascript:void(0)';
