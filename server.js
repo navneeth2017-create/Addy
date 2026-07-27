@@ -443,6 +443,17 @@ async function migrate() {
     await q('CREATE INDEX IF NOT EXISTS idx_invoices_stripe_intent ON invoices(stripe_payment_intent_id)');
   } catch(e) { console.log('Invoice intent index:', e.message); }
 
+  // Push notifications are per DEVICE, not per user. UNIQUE(user_id) meant
+  // subscribing on a phone replaced the laptop's subscription, so alerts
+  // silently stopped on every device but the most recent one. Key on the
+  // subscription itself instead. Existing rows can't collide (user_id was
+  // unique), so this is safe to apply in place.
+  try {
+    await q('ALTER TABLE push_subscriptions DROP CONSTRAINT IF EXISTS push_subscriptions_user_id_key');
+    await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subs_user_device
+             ON push_subscriptions (user_id, md5(subscription::text))`);
+  } catch(e) { console.log('Push subscription per-device migration:', e.message); }
+
   // ── pricing_tier on users (stores the tier label e.g. 'tier_1', 'custom_15pct') ──
   await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS pricing_tier TEXT DEFAULT NULL');
 
@@ -1818,8 +1829,13 @@ app.post('/api/push/subscribe', authenticate, async (req, res) => {
   try {
     const { subscription } = req.body;
     if (!subscription) return res.status(400).json({ error: 'Subscription required' });
+    // One row PER DEVICE. This used to upsert on user_id alone, so signing in
+    // on a phone replaced the laptop's subscription and notifications silently
+    // stopped there — even though sendPushToUser loops over "all their
+    // devices". Re-registering the same device is a no-op.
     await q(
-      'INSERT INTO push_subscriptions (user_id, subscription) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET subscription=EXCLUDED.subscription',
+      `INSERT INTO push_subscriptions (user_id, subscription) VALUES ($1,$2)
+       ON CONFLICT DO NOTHING`,
       [req.user.id, JSON.stringify(subscription)]
     );
     res.json({ success: true });
@@ -2734,15 +2750,31 @@ app.patch('/api/inventory/:store_id/:product_id', authenticate, async (req, res)
     const { role, id: userId } = req.user;
     const { quantity, low_stock_threshold } = req.body;
     const storeId = parseInt(req.params.store_id);
-    if (role === 'dsd') {
-      const user = await one('SELECT store_id FROM users WHERE id=$1', [userId]);
-      if (user.store_id !== storeId) return res.status(403).json({ error: 'Access denied' });
-    } else if (role !== 'admin') {
-      return res.status(403).json({ error: 'Access denied' });
+    // Mirror the READ path's ownership model. This used to check
+    // users.store_id, which is NULL for DSD owners (they claim stores through
+    // dsd_stores) — so an owner got 403 on their OWN store's inventory and
+    // could never update a count, while members and reps were locked out
+    // entirely even for stores they work.
+    if (role !== 'admin') {
+      let allowed = false;
+      if (role === 'dsd') {
+        allowed = !!(await one('SELECT 1 FROM dsd_stores WHERE dsd_id=$1 AND store_id=$2', [userId, storeId]));
+      } else if (role === 'member') {
+        const me = await one('SELECT parent_id FROM users WHERE id=$1', [userId]);
+        allowed = !!(me?.parent_id && await one('SELECT 1 FROM dsd_stores WHERE dsd_id=$1 AND store_id=$2', [me.parent_id, storeId]));
+      } else if (role === 'rep') {
+        const rep = await one('SELECT id FROM reps WHERE user_id=$1', [userId]);
+        allowed = !!(rep && await one('SELECT 1 FROM rep_store_assignments WHERE rep_id=$1 AND store_id=$2', [rep.id, storeId]));
+      }
+      if (!allowed) return res.status(403).json({ error: 'Access denied' });
     }
+    // Both columns are NOT NULL with defaults (0 / 10). Passing NULL straight
+    // through meant that setting ONLY the quantity on a product with no stock
+    // row yet threw a not-null violation and 500'd — fall back to the column
+    // defaults on insert, and to the existing value on update.
     await q(
       `INSERT INTO store_inventory (store_id,product_id,quantity,low_stock_threshold,updated_at)
-       VALUES ($1,$2,$3,$4,NOW())
+       VALUES ($1,$2,COALESCE($3,0),COALESCE($4,10),NOW())
        ON CONFLICT (store_id,product_id) DO UPDATE SET
          quantity=COALESCE($3,store_inventory.quantity),
          low_stock_threshold=COALESCE($4,store_inventory.low_stock_threshold),
@@ -2968,7 +3000,10 @@ app.get('/api/members', authenticate, authorize('admin'), async (req, res) => {
 });
 
 // ── BULK CSV STORE IMPORT ─────────────────────────────────────────────────────
-app.post('/api/stores/bulk-import', authenticate, async (req, res) => {
+// Investors are read-only everywhere else (restricted columns on the list, 403
+// on PATCH), but this route had no role check at all — so a read-only account
+// could create up to 500 stores in a single call.
+app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'member', 'rep'), async (req, res) => {
   try {
     const { rows } = req.body;
     if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows must be an array' });
@@ -3018,7 +3053,22 @@ app.post('/api/stores/bulk-import', authenticate, async (req, res) => {
       const warning = missingFields.length > 0 ? ` (missing: ${missingFields.join(', ')})` : '';
 
       try {
-        const exists = await one('SELECT id FROM stores WHERE LOWER(name)=LOWER($1)', [name]);
+        // Match on name AND location. Matching on name alone treated every
+        // "Corner Market" in the country as the same store, so importing your
+        // own Corner Market in Dallas silently claimed — or raised a conflict
+        // against — an unrelated one in Miami. Rows with no city/state given
+        // still fall back to a name-only match, which is the best we can do.
+        const city = (row.city || '').trim();
+        const state = (row.state || '').trim();
+        const exists = (city || state)
+          ? await one(
+              `SELECT id FROM stores
+               WHERE LOWER(name)=LOWER($1)
+                 AND LOWER(COALESCE(city,''))=LOWER($2)
+                 AND LOWER(COALESCE(state,''))=LOWER($3)`,
+              [name, city, state]
+            )
+          : await one('SELECT id FROM stores WHERE LOWER(name)=LOWER($1)', [name]);
         if (exists) {
           // Store already exists — claim it to this importer, or flag a conflict.
           const r = await claimImported(exists.id);
