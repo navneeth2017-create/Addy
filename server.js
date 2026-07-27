@@ -1861,17 +1861,35 @@ async function createInvoiceForOrder(orderId) {
 }
 
 // ── STRIPE PAYMENT ENDPOINTS ──────────────────────────────────────────────────
+// The amount to charge is computed HERE from the caller's own cart. It used to
+// be whatever `amount_cents` the browser sent, so the charge was entirely
+// client-controlled; /api/orders would then reject the underpayment, which is
+// a bad place to find out. Quoting server-side means the intent and the order
+// agree by construction.
 app.post('/api/payment/intent', authenticate, async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Card payments not configured. Please use invoice payment.' });
   try {
-    const { amount_cents } = req.body;
-    if (!amount_cents || amount_cents < 50) return res.status(400).json({ error: 'Invalid amount' });
+    const { store_id, shipping_state } = req.body;
+    const quote = await quoteCart({
+      userId: req.user.id, role: req.user.role,
+      storeId: store_id || null, shippingState: shipping_state, paymentMethod: 'card',
+    });
+    if (quote.error) return res.status(400).json({ error: quote.error });
+    const amount = Math.round(quote.total * 100);
+    if (amount < 50) return res.status(400).json({ error: 'Invalid amount' });
     const intent = await stripe.paymentIntents.create({
-      amount: Math.round(amount_cents),
+      amount,
       currency: 'usd',
       automatic_payment_methods: { enabled: true },
+      metadata: { addy_user_id: String(req.user.id) },
     });
-    res.json({ clientSecret: intent.client_secret });
+    // Return the breakdown so the checkout screen shows exactly what we charge.
+    res.json({
+      clientSecret: intent.client_secret,
+      amount_cents: amount,
+      subtotal: quote.subtotal, shipping: quote.shipping_cost, processing_fee: quote.processing_fee,
+      total: quote.total,
+    });
   } catch(e) { console.error('Stripe error:', e.message); res.status(500).json({ error: 'Payment processing error. Please try again.' }); }
 });
 
@@ -2137,6 +2155,54 @@ async function repriceCartForPallets(cartId, userId, role) {
   } catch (e) { console.error('repriceCartForPallets error:', e.message); }
 }
 
+/**
+ * The single source of truth for what a cart costs. Both the Stripe payment
+ * intent and the order itself price through this, so the amount we CHARGE can
+ * never drift from the amount we RECORD — previously the intent was built
+ * from an `amount_cents` the browser sent, which meant the charge was
+ * whatever the client claimed it should be.
+ *
+ * Re-prices pallets first, so the quote reflects the real tier even if the UI
+ * missed a refresh. Returns { error } for the caller to surface, or the full
+ * breakdown plus the loaded rows the order path needs.
+ */
+async function quoteCart({ userId, role, storeId, shippingState, paymentMethod }) {
+  const cart = storeId
+    ? await one('SELECT * FROM carts WHERE user_id=$1 AND store_id=$2', [userId, storeId])
+    : await one('SELECT * FROM carts WHERE user_id=$1 AND store_id IS NULL', [userId]);
+  if (!cart) return { error: 'Cart not found' };
+  await repriceCartForPallets(cart.id, userId, role);
+
+  const items = await all(
+    'SELECT ci.*,p.name,p.stock,p.free_shipping,p.box_type FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1',
+    [cart.id]
+  );
+  if (!items.length) return { error: 'Cart is empty' };
+
+  const boxItems   = items.filter(i => i.box_type);
+  const totalBoxes = boxItems.reduce((a, i) => a + i.quantity, 0);
+  const isRep      = role === 'dsd';
+  const priorOrders  = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [userId]))?.c || 0;
+  const isFirstOrder = priorOrders === 0;
+
+  const subtotal        = items.reduce((a, i) => a + parseFloat(i.price_at_add) * i.quantity, 0);
+  const allFreeShipping = items.every(i => i.free_shipping);
+  const hasCapsuleBox   = boxItems.some(i => i.box_type === CAPSULE_BOX_TYPE);
+  // Free shipping: a half/full pallet (15+ boxes), any order including a
+  // capsules master box, 6+ boxes (unadvertised), a rep's first order, or all
+  // items flagged free. Everything else ships from Arizona at the zone rate.
+  const shipping_cost = (allFreeShipping || totalBoxes >= 6 || hasCapsuleBox || (isRep && isFirstOrder))
+    ? 0 : shippingForState(shippingState);
+  // Stripe fee passthrough: the customer covers the fee so we net the full amount.
+  const processing_fee = paymentMethod === 'card'
+    ? Math.round(((subtotal + shipping_cost + 0.30) / 0.971 - subtotal - shipping_cost) * 100) / 100
+    : 0;
+  const total = Math.round((subtotal + shipping_cost + processing_fee) * 100) / 100;
+
+  return { cart, items, boxItems, totalBoxes, isRep, isFirstOrder,
+           subtotal, shipping_cost, processing_fee, total };
+}
+
 async function getCartWithItems(cartId) {
   const cart = await one('SELECT * FROM carts WHERE id=$1', [cartId]);
   if (!cart) return null;
@@ -2240,30 +2306,24 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
     }
 
-    const cart = store_id
-      ? await one('SELECT * FROM carts WHERE user_id=$1 AND store_id=$2', [userId, store_id])
-      : await one('SELECT * FROM carts WHERE user_id=$1 AND store_id IS NULL', [userId]);
-    if (!cart) return res.status(400).json({ error: 'Cart not found' });
+    // Same quote the payment intent was built from — one pricing path, so the
+    // amount charged and the amount recorded cannot disagree.
+    const quote = await quoteCart({
+      userId, role, storeId: store_id || null,
+      shippingState: shipping_state, paymentMethod: payment_method,
+    });
+    if (quote.error) return res.status(400).json({ error: quote.error });
+    const { cart, items, boxItems, totalBoxes, isRep, isFirstOrder,
+            subtotal, shipping_cost, processing_fee, total } = quote;
 
-    // Pallet pricing is settled server-side one final time before totals, so
-    // the charged amounts are correct even if the UI skipped a refresh.
-    await repriceCartForPallets(cart.id, userId, role);
-
-    const items = await all('SELECT ci.*,p.name,p.stock,p.free_shipping,p.box_type FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=$1', [cart.id]);
-    if (!items.length) return res.status(400).json({ error: 'Cart is empty' });
     for (const item of items) {
       if (item.stock < item.quantity) return res.status(400).json({ error: `Insufficient stock for ${item.name}` });
     }
 
     // ── New-model order rules ──────────────────────────────────────────────
-    // A "master box" is any product tagged with a box_type; cart quantity = number of boxes.
-    const boxItems    = items.filter(i => i.box_type);
-    const totalBoxes  = boxItems.reduce((a,i) => a + i.quantity, 0);
-    const typesInCart = new Set(boxItems.map(i => i.box_type));
-    const isRep       = role === 'dsd';
-    const priorOrders = (await one("SELECT COUNT(*)::int AS c FROM orders WHERE user_id=$1 AND status<>'cancelled'", [userId]))?.c || 0;
-    const isFirstOrder = priorOrders === 0;
-
+    // A "master box" is any product tagged with a box_type; cart quantity =
+    // number of boxes. boxItems/totalBoxes/isRep/isFirstOrder come from the
+    // quote above so the minimums are judged on the same numbers we price on.
     if (isRep && isFirstOrder) {
       // Onboarding: the first order is at least 3 master boxes — any mix (the
       // shop's starter builder mirrors the pallet builder). Its SIZE also
@@ -2282,23 +2342,6 @@ app.post('/api/orders', authenticate, async (req, res) => {
           : 'Your order must include at least one master box (shots, capsules, or gummies).' });
       }
     }
-
-    const subtotal = items.reduce((a,i)=>a+parseFloat(i.price_at_add)*i.quantity,0);
-    const allFreeShipping = items.every(i => i.free_shipping);
-    // Free shipping: a half/full pallet (15+ boxes), any order including a
-    // capsules master box, a rep's first order, or all items flagged free.
-    // Everything else ships from Arizona at the destination's zone rate.
-    const hasCapsuleBox = boxItems.some(i => i.box_type === CAPSULE_BOX_TYPE);
-    // 6+ boxes also ships free — an unadvertised perk, deliberately absent
-    // from all site copy.
-    const shipping_cost = (allFreeShipping || totalBoxes >= 6 || hasCapsuleBox || (isRep && isFirstOrder))
-      ? 0 : shippingForState(shipping_state);
-    // Stripe fee passthrough: customer pays fee so we receive full amount
-    // Formula: (subtotal + shipping + $0.30) / (1 - 0.029) - subtotal - shipping
-    const processing_fee = payment_method === 'card'
-      ? Math.round(((subtotal + shipping_cost + 0.30) / 0.971 - subtotal - shipping_cost) * 100) / 100
-      : 0;
-    const total = Math.round((subtotal + shipping_cost + processing_fee) * 100) / 100;
 
     // An order was marked PAID purely because the client said payment_method
     // was 'card' — no proof of payment anywhere. Anyone could POST

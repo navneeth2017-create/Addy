@@ -902,16 +902,27 @@ async function placeOrder() {
     // If paying by card with Stripe, create payment intent first
     let stripePaymentIntentId = null;
     if (_selectedPayment === 'card' && _stripeActive && _stripeCardElement) {
-      const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-      // Use the SAME shipping rule as the checkout screen and the server
-      // (free for pallets / 6+ boxes / a capsules box, else the destination
-      // zone rate). A stale `subtotal >= 350 ? 0 : 35` here charged the card a
-      // different amount than the total shown and recorded on the invoice.
-      const shipping = currentShipping();
-      const processingFee = Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100;
-      const totalCents = Math.round((subtotal + shipping + processingFee) * 100);
-      const intentRes = await apiFetch('/api/payment/intent', { method: 'POST', body: JSON.stringify({ amount_cents: totalCents }) });
+      // The SERVER prices the cart and tells us what it will charge. This used
+      // to compute the amount here and send it, so the charge was whatever
+      // this file calculated — and a stale flat-rate rule once charged a
+      // different amount than the invoice recorded.
+      const intentRes = await apiFetch('/api/payment/intent', {
+        method: 'POST',
+        body: JSON.stringify({ store_id: _currentStoreId || null, shipping_state: state }),
+      });
       if (!intentRes?.clientSecret) { showToast('Card payment error. Please try invoice instead.', 'error'); return; }
+
+      // Never charge a number they didn't see. If the server's total differs
+      // from what's on screen, refresh the totals and make them confirm.
+      const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
+      const shipping = currentShipping();
+      const shownFee = Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100;
+      const shownCents = Math.round((subtotal + shipping + shownFee) * 100);
+      if (Math.abs(intentRes.amount_cents - shownCents) > 1) {
+        showToast(`Your total is $${(intentRes.amount_cents / 100).toFixed(2)} — please review and place the order again.`, 'error');
+        await loadCart();
+        return;
+      }
 
       const { error: stripeError, paymentIntent } = await _stripe.confirmCardPayment(intentRes.clientSecret, {
         payment_method: { card: _stripeCardElement }

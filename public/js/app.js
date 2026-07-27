@@ -390,8 +390,18 @@ function openInvoice(orderId) {
   document.body.removeChild(a);
 }
 
+// Whole dollars for round figures (revenue, averages — cents are noise there),
+// but exact cents when there ARE cents. This used to round unconditionally,
+// so a $175.60 commission balance displayed as "$176" — money owed, shown
+// wrong. NaN/undefined renders as $0 rather than "$NaN".
 function formatCurrency(n) {
-  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '$0';
+  const hasCents = Math.round(num * 100) % 100 !== 0;
+  return '$' + num.toLocaleString('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: hasCents ? 2 : 0,
+  });
 }
 
 function formatNumber(n) {
