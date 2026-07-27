@@ -398,10 +398,33 @@ function formatNumber(n) {
   return Number(n).toLocaleString('en-US');
 }
 
+// HTML-escape for text nodes and quoted attribute values.
 function esc(str) {
   const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
+  d.textContent = str == null ? '' : str;
+  return d.innerHTML.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+
+// Escape for a value we drop inside a quoted JS string that itself lives in an
+// onclick="" attribute — e.g. onclick="deleteUser(3, '<HERE>')".
+//
+// esc() is NOT safe there: the HTML parser decodes entities BEFORE the JS
+// parser runs, so &#39; turns back into ' and closes the string early. A name
+// like "Sean O'Brien" or a store like "Joe's Deli" threw a SyntaxError and the
+// button silently did nothing. So backslash-escape for JS first, then
+// entity-escape for HTML; the backslashes survive decoding and reach JS intact.
+function escAttr(str) {
+  const js = String(str == null ? '' : str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+  return js
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function timeAgo(dateStr) {
@@ -1814,7 +1837,7 @@ async function loadPendingApprovals() {
       <td><span class="status-badge ${u.status}">${u.status}</span></td>
       <td style="display:flex;gap:8px;">
         ${u.status === 'pending' ? `
-          <button class="btn btn-sm btn-green" onclick="showApprovePricingModal(${u.id}, '${esc(u.name || u.email)}', '${u.role}')">Approve</button>
+          <button class="btn btn-sm btn-green" onclick="showApprovePricingModal(${u.id}, '${escAttr(u.name || u.email)}', '${u.role}')">Approve</button>
           <button class="btn btn-sm btn-danger" onclick="rejectUser(${u.id}, this)">Reject</button>
         ` : `<span style="font-size:12px;color:var(--text-muted);">${u.status === 'active' ? 'Approved' : 'Rejected'}</span>`}
       </td>
@@ -2152,7 +2175,7 @@ async function refreshAdminTable() {
     tbody.innerHTML = data.stores.map(s => `
       <tr>
         <td class="check-col"><input type="checkbox" value="${s.id}" onchange="toggleStoreSelect(${s.id}, this.checked)"></td>
-        <td data-label="Store"><span style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</span>${(() => { const m = storeMissingInfo(s); return m.length ? ` <span title="Missing: ${m.join(', ')}" style="cursor:help;">⚠️</span><button onclick="event.stopPropagation();pingStoreOwner(${s.id}, '${esc(s.name)}')" title="Ping the rep to fix this" style="margin-left:2px;background:none;border:none;cursor:pointer;font-size:13px;padding:0;vertical-align:middle;">📨</button>` : ''; })()}</td>
+        <td data-label="Store"><span style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</span>${(() => { const m = storeMissingInfo(s); return m.length ? ` <span title="Missing: ${m.join(', ')}" style="cursor:help;">⚠️</span><button onclick="event.stopPropagation();pingStoreOwner(${s.id}, '${escAttr(s.name)}')" title="Ping the rep to fix this" style="margin-left:2px;background:none;border:none;cursor:pointer;font-size:13px;padding:0;vertical-align:middle;">📨</button>` : ''; })()}</td>
         <td data-label="Owner">${esc(s.owner_name)}</td>
         <td data-label="Claimed By">${s.claimed_by ? esc(s.claimed_by) : '<span style="color:var(--text-muted);">—</span>'}</td>
         <td data-label="Email">${esc(s.email)}</td>
@@ -2363,7 +2386,7 @@ async function loadUsersTab() {
             : ''
           }
           ${u.role === 'dsd' && u.status === 'active'
-            ? `<button class="btn btn-sm btn-outline" onclick="showAddMemberModal(${u.id}, '${esc(u.name || u.email)}')" title="Add member employee">+ Member</button>`
+            ? `<button class="btn btn-sm btn-outline" onclick="showAddMemberModal(${u.id}, '${escAttr(u.name || u.email)}')" title="Add member employee">+ Member</button>`
             : ''
           }
           ${u.status === 'active'
@@ -2371,22 +2394,22 @@ async function loadUsersTab() {
             : `<button class="btn btn-sm btn-green" onclick="toggleUserStatus(${u.id}, 'active', this)">Activate</button>`
           }
           ${tierableRoles.includes(u.role)
-            ? `<button class="btn btn-sm btn-outline" onclick="showChangeTierModal(${u.id}, '${esc(u.name || u.email)}')">Change Tier</button>`
+            ? `<button class="btn btn-sm btn-outline" onclick="showChangeTierModal(${u.id}, '${escAttr(u.name || u.email)}')">Change Tier</button>`
             : ''
           }
           ${u.role !== 'admin'
-            ? `<button class="btn btn-sm btn-outline" onclick="pingUser(${u.id}, '${esc(u.name || u.email)}')" title="Send this user a message">📨 Ping</button>`
+            ? `<button class="btn btn-sm btn-outline" onclick="pingUser(${u.id}, '${escAttr(u.name || u.email)}')" title="Send this user a message">📨 Ping</button>`
             : ''
           }
           ${u.role === 'dsd' && !u.house_partner
-            ? `<button class="btn btn-sm btn-outline" onclick="makeHousePartner(${u.id}, '${esc(u.name || u.email)}')" title="Lock at 35% and grandfather everyone else at 5% for them">⭐ House</button>`
+            ? `<button class="btn btn-sm btn-outline" onclick="makeHousePartner(${u.id}, '${escAttr(u.name || u.email)}')" title="Lock at 35% and grandfather everyone else at 5% for them">⭐ House</button>`
             : ''
           }
           ${u.role === 'dsd'
-            ? `<button class="btn btn-sm btn-outline" onclick="grantSuitePro(${u.id}, '${esc(u.name || u.email)}')" title="Comp the full Sales Suite (Pro) — no payment, no upgrade prompts">🦋 Suite Pro</button>`
+            ? `<button class="btn btn-sm btn-outline" onclick="grantSuitePro(${u.id}, '${escAttr(u.name || u.email)}')" title="Comp the full Sales Suite (Pro) — no payment, no upgrade prompts">🦋 Suite Pro</button>`
             : ''
           }
-          <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${esc(u.name || u.email)}')">Delete</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id}, '${escAttr(u.name || u.email)}')">Delete</button>
         </div>
       </td>
     </tr>
@@ -2530,12 +2553,16 @@ function showUserDetail(userId) {
       </div>` : ''}
 
       <div style="border-top:1px solid var(--border);padding-top:16px;display:flex;gap:10px;justify-content:space-between;align-items:center;">
-        <button class="btn btn-danger" type="button" onclick="deleteUser(${u.id}, '${esc(u.name || u.email)}', true)">🗑 Delete Account</button>
+        <button class="btn btn-danger" type="button" onclick="deleteUser(${u.id}, '${escAttr(u.name || u.email)}', true)">🗑 Delete Account</button>
         <button class="btn btn-outline" type="button" onclick="document.getElementById('user-detail-modal').classList.remove('active')">Close</button>
       </div>
     </div>
   `;
   modal.classList.add('active');
+  // loadUserPricing() existed but nothing ever called it, so the Custom DSD
+  // Pricing panel sat on "Loading products..." forever and per-partner price
+  // overrides were unreachable from the UI.
+  if (u.role === 'dsd') loadUserPricing(u.id);
 }
 
 async function loadUserPricing(userId) {
@@ -2807,6 +2834,11 @@ async function updateOrderStatus(id, status) {
 async function loadMyOrders(tbodyId) {
   const orders = await apiFetch('/api/orders');
   const tbody = document.getElementById(tbodyId);
+  // The "Total Orders" stat card on the DSD dashboard was never wired to
+  // anything and sat at "--" forever. Fill it before the tbody bail-out so it
+  // still updates on tabs that don't render the table.
+  const ordersStat = document.getElementById('stat-total-orders');
+  if (ordersStat) ordersStat.textContent = (orders || []).length;
   if (!tbody) return;
   window._myOrders = orders || [];
 
@@ -3735,7 +3767,7 @@ async function loadProgramDocs(containerId, manage) {
                <button class="doc-act doc-act-icon" onclick="moveProgramDoc(${d.id}, 1)" title="Move later" ${i === docs.length - 1 ? 'disabled' : ''}>${DOC_ICONS.arrowDown}</button>
                <button class="doc-act" onclick="renameProgramDoc(${d.id})" title="Rename">${DOC_ICONS.pencil}<span>Rename</span></button>
                <button class="doc-act ${d.is_public ? 'is-public' : ''}" onclick="toggleDocPublic(${d.id}, ${d.is_public ? 'false' : 'true'})" title="${d.is_public ? 'Visible on the public landing page — click to hide' : 'Hidden from the public site — click to show'}">${d.is_public ? DOC_ICONS.globe : DOC_ICONS.lock}<span>${d.is_public ? 'Public' : 'Hidden'}</span></button>
-               <button class="doc-act doc-act-icon danger" onclick="deleteProgramDoc(${d.id}, '${esc(d.title)}')" title="Delete">${DOC_ICONS.trash}</button>
+               <button class="doc-act doc-act-icon danger" onclick="deleteProgramDoc(${d.id}, '${escAttr(d.title)}')" title="Delete">${DOC_ICONS.trash}</button>
              </div>`
           : `<div class="doc-actions"><button class="doc-act" onclick="openDocLightbox(${d.id})">${DOC_ICONS.eye}<span>View</span></button></div>`}
       </div>

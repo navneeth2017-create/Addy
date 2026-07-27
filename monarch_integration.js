@@ -178,7 +178,18 @@ async function suiteSession(ws) {
  * Applies to every user with an active provisioned workspace — nothing here
  * is user-specific. Best-effort: callers never let it block a response.
  */
+const _syncInFlight = new Map(); // userId -> promise, prevents double-counting
 async function syncAddyCatalogToSuite(userId) {
+  if (!configured()) return null;
+  // The ledger read and its write are separated by several API calls; two
+  // overlapping runs would each compute the same delta and post it twice.
+  if (_syncInFlight.has(userId)) return _syncInFlight.get(userId);
+  const run = _syncCatalogInner(userId).finally(() => _syncInFlight.delete(userId));
+  _syncInFlight.set(userId, run);
+  return run;
+}
+
+async function _syncCatalogInner(userId) {
   if (!configured()) return null;
   const ws = (await pool.query(
     `SELECT slug, status, monarch_provisioned, monarch_email FROM monarch_workspaces WHERE user_id=$1`,
@@ -189,7 +200,7 @@ async function syncAddyCatalogToSuite(userId) {
   // The ADDY catalog + how many boxes of each this user has paid for.
   const products = (await pool.query(
     `SELECT p.id, p.sku, p.name, p.description, p.retail_price,
-            COALESCE(b.bought, 0) AS bought, COALESCE(s.synced_qty, 0) AS synced
+            COALESCE(b.bought, 0) AS bought, s.synced_qty AS synced_raw
      FROM products p
      LEFT JOIN (
        SELECT oi.product_id, SUM(oi.quantity)::int AS bought
@@ -225,17 +236,27 @@ async function syncAddyCatalogToSuite(userId) {
       });
       continue;
     }
-    if (p.synced === 0 && !ledger.some(l => l[0] === p.id)) {
-      // Product already lived in their Suite before this feature — start the
-      // ledger at "everything so far" WITHOUT a movement, syncing forward only.
+    // A NULL synced_qty means "no ledger row yet" — the product predates this
+    // feature, so adopt its current purchases as the baseline WITHOUT posting a
+    // movement. COALESCE-ing that to 0 made it indistinguishable from a real
+    // ledger value of 0, which silently swallowed the first real purchase of
+    // every product seeded before the user bought anything.
+    if (p.synced_raw === null || p.synced_raw === undefined) {
       ledger.push([p.id, p.bought]);
       continue;
     }
-    const delta = p.bought - p.synced;
+    const synced = Number(p.synced_raw);
+    const delta = p.bought - synced;
     if (delta > 0) {
       await monarchStaffApi('/api/inventory/movements', sso.token, {
         product_id: existing.product_id, change_qty: delta, reason: 'restock',
       });
+      ledger.push([p.id, p.bought]);
+    } else if (delta < 0) {
+      // Purchases went DOWN (an order was cancelled/refunded). Don't claw back
+      // stock they may already have sold — just re-baseline, so their next
+      // purchase produces a correct positive delta instead of being swallowed
+      // until cumulative buys climb past the old high-water mark.
       ledger.push([p.id, p.bought]);
     }
   }

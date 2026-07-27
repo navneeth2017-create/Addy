@@ -70,11 +70,21 @@ const resend = (_resendClient || suiteMailConfigured()) ? {
   emails: {
     send: async (opts) => {
       if (_resendClient) {
-        try { return await _resendClient.emails.send(opts); }
-        catch (e) {
-          if (!suiteMailConfigured()) throw e;
-          console.warn('Resend send failed — retrying via Sales Suite mail:', e.message);
+        // The Resend SDK does NOT throw on failure — it resolves with
+        // { data: null, error: {...} }, including for network errors. Checking
+        // only try/catch made every failed send look successful and silently
+        // skipped the fallback, so mail vanished with nothing in the logs.
+        let out, thrown = null;
+        try { out = await _resendClient.emails.send(opts); }
+        catch (e) { thrown = e; }
+        const failure = thrown || (out && out.error) || null;
+        if (!failure) return out;
+        const why = failure.message || String(failure);
+        if (!suiteMailConfigured()) {
+          // No fallback available — surface it loudly instead of pretending.
+          throw new Error(`Resend send failed: ${why}`);
         }
+        console.warn('Resend send failed — retrying via Sales Suite mail:', why);
       }
       await suiteHouseEmail({ to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
       return { via: 'suite' };
@@ -403,6 +413,35 @@ async function migrate() {
     await q("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check");
     await q("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('admin','dsd','member'))");
   } catch(e) { console.log('Role constraint:', e.message); }
+
+  // ── Cancelling an order marks its invoice and payment 'cancelled', but the
+  // original CHECK constraints didn't allow that value — so every cancellation
+  // threw mid-way, leaving the order cancelled while commissions were never
+  // reversed and the card was never refunded. Allow the value both places.
+  try {
+    await q("ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_payment_status_check");
+    await q("ALTER TABLE invoices ADD CONSTRAINT invoices_payment_status_check CHECK(payment_status IN ('unpaid','paid','overdue','cancelled'))");
+    await q("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_status_check");
+    await q("ALTER TABLE orders ADD CONSTRAINT orders_payment_status_check CHECK(payment_status IN ('unpaid','paid','failed','cancelled','refunded'))");
+  } catch(e) { console.log('Payment status constraint:', e.message); }
+
+  // Invoice numbers come from a sequence now (see generateInvoiceNumber).
+  // Seed it past whatever the old COUNT(*)+1 scheme already handed out so
+  // existing invoice numbers are never reissued.
+  try {
+    await q('CREATE SEQUENCE IF NOT EXISTS invoice_number_seq');
+    await q(`SELECT setval('invoice_number_seq', GREATEST(
+               (SELECT count(*) FROM invoices),
+               (SELECT COALESCE(MAX(split_part(invoice_number,'-',3)::bigint), 0)
+                  FROM invoices WHERE invoice_number ~ '^WC-[0-9]+-[0-9]+$')
+             ) + 1, false)`);
+  } catch(e) { console.log('Invoice sequence:', e.message); }
+
+  // The reuse check on card payments looks intents up by id; without this the
+  // lookup is a sequential scan of every invoice on every checkout.
+  try {
+    await q('CREATE INDEX IF NOT EXISTS idx_invoices_stripe_intent ON invoices(stripe_payment_intent_id)');
+  } catch(e) { console.log('Invoice intent index:', e.message); }
 
   // ── pricing_tier on users (stores the tier label e.g. 'tier_1', 'custom_15pct') ──
   await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS pricing_tier TEXT DEFAULT NULL');
@@ -1089,12 +1128,41 @@ app.post('/api/stores', authenticate, authorize('admin'), async (req, res) => {
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
+/**
+ * Who may edit a given store — the same ownership model GET /api/stores reads
+ * from (owner_stores / rep_store_assignments / parent DSD), which this route
+ * used to ignore entirely. The old check only looked at users.store_id, a
+ * column DSD owners don't populate, so it locked owners out of their OWN store
+ * while leaving every rep and member free to edit ANY store in the directory —
+ * including its wholesale and retail pricing.
+ */
+async function canEditStore(user, storeId) {
+  const { role, id: userId } = user;
+  if (role === 'admin') return true;
+  if (role === 'investor') return false;
+  if (role === 'dsd') {
+    const owned = await one('SELECT 1 AS ok FROM owner_stores WHERE owner_id=$1 AND store_id=$2', [userId, storeId]);
+    if (owned) return true;
+    return !!(user.store_id && Number(user.store_id) === storeId);
+  }
+  if (role === 'member') {
+    const me = await one('SELECT parent_id FROM users WHERE id=$1', [userId]);
+    if (!me?.parent_id) return false;
+    return !!(await one('SELECT 1 AS ok FROM owner_stores WHERE owner_id=$1 AND store_id=$2', [me.parent_id, storeId]));
+  }
+  if (role === 'rep') {
+    const rep = await one('SELECT id FROM reps WHERE user_id=$1', [userId]);
+    if (!rep) return false;
+    return !!(await one('SELECT 1 AS ok FROM rep_store_assignments WHERE rep_id=$1 AND store_id=$2', [rep.id, storeId]));
+  }
+  return false;
+}
+
 app.patch('/api/stores/:id', authenticate, async (req, res) => {
   try {
-    const { role, store_id } = req.user;
     const id = parseInt(req.params.id);
-    if (role === 'dsd' && store_id !== id) return res.status(403).json({ error: 'Access denied' });
-    if (role === 'investor') return res.status(403).json({ error: 'Access denied' });
+    if (!Number.isInteger(id)) return res.status(404).json({ error: 'Store not found' });
+    if (!(await canEditStore(req.user, id))) return res.status(403).json({ error: 'Access denied' });
     const store = await one('SELECT * FROM stores WHERE id=$1', [id]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
     const allowed = ['name','owner_name','email','address','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status'];
@@ -1768,9 +1836,18 @@ app.delete('/api/push/unsubscribe', authenticate, async (req, res) => {
 // ── INVOICE HELPERS ───────────────────────────────────────────────────────────
 async function generateInvoiceNumber() {
   const year = new Date().getFullYear();
-  const count = await one('SELECT COUNT(*) as c FROM invoices');
-  const num = String(parseInt(count?.c || 0) + 1).padStart(4, '0');
-  return `WC-${year}-${num}`;
+  // COUNT(*)+1 handed two simultaneous checkouts the SAME invoice number, and
+  // reused a number whenever an invoice was deleted. A sequence is atomic and
+  // never rewinds. (Falls back to the old count if the sequence is somehow
+  // missing, so a checkout never fails over invoice numbering.)
+  let num;
+  try {
+    num = (await one("SELECT nextval('invoice_number_seq') AS n")).n;
+  } catch (e) {
+    console.error('invoice_number_seq unavailable, falling back to COUNT:', e.message);
+    num = parseInt((await one('SELECT COUNT(*) as c FROM invoices'))?.c || 0) + 1;
+  }
+  return `WC-${year}-${String(num).padStart(4, '0')}`;
 }
 
 async function createInvoiceForOrder(orderId) {
@@ -1798,15 +1875,33 @@ app.post('/api/payment/intent', authenticate, async (req, res) => {
   } catch(e) { console.error('Stripe error:', e.message); res.status(500).json({ error: 'Payment processing error. Please try again.' }); }
 });
 
+// Belt-and-braces: /api/orders already verifies the intent and marks the
+// invoice paid. This endpoint stays for clients that call it, but it used to
+// take ANY order_id from ANY logged-in user and mark it paid — so a $0.50
+// intent of your own could settle someone else's $5,000 order. It now only
+// touches YOUR order, and only for an intent that actually covers its total.
 app.post('/api/payment/confirm', authenticate, async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Card payments not configured' });
   try {
     const { payment_intent_id, order_id } = req.body;
-    const intent = await stripe.paymentIntents.retrieve(payment_intent_id);
+    if (!payment_intent_id || !order_id) return res.status(400).json({ error: 'payment_intent_id and order_id required' });
+    const order = await one('SELECT id, user_id, total FROM orders WHERE id=$1', [order_id]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (req.user.role !== 'admin' && order.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    const intent = await stripe.paymentIntents.retrieve(String(payment_intent_id));
     if (intent.status !== 'succeeded') return res.status(400).json({ error: 'Payment not completed' });
-    await q('UPDATE orders SET payment_status=$1 WHERE id=$2', ['paid', order_id]);
+    if (Number(intent.amount_received ?? intent.amount) + 1 < Math.round(parseFloat(order.total) * 100)) {
+      console.error(`Underpaid confirm for order ${order.id}: intent ${intent.id}`);
+      return res.status(400).json({ error: 'The amount charged did not match the order total.' });
+    }
+    const reused = await one('SELECT order_id FROM invoices WHERE stripe_payment_intent_id=$1 AND order_id<>$2',
+      [String(payment_intent_id), order.id]);
+    if (reused) return res.status(409).json({ error: 'That payment has already been applied to another order.' });
+    await q('UPDATE orders SET payment_status=$1 WHERE id=$2', ['paid', order.id]);
     await q('UPDATE invoices SET payment_status=$1, paid_at=NOW(), stripe_payment_intent_id=$2 WHERE order_id=$3',
-      ['paid', payment_intent_id, order_id]);
+      ['paid', String(payment_intent_id), order.id]);
     res.json({ success: true });
   } catch(e) { console.error('Stripe confirm error:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
@@ -1816,8 +1911,8 @@ app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
   try {
     const { role, id: userId } = req.user;
     const order = role === 'admin'
-      ? await one('SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone FROM orders o JOIN users u ON u.id=o.user_id WHERE o.id=$1', [req.params.orderId])
-      : await one('SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone FROM orders o JOIN users u ON u.id=o.user_id WHERE o.id=$1 AND o.user_id=$2', [req.params.orderId, userId]);
+      ? await one('SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone FROM orders o LEFT JOIN users u ON u.id=o.user_id WHERE o.id=$1', [req.params.orderId])
+      : await one('SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone FROM orders o LEFT JOIN users u ON u.id=o.user_id WHERE o.id=$1 AND o.user_id=$2', [req.params.orderId, userId]);
     if (!order) return res.status(404).send('Invoice not found');
     const invoice = await one('SELECT * FROM invoices WHERE order_id=$1', [req.params.orderId]);
     if (!invoice) return res.status(404).send('Invoice not found');
@@ -1944,7 +2039,7 @@ app.get('/api/invoices', authenticate, async (req, res) => {
   try {
     const { role, id: userId } = req.user;
     const invoices = role === 'admin'
-      ? await all('SELECT i.*, o.total, o.user_id, u.name as user_name, u.email as user_email FROM invoices i JOIN orders o ON o.id=i.order_id JOIN users u ON u.id=o.user_id ORDER BY i.created_at DESC')
+      ? await all('SELECT i.*, o.total, o.user_id, u.name as user_name, u.email as user_email FROM invoices i JOIN orders o ON o.id=i.order_id LEFT JOIN users u ON u.id=o.user_id ORDER BY i.created_at DESC')
       : await all('SELECT i.*, o.total FROM invoices i JOIN orders o ON o.id=i.order_id WHERE o.user_id=$1 ORDER BY i.created_at DESC', [userId]);
     res.json(invoices);
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
@@ -2133,7 +2228,7 @@ app.delete('/api/cart', authenticate, async (req, res) => {
 app.post('/api/orders', authenticate, async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const { store_id, payment_method, shipping_name, shipping_address, shipping_city, shipping_state, shipping_zip, notes } = req.body;
+    const { store_id, payment_method, shipping_name, shipping_address, shipping_city, shipping_state, shipping_zip, notes, stripe_payment_intent_id } = req.body;
     if (!payment_method) return res.status(400).json({ error: 'Payment method required' });
     if (!shipping_address || !shipping_city || !shipping_state || !shipping_zip) return res.status(400).json({ error: 'Complete shipping address required' });
 
@@ -2204,7 +2299,34 @@ app.post('/api/orders', authenticate, async (req, res) => {
       ? Math.round(((subtotal + shipping_cost + 0.30) / 0.971 - subtotal - shipping_cost) * 100) / 100
       : 0;
     const total = Math.round((subtotal + shipping_cost + processing_fee) * 100) / 100;
-    const payment_status = payment_method === 'card' ? 'paid' : 'unpaid';
+
+    // An order was marked PAID purely because the client said payment_method
+    // was 'card' — no proof of payment anywhere. Anyone could POST
+    // {payment_method:'card'} and walk off with a paid order, or charge a $1
+    // intent against a $5,000 cart. Verify with Stripe against the total WE
+    // computed, and refuse to reuse an intent that's already paid for another
+    // order.
+    let payment_status = 'unpaid';
+    if (payment_method === 'card') {
+      if (!stripe) return res.status(503).json({ error: 'Card payments not configured. Please use invoice payment.' });
+      if (!stripe_payment_intent_id) return res.status(400).json({ error: 'Card payment was not completed. Please try again.' });
+      let intent;
+      try {
+        intent = await stripe.paymentIntents.retrieve(String(stripe_payment_intent_id));
+      } catch (e) {
+        console.error('Stripe intent lookup failed:', e.message);
+        return res.status(400).json({ error: 'Card payment could not be verified. Please try again.' });
+      }
+      if (intent.status !== 'succeeded') return res.status(400).json({ error: 'Card payment was not completed. Please try again.' });
+      // Allow a cent of float for the fee-passthrough rounding; never allow less.
+      if (Number(intent.amount_received ?? intent.amount) + 1 < Math.round(total * 100)) {
+        console.error(`Underpaid intent ${intent.id}: paid ${intent.amount_received} for a $${total} order`);
+        return res.status(400).json({ error: 'The amount charged did not match your order total. You have not been charged for this order — please contact support.' });
+      }
+      const reused = await one('SELECT order_id FROM invoices WHERE stripe_payment_intent_id=$1', [String(stripe_payment_intent_id)]);
+      if (reused) return res.status(409).json({ error: 'That payment has already been applied to another order.' });
+      payment_status = 'paid';
+    }
 
     const client = await pool.connect();
     let order;
@@ -2220,7 +2342,20 @@ app.post('/api/orders', authenticate, async (req, res) => {
       for (const item of items) {
         await client.query('INSERT INTO order_items (order_id,product_id,quantity,unit_price,total_price) VALUES ($1,$2,$3,$4,$5)',
           [order.id, item.product_id, item.quantity, item.price_at_add, parseFloat(item.price_at_add)*item.quantity]);
-        await client.query('UPDATE products SET stock=stock-$1 WHERE id=$2', [item.quantity, item.product_id]);
+        // The decrement was unconditional, so two checkouts racing for the last
+        // box both "succeeded" and stock went negative — we'd promise inventory
+        // we don't have. The stock>=qty predicate makes Postgres serialize the
+        // losers behind the row lock and then match zero rows, which rolls the
+        // whole order back.
+        const dec = await client.query(
+          'UPDATE products SET stock=stock-$1 WHERE id=$2 AND stock >= $1 RETURNING stock',
+          [item.quantity, item.product_id]
+        );
+        if (dec.rowCount === 0) {
+          const err = new Error(`OUT_OF_STOCK:${item.name || 'item'}`);
+          err.outOfStock = item.name || 'An item in your cart';
+          throw err;
+        }
       }
       await client.query('DELETE FROM cart_items WHERE cart_id=$1', [cart.id]);
       // First order locks the rep's rate by ITS size: 27+ boxes → 30%,
@@ -2231,7 +2366,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
         await client.query('UPDATE users SET locked_discount_pct=$1 WHERE id=$2 AND locked_discount_pct IS NULL', [lockPct, userId]);
       }
       await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
+    } catch(e) { try { await client.query('ROLLBACK'); } catch(_) {} throw e; }
     finally { client.release(); }
 
     await logActivity('placed_order', `Order #${order.id}`, req.user.email);
@@ -2244,6 +2379,15 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
     // Auto-generate invoice
     const invoice = await createInvoiceForOrder(order.id);
+
+    // Record the verified payment on the invoice here rather than waiting for
+    // the client to call /api/payment/confirm — that call is best-effort and a
+    // closed tab used to leave a charged card with an "unpaid" invoice (and no
+    // intent id, so the refund-on-cancel path had nothing to refund).
+    if (payment_status === 'paid' && stripe_payment_intent_id) {
+      await q('UPDATE invoices SET payment_status=$1, paid_at=NOW(), stripe_payment_intent_id=$2 WHERE order_id=$3',
+        ['paid', String(stripe_payment_intent_id), order.id]);
+    }
 
     // Push notification to admins
     sendPushToAdmins(
@@ -2322,14 +2466,30 @@ app.post('/api/orders', authenticate, async (req, res) => {
     }
 
     res.status(201).json({ ...order, invoice_number: invoice?.invoice_number });
-  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+  } catch(e) {
+    console.error(e.message);
+    // Out of stock is the customer's problem to see, not a generic 500 — and
+    // if we already took their card for an order we then rolled back, give the
+    // money straight back rather than leaving a charge with no order behind it.
+    if (e.outOfStock) {
+      if (stripe && req.body?.stripe_payment_intent_id) {
+        try {
+          await stripe.refunds.create({ payment_intent: String(req.body.stripe_payment_intent_id) });
+        } catch (re) { console.error('Refund after out-of-stock failed:', re.message); }
+      }
+      return res.status(409).json({
+        error: `${e.outOfStock} just sold out while you were checking out. Your cart is unchanged and you have not been charged — please adjust the quantity and try again.`,
+      });
+    }
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
 });
 
 app.get('/api/orders', authenticate, async (req, res) => {
   try {
     const { role, id: userId } = req.user;
     const orders = role === 'admin'
-      ? await all('SELECT o.*,u.name as user_name,u.email as user_email,s.name as store_name FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN stores s ON s.id=o.store_id ORDER BY o.created_at DESC')
+      ? await all('SELECT o.*,u.name as user_name,u.email as user_email,s.name as store_name FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN stores s ON s.id=o.store_id ORDER BY o.created_at DESC')
       : await all('SELECT o.*,s.name as store_name FROM orders o LEFT JOIN stores s ON s.id=o.store_id WHERE o.user_id=$1 ORDER BY o.created_at DESC', [userId]);
     const result = await Promise.all(orders.map(async o => {
       const items = await all('SELECT oi.*,COALESCE(p.name,\'[Deleted Product]\') as name FROM order_items oi LEFT JOIN products p ON p.id=oi.product_id WHERE oi.order_id=$1', [o.id]);
@@ -2454,10 +2614,13 @@ app.get('/api/inventory', authenticate, async (req, res) => {
     const { role, id: userId } = req.user;
     let storeIds = [];
     if (role === 'dsd') {
-      const user = await one('SELECT store_id FROM users WHERE id=$1', [userId]);
-      if (user.store_id) storeIds = [user.store_id];
-    } else if (role === 'dsd') {
+      // DSDs claim stores through dsd_stores; users.store_id is NULL for them.
+      // A duplicate `else if (role === 'dsd')` made this branch unreachable, so
+      // every DSD's Inventory tab came back empty.
       storeIds = (await all('SELECT store_id FROM dsd_stores WHERE dsd_id=$1', [userId])).map(r=>r.store_id);
+    } else if (role === 'member') {
+      const user = await one('SELECT store_id FROM users WHERE id=$1', [userId]);
+      if (user?.store_id) storeIds = [user.store_id];
     } else if (role === 'rep') {
       const rep = await one('SELECT id FROM reps WHERE user_id=$1', [userId]);
       if (rep) storeIds = (await all('SELECT store_id FROM rep_store_assignments WHERE rep_id=$1', [rep.id])).map(r=>r.store_id);
@@ -3221,23 +3384,30 @@ app.delete('/api/program-documents/:id', authenticate, authorize('admin'), async
 // Request a payout
 app.post('/api/payouts/request', authenticate, authorize('dsd'), async (req, res) => {
   try {
-    // Use a transaction to prevent race conditions on double-submit
+    // Use a transaction to prevent race conditions on double-submit.
+    // `userData` must live OUTSIDE the inner try — it was referenced after it
+    // (as `user`), which threw ReferenceError *after* the INSERT had already
+    // committed: the rep saw a 500 and then "you already have a pending
+    // request". release() is left to `finally` alone; calling it in the early
+    // returns too made pg throw "client already released" from finally, which
+    // then tried to respond twice and took the process down.
     const client = await pool.connect();
-    let pr, balance;
+    let pr, balance, userData;
     try {
       await client.query('BEGIN');
       const user = await client.query('SELECT commission_balance, name, email FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
-      const userData = user.rows[0];
+      userData = user.rows[0];
       balance = parseFloat(userData?.commission_balance || 0);
-      if (balance <= 0) { await client.query('ROLLBACK'); client.release(); return res.status(400).json({ error: 'No commission balance available' }); }
+      if (balance <= 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No commission balance available' }); }
       const existing = await client.query("SELECT id FROM payout_requests WHERE user_id=$1 AND status='pending'", [req.user.id]);
-      if (existing.rows.length) { await client.query('ROLLBACK'); client.release(); return res.status(400).json({ error: 'You already have a pending payout request' }); }
+      if (existing.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'You already have a pending payout request' }); }
       const prResult = await client.query('INSERT INTO payout_requests (user_id, amount) VALUES ($1,$2) RETURNING id', [req.user.id, balance]);
       pr = prResult.rows[0];
       await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); client.release(); throw e; }
+    } catch(e) { try { await client.query('ROLLBACK'); } catch(_) {} throw e; }
     finally { client.release(); }
-    await logActivity('payout_requested', `$${balance.toFixed(2)} by ${user.name || user.email}`, user.email);
+    if (!pr) return; // an early return above already answered
+    await logActivity('payout_requested', `$${balance.toFixed(2)} by ${userData?.name || userData?.email}`, userData?.email);
     res.json({ success: true, id: pr.id, amount: balance });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

@@ -34,12 +34,17 @@ async function initShop() {
     document.getElementById('payment-options-wrap')?.classList.add('single-option');
   }
 
-  // Set dashboard link
-  const roleMap = { admin: 'admin', investor: 'investor', dsd: 'owner', dsd: 'dsd', rep: 'rep' };
+  // Set dashboard link. There are only TWO dashboard pages — admin and dsd.
+  // The old map named dashboard-investor/-rep/-owner, none of which exist (and
+  // it had a duplicate `dsd` key), with no `member` entry at all — so members
+  // were sent to /dashboard-undefined.html and reps/investors to a 404.
+  // Everyone who isn't an admin lands on the DSD dashboard, which gates its
+  // own contents by role.
   const token2 = token;
-  document.getElementById('dashboard-link').href = `/dashboard-${roleMap[_role]}.html?t=${token2}`;
+  document.getElementById('dashboard-link').href =
+    `/dashboard-${_role === 'admin' ? 'admin' : 'dsd'}.html?t=${token2}`;
 
-  const roleLabels = { dsd: 'DSD', dsd: 'DSD', rep: 'DSD', admin: 'Admin' };
+  const roleLabels = { dsd: 'DSD', rep: 'DSD', member: 'Team', investor: 'Investor', admin: 'Admin' };
   document.getElementById('user-role').textContent = roleLabels[_role] || _role;
   document.getElementById('user-role').className = `role-badge ${_role}`;
 
@@ -898,7 +903,11 @@ async function placeOrder() {
     let stripePaymentIntentId = null;
     if (_selectedPayment === 'card' && _stripeActive && _stripeCardElement) {
       const subtotal = (_cart.items || []).reduce((a, i) => a + i.price_at_add * i.quantity, 0);
-      const shipping = subtotal >= 350 ? 0 : 35;
+      // Use the SAME shipping rule as the checkout screen and the server
+      // (free for pallets / 6+ boxes / a capsules box, else the destination
+      // zone rate). A stale `subtotal >= 350 ? 0 : 35` here charged the card a
+      // different amount than the total shown and recorded on the invoice.
+      const shipping = currentShipping();
       const processingFee = Math.round(((subtotal + shipping + 0.30) / 0.971 - subtotal - shipping) * 100) / 100;
       const totalCents = Math.round((subtotal + shipping + processingFee) * 100);
       const intentRes = await apiFetch('/api/payment/intent', { method: 'POST', body: JSON.stringify({ amount_cents: totalCents }) });

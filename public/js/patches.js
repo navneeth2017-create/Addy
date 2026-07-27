@@ -85,7 +85,7 @@ async function refreshAdminTable() {
     tbody.innerHTML = data.stores.map(s => `
       <tr>
         <td class="check-col"><input type="checkbox" value="${s.id}" onchange="toggleStoreSelect(${s.id}, this.checked)"></td>
-        <td data-label="Store"><span style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</span>${(() => { const m = storeMissingInfo(s); return m.length ? ` <span title="Missing: ${m.join(', ')}" style="cursor:help;">⚠️</span><button onclick="event.stopPropagation();pingStoreOwner(${s.id}, '${esc(s.name)}')" title="Ping the rep to fix this" style="margin-left:2px;background:none;border:none;cursor:pointer;font-size:13px;padding:0;vertical-align:middle;">📨</button>` : ''; })()}</td>
+        <td data-label="Store"><span style="cursor:pointer" onclick="showStoreDetail(${s.id})"><span class="status-dot ${s.status}"></span>${esc(s.name)}</span>${(() => { const m = storeMissingInfo(s); return m.length ? ` <span title="Missing: ${m.join(', ')}" style="cursor:help;">⚠️</span><button onclick="event.stopPropagation();pingStoreOwner(${s.id}, '${escAttr(s.name)}')" title="Ping the rep to fix this" style="margin-left:2px;background:none;border:none;cursor:pointer;font-size:13px;padding:0;vertical-align:middle;">📨</button>` : ''; })()}</td>
         <td data-label="Owner">${esc(s.owner_name)}</td>
         <td data-label="Claimed By">${s.claimed_by ? esc(s.claimed_by) : '<span style="color:var(--text-muted);">—</span>'}</td>
         <td data-label="Email">${esc(s.email)}</td>
@@ -163,8 +163,8 @@ async function loadBackupsList() {
           <td>${esc(b.kind)}</td>
           <td>${(b.size / 1024 / 1024).toFixed(2)} MB</td>
           <td style="white-space:nowrap;">
-            <button class="btn btn-sm btn-outline" onclick="previewBackup('${esc(b.fileId)}')">👁 Preview</button>
-            <button class="btn btn-sm btn-green" onclick="restoreBackup('${esc(b.fileId)}', '${esc(b.fileName.split('/').pop())}')">↩ Restore</button>
+            <button class="btn btn-sm btn-outline" onclick="previewBackup('${escAttr(b.fileId)}')">👁 Preview</button>
+            <button class="btn btn-sm btn-green" onclick="restoreBackup('${escAttr(b.fileId)}', '${escAttr(b.fileName.split('/').pop())}')">↩ Restore</button>
           </td>
         </tr>`).join('')}
       </tbody>
