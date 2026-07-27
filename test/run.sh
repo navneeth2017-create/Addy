@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boots both servers and runs the money-path suites. See test/README.md.
+# Boots both servers and runs every suite. See test/README.md.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 export DATABASE_URL="${DATABASE_URL:-postgres://monarch:monarch@127.0.0.1:5432/addy}"
@@ -40,7 +40,8 @@ done
 [ "$ready" -eq 1 ] || { echo "servers never became ready"; tail -5 /tmp/addy-test-invoice.log; exit 1; }
 
 fails=0
-for t in test/pricing.test.mjs test/card-payments.test.mjs test/refund-on-rollback.test.mjs; do
+for t in test/auth-roles.test.mjs test/ordering.test.mjs test/inventory.test.mjs \
+         test/pricing.test.mjs test/card-payments.test.mjs test/refund-on-rollback.test.mjs; do
   echo "── $t"
   node "$t" || fails=$((fails+1))
 done
