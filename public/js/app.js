@@ -107,6 +107,13 @@ function urlBase64ToUint8Array(base64String) {
 
 function isImpersonating() { return !!sessionStorage.getItem('addy_preview_token'); }
 
+/** Ends an admin "View as" preview in this tab. */
+function clearPreviewSession() {
+  sessionStorage.removeItem('addy_preview_token');
+  sessionStorage.removeItem('addy_preview_role');
+  sessionStorage.removeItem('addy_preview_admin_email');
+}
+
 async function viewAsUser(userId) {
   const result = await apiFetch('/api/admin/impersonate/' + userId, { method: 'POST' });
   if (!result || !result.success) return;
@@ -140,6 +147,12 @@ function renderImpersonationBanner() {
 function logout() {
   localStorage.removeItem('addy_token');
   localStorage.removeItem('addy_role');
+  // Also end any admin "View as" preview. getToken()/getRole() PREFER the
+  // preview session, so leaving it behind meant a stale preview outlived the
+  // sign-out and then overrode the next real login in that tab — an admin
+  // would sign in, be treated as whichever account they last previewed, and
+  // get bounced off their own dashboard with no way out but a new tab.
+  clearPreviewSession();
 
   // Cover the dashboard IMMEDIATELY — no opacity transition on the overlay itself
   const overlay = document.createElement('div');
@@ -689,6 +702,11 @@ async function handleLogin(e) {
       errorEl.style.display = 'block';
       return;
     }
+    // A fresh sign-in always wins. getToken()/getRole() prefer the preview
+    // session, so without this a leftover "View as" preview in this tab
+    // silently hijacked the new login — you'd sign in as yourself and be
+    // treated as whoever you last previewed.
+    clearPreviewSession();
     localStorage.setItem('addy_token', data.token);
     localStorage.setItem('addy_role', data.role);
     window.location.href = `/${dest}.html?t=${t}`;
