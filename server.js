@@ -1850,6 +1850,28 @@ async function generateInvoiceNumber() {
   return `WC-${year}-${String(num).padStart(4, '0')}`;
 }
 
+/**
+ * Give money back for a charge that never became an order.
+ *
+ * The browser confirms the card with Stripe BEFORE it posts /api/orders, so by
+ * the time we validate anything the customer has already paid. Every rejection
+ * on that route therefore strands a real charge — this was found live: two
+ * buyers raced for the last boxes, the loser was charged, told "Insufficient
+ * stock", and never refunded. Best-effort and never throws: a failed refund
+ * must not turn a clean rejection into a 500, but it must be loud in the log.
+ */
+async function refundOrphanCharge(intentId, why) {
+  if (!stripe || !intentId) return;
+  try {
+    const intent = await stripe.paymentIntents.retrieve(String(intentId));
+    if (intent.status !== 'succeeded') return; // nothing was captured
+    await stripe.refunds.create({ payment_intent: String(intentId) });
+    console.log(`↩️  Refunded orphaned charge ${intentId} (${why})`);
+  } catch (e) {
+    console.error(`REFUND FAILED for ${intentId} (${why}) — REFUND THIS BY HAND:`, e.message);
+  }
+}
+
 async function createInvoiceForOrder(orderId) {
   const invoiceNumber = await generateInvoiceNumber();
   const dueDate = new Date();
@@ -1874,7 +1896,7 @@ app.post('/api/payment/intent', authenticate, async (req, res) => {
       userId: req.user.id, role: req.user.role,
       storeId: store_id || null, shippingState: shipping_state, paymentMethod: 'card',
     });
-    if (quote.error) return res.status(400).json({ error: quote.error });
+    if (quote.error) return fail(400, quote.error);
     const amount = Math.round(quote.total * 100);
     if (amount < 50) return res.status(400).json({ error: 'Invalid amount' });
     const intent = await stripe.paymentIntents.create({
@@ -2295,8 +2317,24 @@ app.post('/api/orders', authenticate, async (req, res) => {
   try {
     const { id: userId, role } = req.user;
     const { store_id, payment_method, shipping_name, shipping_address, shipping_city, shipping_state, shipping_zip, notes, stripe_payment_intent_id } = req.body;
+
+    // The card is already charged by the time we get here (the browser confirms
+    // with Stripe first), so ANY rejection below would otherwise leave the
+    // customer paid-up with no order. Reject through this and the money goes
+    // back automatically. `refund: false` is for the one case where the charge
+    // rightfully belongs to a DIFFERENT order — refunding there would reverse
+    // someone else's good payment.
+    const fail = async (code, error, { refund = true } = {}) => {
+      if (refund && payment_method === 'card' && stripe_payment_intent_id) {
+        await refundOrphanCharge(stripe_payment_intent_id, error);
+      }
+      return res.status(code).json({ error });
+    };
+
     if (!payment_method) return res.status(400).json({ error: 'Payment method required' });
-    if (!shipping_address || !shipping_city || !shipping_state || !shipping_zip) return res.status(400).json({ error: 'Complete shipping address required' });
+    if (!shipping_address || !shipping_city || !shipping_state || !shipping_zip) {
+      return fail(400, 'Complete shipping address required');
+    }
 
     // Server-side enforcement: only users explicitly granted invoice access can pay this way
     if (payment_method === 'invoice') {
@@ -2317,7 +2355,9 @@ app.post('/api/orders', authenticate, async (req, res) => {
             subtotal, shipping_cost, processing_fee, total } = quote;
 
     for (const item of items) {
-      if (item.stock < item.quantity) return res.status(400).json({ error: `Insufficient stock for ${item.name}` });
+      if (item.stock < item.quantity) {
+        return fail(409, `${item.name} sold out while you were checking out. You have not been charged — please adjust the quantity and try again.`);
+      }
     }
 
     // ── New-model order rules ──────────────────────────────────────────────
@@ -2329,7 +2369,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
       // shop's starter builder mirrors the pallet builder). Its SIZE also
       // locks the rep's rate: 3-14 boxes → 20%, 15+ → 25%, 27+ → 30%.
       if (totalBoxes < 3) {
-        return res.status(400).json({ error: 'Your first order must be at least 3 master boxes — any mix of shots, capsules, and gummies.' });
+        return fail(400, 'Your first order must be at least 3 master boxes — any mix of shots, capsules, and gummies.');
       }
     } else if (isRep) {
       // Ongoing minimum by locked tier: 30%+ reps order 3-box minimums,
@@ -2337,9 +2377,9 @@ app.post('/api/orders', authenticate, async (req, res) => {
       const lockedPct = await getLockedDiscountPct(userId);
       const minBoxes = lockedPct != null && lockedPct >= 30 ? 3 : lockedPct != null && lockedPct >= 25 ? 2 : 1;
       if (totalBoxes < minBoxes) {
-        return res.status(400).json({ error: minBoxes > 1
+        return fail(400, minBoxes > 1
           ? `Your minimum order is ${minBoxes} master boxes (any mix).`
-          : 'Your order must include at least one master box (shots, capsules, or gummies).' });
+          : 'Your order must include at least one master box (shots, capsules, or gummies).');
       }
     }
 
@@ -2364,10 +2404,11 @@ app.post('/api/orders', authenticate, async (req, res) => {
       // Allow a cent of float for the fee-passthrough rounding; never allow less.
       if (Number(intent.amount_received ?? intent.amount) + 1 < Math.round(total * 100)) {
         console.error(`Underpaid intent ${intent.id}: paid ${intent.amount_received} for a $${total} order`);
-        return res.status(400).json({ error: 'The amount charged did not match your order total. You have not been charged for this order — please contact support.' });
+        return fail(400, 'The amount charged did not match your order total. Any charge has been refunded — please try again or contact support.');
       }
       const reused = await one('SELECT order_id FROM invoices WHERE stripe_payment_intent_id=$1', [String(stripe_payment_intent_id)]);
-      if (reused) return res.status(409).json({ error: 'That payment has already been applied to another order.' });
+      // NOT refunded: this intent is another order's legitimate payment.
+      if (reused) return fail(409, 'That payment has already been applied to another order.', { refund: false });
       payment_status = 'paid';
     }
 
@@ -2514,14 +2555,15 @@ app.post('/api/orders', authenticate, async (req, res) => {
     // Out of stock is the customer's problem to see, not a generic 500 — and
     // if we already took their card for an order we then rolled back, give the
     // money straight back rather than leaving a charge with no order behind it.
+    // Anything that throws AFTER the browser confirmed the card leaves a
+    // charge with no order behind it — hand the money back, whether we lost
+    // the stock race or something unexpected blew up.
+    if (req.body?.payment_method === 'card' && req.body?.stripe_payment_intent_id) {
+      await refundOrphanCharge(req.body.stripe_payment_intent_id, e.outOfStock ? 'out of stock' : 'order failed');
+    }
     if (e.outOfStock) {
-      if (stripe && req.body?.stripe_payment_intent_id) {
-        try {
-          await stripe.refunds.create({ payment_intent: String(req.body.stripe_payment_intent_id) });
-        } catch (re) { console.error('Refund after out-of-stock failed:', re.message); }
-      }
       return res.status(409).json({
-        error: `${e.outOfStock} just sold out while you were checking out. Your cart is unchanged and you have not been charged — please adjust the quantity and try again.`,
+        error: `${e.outOfStock} just sold out while you were checking out. Your cart is unchanged and any charge has been refunded — please adjust the quantity and try again.`,
       });
     }
     res.status(500).json({ error: 'Something went wrong. Please try again.' });

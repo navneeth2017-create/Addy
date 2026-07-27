@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node boot.js",
     "seed": "node db/seed.js",
-    "start:unpatched": "node server.js"
+    "start:unpatched": "node server.js",
+    "test:payments": "bash test/run.sh"
   },
   "engines": {
     "node": "20.x"
