@@ -1,7 +1,28 @@
 const jwt = require('jsonwebtoken');
 
+/**
+ * Every session token is signed with this. The old fallback was a fixed string
+ * committed to the repo, so any deployment missing JWT_SECRET could have an
+ * admin token forged by anyone who read this file — a complete account
+ * takeover, guarded only by a startup warning nobody sees again after boot.
+ *
+ * In production we now refuse to start rather than run on a publicly known
+ * key — the same rule Monarch already enforces. Outside production the
+ * fallback stays, so local dev and the test suite need no setup.
+ */
 if (!process.env.JWT_SECRET) {
-  console.warn('⚠️  JWT_SECRET env var not set — using insecure default. Set it in Railway before going live.');
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      '\nFATAL: JWT_SECRET is not set.\n' +
+      'Refusing to start. Without it, every session token would be signed with a\n' +
+      'key that is public in this repository, letting anyone forge an admin login.\n' +
+      'Set JWT_SECRET to a long random string in your host environment\n' +
+      '  openssl rand -base64 48\n' +
+      'and redeploy.\n'
+    );
+    process.exit(1);
+  }
+  console.warn('⚠️  JWT_SECRET not set — using the dev fallback. Never deploy like this.');
 }
 const JWT_SECRET = process.env.JWT_SECRET || 'addy-dev-fallback-change-before-launch';
 

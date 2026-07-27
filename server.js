@@ -5,10 +5,33 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { authenticate, authorize, JWT_SECRET } = require('./middleware/auth');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+
+/**
+ * Baseline security headers. Addy previously sent none at all.
+ *
+ * Set by hand rather than pulling in helmet, so nothing new has to install at
+ * deploy time. Deliberately conservative — no script/style CSP, because a
+ * wrong one silently breaks Stripe.js or a font and you find out from a
+ * customer. frame-ancestors is the exception: it costs nothing and stops the
+ * portal being framed by a lookalike site to harvest logins (clickjacking).
+ */
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  res.setHeader('Permissions-Policy', 'geolocation=(self), camera=(), microphone=()');
+  // HSTS only in production: locking localhost to HTTPS would break dev.
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
 
 // ── WWW REDIRECT ──────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -903,7 +926,9 @@ app.post('/api/forgot-password', rateLimit(5, 15 * 60 * 1000), async (req, res) 
     if (!email) return res.status(400).json({ error: 'Email is required' });
     const user = await one("SELECT id,email,name FROM users WHERE email=$1 AND status='active'", [email.toLowerCase()]);
     if (!user) return res.json({ success: true }); // don't reveal if email exists
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // crypto, not Math.random: Math.random is a predictable PRNG, and this
+    // code is the only thing standing between a stranger and an account.
+    const code = String(100000 + crypto.randomInt(900000));
     const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     await q('UPDATE password_resets SET used=1 WHERE user_id=$1', [user.id]);
     await q('INSERT INTO password_resets (user_id,code,expires_at) VALUES ($1,$2,$3)', [user.id, code, expires]);
@@ -928,13 +953,24 @@ app.post('/api/forgot-password', rateLimit(5, 15 * 60 * 1000), async (req, res) 
       }
       res.json({ success: true, name: user.name || user.email });
     } else {
-      // Dev/no-email fallback: return code in response so the UI can display it
-      res.json({ success: true, code, name: user.name || user.email });
+      // The reset code is NEVER returned to the caller. It used to be, whenever
+      // mail happened to be unconfigured — which meant anyone could POST an
+      // admin's address here, read the code straight out of the response, and
+      // take the account over without any access to the mailbox. Outside
+      // production it goes to the server log instead, so local dev still works.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('Password reset requested but no mailer is configured — code NOT delivered.');
+      } else {
+        console.log(`[dev] password reset code for ${user.email}: ${code}`);
+      }
+      res.json({ success: true, name: user.name || user.email });
     }
   } catch(e) { res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
-app.post('/api/reset-password', async (req, res) => {
+// Rate limited: the code is six digits, so an unlimited endpoint can simply be
+// guessed through. 10 attempts per 15 minutes per IP.
+app.post('/api/reset-password', rateLimit(10, 15 * 60 * 1000), async (req, res) => {
   try {
     const { email, code, new_password } = req.body;
     if (!email || !code || !new_password) return res.status(400).json({ error: 'Email, code, and new password are required' });
