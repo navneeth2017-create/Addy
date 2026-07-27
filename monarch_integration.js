@@ -1003,9 +1003,23 @@ async function suiteHouseEmail({ to, subject, html, text }) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   if (!body) throw new Error('Empty email body');
-  await monarchApi(`/tenants/${ws.slug}/email`, 'POST', {
-    to_email: Array.isArray(to) ? to[0] : to, subject, body,
-  }, 20000);
+  // Monarch's mail endpoint takes ONE recipient, so send once per address.
+  // This used to be `to[0]`, which silently dropped every admin but the first
+  // on the new-order alert list — exactly the kind of mail that goes missing
+  // without anyone noticing. One bad address must not cancel the rest, so
+  // collect failures and only throw when EVERY recipient failed.
+  const recipients = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  if (!recipients.length) throw new Error('No recipient');
+  const errors = [];
+  for (const addr of recipients) {
+    try {
+      await monarchApi(`/tenants/${ws.slug}/email`, 'POST', { to_email: addr, subject, body }, 20000);
+    } catch (e) {
+      errors.push(`${addr}: ${e.message}`);
+      console.error(`Suite mail to ${addr} failed:`, e.message);
+    }
+  }
+  if (errors.length === recipients.length) throw new Error(`Suite mail failed — ${errors.join('; ')}`);
 }
 
 /** True when the integration is configured enough for suiteHouseEmail to be

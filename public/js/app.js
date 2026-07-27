@@ -2354,14 +2354,17 @@ async function loadUsersTab() {
     return;
   }
   const roleLabels = { admin: 'Admin', dsd: 'DSD' };
-  const tierLabels = {
-    dsd: 'Master Dist.',
-    dsd: 'DSD',
-    rep: 'DSD',
-    dsd: 'Wholesale',
-    custom: 'Custom'
-  };
-  const tierableRoles = ['dsd', 'dsd', 'rep'];
+  // Tier badges read pricing_tier, whose values come from PRICING_TIERS
+  // ('auto', '20', '25', '30', '35', 'custom'). This map used to list role
+  // names instead — with `dsd` repeated three times, so JS kept only the last
+  // and every tier that DID match rendered as "Wholesale", while the real
+  // values fell through to the raw string ("20", "auto"). Derive it from
+  // PRICING_TIERS so the two can't drift apart again.
+  const tierLabels = Object.fromEntries(PRICING_TIERS.map(t => [
+    t.value,
+    t.value === 'auto' ? 'Auto (earn-up)' : t.value === 'custom' ? 'Custom' : `${t.value}% locked`,
+  ]));
+  const tierableRoles = ['dsd', 'rep'];
   // Store users for detail modal
   window._adminUsers = users;
   tbody.innerHTML = users.map(u => `
