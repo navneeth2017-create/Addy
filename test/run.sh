@@ -40,7 +40,7 @@ done
 [ "$ready" -eq 1 ] || { echo "servers never became ready"; tail -5 /tmp/addy-test-invoice.log; exit 1; }
 
 fails=0
-for t in test/auth-roles.test.mjs test/ordering.test.mjs test/inventory.test.mjs \
+for t in test/security.test.mjs test/auth-roles.test.mjs test/ordering.test.mjs test/inventory.test.mjs \
          test/pricing.test.mjs test/card-payments.test.mjs test/refund-on-rollback.test.mjs; do
   echo "── $t"
   node "$t" || fails=$((fails+1))
