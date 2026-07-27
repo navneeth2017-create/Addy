@@ -24,7 +24,12 @@ async function apiFetch(url, options = {}) {
     showToast('Network error — check your connection and try again', 'error');
     return null;
   }
-  if (res.status === 401) { logout(); return null; }
+  if (res.status === 401) {
+    // recordSignout comes from app.js, which always loads before this file.
+    if (typeof recordSignout === 'function') recordSignout(`The server rejected your session on ${(options.method || 'GET')} ${url} (401).`);
+    logout();
+    return null;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     showToast(data.error || `Server error (${res.status}) — your data is safe, try refreshing`, 'error');

@@ -492,6 +492,22 @@
     }
     loadLandingDocs();
     loadLandingProducts();
+
+    // logout() lands here, not on the sign-in page, so an unexpected sign-out
+    // would otherwise dump you on the marketing page with no explanation.
+    // Shown once, then cleared.
+    (function showSignoutReason() {
+      let reason = null;
+      try {
+        reason = sessionStorage.getItem('addy_signout_reason');
+        sessionStorage.removeItem('addy_signout_reason');
+      } catch (e) { return; }
+      if (!reason) return;
+      const bar = document.createElement('div');
+      bar.style.cssText = 'position:sticky;top:0;z-index:9999;background:#fef3c7;border-bottom:1px solid #fcd34d;color:#78350f;padding:12px 20px;font-size:13px;line-height:1.5;text-align:center;';
+      bar.textContent = 'Signed out: ' + reason;
+      document.body.insertBefore(bar, document.body.firstChild);
+    })();
   </script>
   <script src="/js/pwa.js" defer></script>
 </body>
