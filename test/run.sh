@@ -41,7 +41,7 @@ done
 
 fails=0
 for t in test/security.test.mjs test/auth-roles.test.mjs test/ordering.test.mjs test/inventory.test.mjs \
-         test/store-photos.test.mjs test/resale-number.test.mjs test/pricing.test.mjs test/card-payments.test.mjs \
+         test/store-photos.test.mjs test/resale-number.test.mjs test/backdated-commissions.test.mjs test/pricing.test.mjs test/card-payments.test.mjs \
          test/refund-on-rollback.test.mjs; do
   echo "── $t"
   node "$t" || fails=$((fails+1))

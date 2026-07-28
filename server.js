@@ -1416,7 +1416,7 @@ app.post('/api/users', authenticate, authorize('admin'), async (req, res) => {
 });
 
 app.get('/api/users', authenticate, authorize('admin'), async (req, res) => {
-  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,locked_discount_pct,can_pay_invoice,house_partner FROM users ORDER BY role,name')); }
+  try { res.json(await all('SELECT id,email,name,phone,role,status,pricing_tier,tier,locked_discount_pct,can_pay_invoice,house_partner,house_5pct FROM users ORDER BY role,name')); }
   catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
@@ -3487,6 +3487,128 @@ app.post('/api/products/import-from-wowcow', authenticate, authorize('admin'), a
   }
 });
 
+/**
+ * Grandfather a rep onto the house partner's 5%, or drop them back to 2%.
+ *
+ * This flag decided real money and could only ever be set by a one-shot boot
+ * migration — there was no way to grandfather anyone afterwards, and no way to
+ * see who already was, because the users list didn't even return the column.
+ * Anyone added since that migration has silently been at 2%.
+ */
+app.patch('/api/users/:id/house-rate', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isInteger(id)) return res.status(404).json({ error: 'User not found' });
+    if (typeof req.body?.grandfathered !== 'boolean') {
+      return res.status(400).json({ error: 'grandfathered must be true or false' });
+    }
+    const user = await one('SELECT id, name, email, role, house_partner FROM users WHERE id=$1', [id]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role === 'admin') return res.status(400).json({ error: 'Admins never generate house commission.' });
+    if (user.house_partner) return res.status(400).json({ error: 'The house partner cannot pay himself.' });
+
+    await q('UPDATE users SET house_5pct=$1 WHERE id=$2', [req.body.grandfathered, id]);
+    await logActivity('house_rate_changed',
+      `${user.name || user.email} -> ${req.body.grandfathered ? '5% (grandfathered)' : '2%'}`, req.user.email);
+    // Deliberately NOT retroactive: past orders keep the rate that was in force
+    // when they were placed. Use the recalculate endpoint per order to restate.
+    res.json({ success: true, grandfathered: req.body.grandfathered, rate: req.body.grandfathered ? 5 : 2 });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Could not save that. Try again.' }); }
+});
+
+/**
+ * Record an order that happened before the site was live.
+ *
+ * Commission is only ever calculated inside checkout, which a rep has to walk
+ * through themselves. Orders taken off-site therefore paid nobody: no rows in
+ * commissions, no movement in anyone's balance. This puts the order on the
+ * books and runs it through the SAME commission function as a live checkout,
+ * so the house and referral cuts come out identical.
+ *
+ * Two deliberate differences from a live order:
+ *  - Stock is NOT decremented. These goods already left the warehouse; taking
+ *    them out again would double-count the shipment.
+ *  - Prices are taken as given rather than re-quoted. What the rep was
+ *    actually charged at the time is the truth here, and today's tier pricing
+ *    may not reproduce it.
+ */
+app.post('/api/admin/orders/backdated', authenticate, authorize('admin'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { user_id, store_id, items, shipping_cost = 0, processing_fee = 0,
+            payment_method = 'invoice', payment_status = 'paid', status = 'delivered',
+            placed_at, notes } = req.body || {};
+
+    const buyer = await one('SELECT id, name, email, role FROM users WHERE id=$1', [parseInt(user_id) || 0]);
+    if (!buyer) return res.status(400).json({ error: 'Pick the rep this order belongs to.' });
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Add at least one line item.' });
+    if (!['card', 'invoice'].includes(payment_method)) return res.status(400).json({ error: 'Bad payment method' });
+    if (!['unpaid', 'paid'].includes(payment_status)) return res.status(400).json({ error: 'Bad payment status' });
+    if (!['pending', 'processing', 'shipped', 'delivered', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Bad order status' });
+    }
+    // A date in the future would be a typo, and it would land the commission in
+    // the wrong month on every report that groups by date.
+    const when = placed_at ? new Date(placed_at) : new Date();
+    if (isNaN(when.getTime())) return res.status(400).json({ error: 'That date is not valid.' });
+    if (when.getTime() > Date.now() + 60_000) return res.status(400).json({ error: 'That date is in the future.' });
+
+    const priced = [];
+    for (const it of items) {
+      const product = await one('SELECT id, name FROM products WHERE id=$1', [parseInt(it.product_id) || 0]);
+      if (!product) return res.status(400).json({ error: `Unknown product on one of the lines.` });
+      const qty = Math.floor(Number(it.quantity));
+      const unit = Math.round(Number(it.unit_price) * 100) / 100;
+      if (!Number.isInteger(qty) || qty < 1) return res.status(400).json({ error: `Quantity for ${product.name} must be a whole number of 1 or more.` });
+      if (!Number.isFinite(unit) || unit < 0) return res.status(400).json({ error: `Unit price for ${product.name} is not a number.` });
+      priced.push({ product_id: product.id, quantity: qty, unit_price: unit, total_price: Math.round(unit * qty * 100) / 100 });
+    }
+
+    const subtotal = Math.round(priced.reduce((a, i) => a + i.total_price, 0) * 100) / 100;
+    const ship = Math.round((Number(shipping_cost) || 0) * 100) / 100;
+    const fee  = Math.round((Number(processing_fee) || 0) * 100) / 100;
+    if (ship < 0 || fee < 0) return res.status(400).json({ error: 'Shipping and fees cannot be negative.' });
+    const total = Math.round((subtotal + ship + fee) * 100) / 100;
+    if (total <= 0) return res.status(400).json({ error: 'The order total has to be more than zero.' });
+
+    let order;
+    await client.query('BEGIN');
+    try {
+      const or = await client.query(
+        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,
+                             shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes,status,created_at,resale_number)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'','','','',$10,$11,$12,
+                 (SELECT resale_number FROM stores WHERE id=$2)) RETURNING *`,
+        [buyer.id, store_id || null, payment_method, payment_status, subtotal, ship, fee, total,
+         buyer.name || '', `[Recorded by ${req.user.email}] ${notes || ''}`.trim(), status, when]
+      );
+      order = or.rows[0];
+      for (const i of priced) {
+        await client.query(
+          'INSERT INTO order_items (order_id,product_id,quantity,unit_price,total_price) VALUES ($1,$2,$3,$4,$5)',
+          [order.id, i.product_id, i.quantity, i.unit_price, i.total_price]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK'); throw e; }
+
+    // Same function checkout uses, so the house/referral split is identical.
+    // Members never generate commission, matching the recalculate path.
+    if (buyer.role !== 'member' && status !== 'cancelled') {
+      await calculateAndSaveCommissions(order.id, buyer.id, parseFloat(order.total));
+    }
+    const commissions = await all(
+      'SELECT c.*, u.name AS earner_name FROM commissions c JOIN users u ON u.id=c.earner_id WHERE c.order_id=$1', [order.id]);
+
+    await logActivity('backdated_order',
+      `$${total.toFixed(2)} for ${buyer.name || buyer.email} (order #${order.id}, ${when.toISOString().slice(0,10)})`, req.user.email);
+    res.status(201).json({ success: true, order, commissions });
+  } catch(e) {
+    console.error('backdated order error:', e.message);
+    res.status(500).json({ error: 'Could not record that order. Nothing was saved.' });
+  } finally { client.release(); }
+});
+
 // ── ADMIN: RECALCULATE COMMISSIONS FOR AN ORDER ──────────────────────────────
 // Safety tool in case something went wrong — deletes and recalculates
 app.post('/api/commissions/recalculate/:orderId', authenticate, authorize('admin'), async (req, res) => {
@@ -3562,11 +3684,15 @@ app.get('/api/my-reps', authenticate, async (req, res) => {
     if (req.user.role !== 'dsd') return res.json({ reps: [], flat_rate_others: null });
     const me = await one('SELECT id, house_partner FROM users WHERE id=$1', [req.user.id]);
     if (!me) return res.json({ reps: [], flat_rate_others: null });
+    // For the house partner this is EVERY account that can generate him a
+    // commission, which is every non-admin but himself — the 5% grandfathered
+    // and recruited, and the 2% rest. It used to list only the 5% people, so
+    // most of the network he earns on was invisible to him.
     const rosterWhere = me.house_partner
-      ? "u.id<>$1 AND u.role<>'admin' AND (u.referred_by=$1 OR u.house_5pct=TRUE)"
+      ? "u.id<>$1 AND u.role<>'admin'"
       : 'u.referred_by=$1 AND u.id<>$1';
     const reps = await all(
-      `SELECT u.id, u.name, u.email, u.status, u.created_at,
+      `SELECT u.id, u.name, u.email, u.status, u.created_at, u.house_5pct, u.referred_by,
               ${me.house_partner ? "CASE WHEN u.referred_by=$1 THEN 'Invited by you' ELSE 'ADDY network' END" : "'Invited by you'"} AS source,
               COALESCE(SUM(c.amount), 0) AS earned_total,
               COALESCE(SUM(c.amount) FILTER (WHERE c.created_at >= date_trunc('month', now())), 0) AS earned_month,
@@ -3575,10 +3701,20 @@ app.get('/api/my-reps', authenticate, async (req, res) => {
        FROM users u
        LEFT JOIN commissions c ON c.buyer_id = u.id AND c.earner_id = $1
        WHERE ${rosterWhere}
-       GROUP BY u.id, u.name, u.email, u.status, u.created_at, u.referred_by
+       GROUP BY u.id, u.name, u.email, u.status, u.created_at, u.referred_by, u.house_5pct
        ORDER BY earned_total DESC, u.created_at ASC`, [me.id]);
     res.json({
-      reps: reps.map(r => ({ ...r, your_rate: 5, earned_total: parseFloat(r.earned_total), earned_month: parseFloat(r.earned_month) })),
+      // The rate is per person, not a constant. A plain rep earns 5% on their
+      // own recruits. The house partner earns 5% where he recruited them or
+      // they were grandfathered, and 2% on everyone else — reporting a flat 5%
+      // overstated what half the roster is actually worth to him.
+      reps: reps.map(r => ({
+        ...r,
+        your_rate: (!me.house_partner || r.referred_by === me.id || r.house_5pct) ? 5 : 2,
+        grandfathered: !!r.house_5pct,
+        earned_total: parseFloat(r.earned_total),
+        earned_month: parseFloat(r.earned_month),
+      })),
       flat_rate_others: me.house_partner ? 2 : null,
     });
   } catch(e) {
