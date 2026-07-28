@@ -3632,11 +3632,13 @@ async function submitAddMember() {
 // ── STORE PHOTO UPLOAD ────────────────────────────────────────────────────────
 let _photoStoreId = null;
 let _photoIsBulk = false;
+let _photoStoreName = '';
+let _photoAlreadyDeferred = false;
 let _photoPending = { front: null, display: null };
 let _photoUploaded = { front: false, display: false };
 
 // Called right after a store is claimed or when a store with pending photos is opened
-window.openPhotoModal = function(storeId, isBulk = false, storeName = '') {
+window.openPhotoModal = function(storeId, isBulk = false, storeName = '', alreadyDeferred = false) {
   _photoStoreId = storeId;
   _photoIsBulk = isBulk;
   _photoPending = { front: null, display: null };
@@ -3645,16 +3647,29 @@ window.openPhotoModal = function(storeId, isBulk = false, storeName = '') {
   const modal = document.getElementById('store-photo-modal');
   if (!modal) return;
 
+  // The arrival nudge has done its job once this is open.
+  document.getElementById('photo-arrival-prompt')?.remove();
+
+  _photoStoreName = storeName || 'this store';
+  _photoAlreadyDeferred = !!alreadyDeferred;
+
   const subtitle = document.getElementById('photo-modal-subtitle');
   if (subtitle) {
     subtitle.textContent = isBulk
-      ? `You have 60 days to upload photos for ${storeName || 'this store'}.`
-      : `Upload both photos now for ${storeName || 'this store'}. Required within 24 hours.`;
+      ? `You have 60 days to upload photos for ${_photoStoreName}.`
+      : `Take both photos while you're at ${_photoStoreName}, or set a 30-day deadline below.`;
   }
 
-  // For bulk imports, show skip button; for manual claims, hide it (must do it now)
+  // The deferral is offered for every claim, because a rep entering stores from
+  // home genuinely cannot take these photos — that used to be a dead end with
+  // no way past the modal, so the store never got entered at all. It is only
+  // hidden once this store has already used its one deferral.
   const skipWrap = document.getElementById('photo-skip-wrap');
-  if (skipWrap) skipWrap.style.display = isBulk ? 'block' : 'none';
+  if (skipWrap) skipWrap.style.display = _photoAlreadyDeferred ? 'none' : 'block';
+  const agree = document.getElementById('photo-defer-agree');
+  if (agree) agree.checked = false;
+  const deferBtn = document.getElementById('photo-defer-btn');
+  if (deferBtn) { deferBtn.disabled = true; deferBtn.textContent = 'Add store now, photos later'; }
 
   // Reset previews and statuses
   ['front','display'].forEach(type => {
@@ -3673,10 +3688,42 @@ window.openPhotoModal = function(storeId, isBulk = false, storeName = '') {
   modal.style.display = 'block';
 };
 
-window.skipPhotosForNow = function() {
-  const modal = document.getElementById('store-photo-modal');
-  if (modal) modal.style.display = 'none';
-  showToast('Reminder: upload store photos within your deadline to keep this store active.', 'info');
+window.updateDeferButton = function() {
+  const agree = document.getElementById('photo-defer-agree');
+  const btn = document.getElementById('photo-defer-btn');
+  if (btn) btn.disabled = !agree?.checked;
+};
+
+/**
+ * Take the 30-day deadline instead of the photos.
+ *
+ * This has to reach the server. The old version only hid the modal, so the
+ * store kept whatever deadline it was given at claim time — 24 hours for a
+ * manual claim — and a rep who "skipped" was overdue by the next morning.
+ */
+window.deferStorePhotos = async function() {
+  const btn = document.getElementById('photo-defer-btn');
+  const errEl = document.getElementById('photo-modal-error');
+  const agree = document.getElementById('photo-defer-agree');
+  if (!agree?.checked) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (errEl) errEl.style.display = 'none';
+  try {
+    const result = await apiFetch(`/api/stores/${_photoStoreId}/photos/defer`, {
+      method: 'POST',
+      body: JSON.stringify({ agreed: true }),
+    });
+    if (!result || !result.success) throw new Error(result?.error || 'Could not save that.');
+    const modal = document.getElementById('store-photo-modal');
+    if (modal) modal.style.display = 'none';
+    const due = new Date(result.photos_due_at).toLocaleDateString();
+    showToast(`Store added ✓ Photos due by ${due} — we'll remind you when you're there.`, 'success');
+    if (typeof loadMyStores === 'function') loadMyStores();
+    checkPhotoPendingBanner();
+  } catch (e) {
+    if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Add store now, photos later'; }
+  }
 };
 
 window.handlePhotoSelect = function(type, input) {
@@ -3764,13 +3811,14 @@ window.submitStorePhotos = async function() {
 // ── PHOTO REMINDER BANNER (for bulk/overdue stores) ───────────────────────────
 async function checkPhotoPendingBanner() {
   const pending = await apiFetch('/api/my-stores/photos-pending');
-  if (!pending || pending.length === 0) return;
+  const existing = document.getElementById('photo-reminder-banner');
+  if (existing) existing.remove();
+  // Nothing owed any more: clear the banner and stop watching location, rather
+  // than leaving a stale warning up after the last photo lands.
+  if (!pending || pending.length === 0) { _arrivalStores = []; stopArrivalWatch(); return; }
 
   const overdue = pending.filter(s => s.overdue);
   const upcoming = pending.filter(s => !s.overdue);
-
-  const existing = document.getElementById('photo-reminder-banner');
-  if (existing) existing.remove();
 
   const banner = document.createElement('div');
   banner.id = 'photo-reminder-banner';
@@ -3786,12 +3834,17 @@ async function checkPhotoPendingBanner() {
     msg = `📸 ${upcoming.length} store${upcoming.length>1?'s':''} still need${upcoming.length>1?'':'s'} photos — deadline: ${new Date(upcoming[0].photos_due_at).toLocaleDateString()}.`;
   }
 
+  const first = pending[0];
   banner.innerHTML = `
     <span>${msg}</span>
     <div style="display:flex;gap:8px;flex-shrink:0;">
-      <button onclick="openPhotoModal(${pending[0].id},${pending[0].claimed_via==='csv_bulk'},'${pending[0].name?.replace(/'/g,"\'")}')"
+      <button onclick="openPhotoModal(${first.id},${first.claimed_via === 'csv_bulk'},'${escAttr(first.name || '')}',${!!first.photos_deferred_at})"
         style="background:#fff;color:#dc2626;border:none;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
         Upload Now
+      </button>
+      <button id="photo-geo-optin" onclick="enablePhotoArrivalReminders()"
+        style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;display:none;">
+        📍 Remind me at the store
       </button>
       <button onclick="this.closest('#photo-reminder-banner').style.display='none'"
         style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:6px 10px;border-radius:6px;cursor:pointer;">✕</button>
@@ -3800,6 +3853,148 @@ async function checkPhotoPendingBanner() {
   // Insert at top of dashboard (after any existing impersonation banner)
   const mainContent = document.querySelector('.dashboard') || document.body;
   mainContent.insertBefore(banner, mainContent.firstChild);
+
+  startPhotoArrivalWatch(pending);
+}
+
+// ── "YOU'RE AT THE STORE" REMINDER ────────────────────────────────────────────
+/**
+ * A rep who deferred photos is reminded at the one moment they can actually
+ * act on it: standing at the store. The banner alone is easy to dismiss from
+ * the couch and useless there — this fires where the photo can be taken.
+ *
+ * Location is never requested unprompted. We only ask after a tap on the
+ * opt-in button, and only when photos are actually owed; a rep who is square
+ * is never asked for location at all.
+ */
+const ARRIVAL_RADIUS_M = 200;   // GPS on a phone is good to ~10-50m; 200m covers a parking lot.
+const ARRIVAL_QUIET_MS = 60 * 60 * 1000;  // don't nag about the same store more than hourly
+let _arrivalWatchId = null;
+let _arrivalStores = [];
+
+function metersBetween(aLat, aLng, bLat, bLng) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function recentlyNagged(storeId) {
+  try {
+    const at = Number(sessionStorage.getItem(`addy_photo_nag_${storeId}`) || 0);
+    return Date.now() - at < ARRIVAL_QUIET_MS;
+  } catch (e) { return false; }
+}
+
+async function startPhotoArrivalWatch(pending) {
+  if (!('geolocation' in navigator) || !window.isSecureContext) return;
+  _arrivalStores = pending.filter(s => !s.photos_complete);
+  if (!_arrivalStores.length) { stopArrivalWatch(); return; }
+  // Already watching: the list above is refreshed, just place any new stores.
+  if (_arrivalWatchId !== null) { geocodePendingStores(); return; }
+
+  // Only auto-start if location was already granted — otherwise show the opt-in.
+  let granted = false;
+  try {
+    const st = await navigator.permissions?.query({ name: 'geolocation' });
+    granted = st?.state === 'granted';
+  } catch (e) { /* Safari lacks the Permissions API for geolocation */ }
+
+  if (granted) { beginArrivalWatch(); return; }
+  const optIn = document.getElementById('photo-geo-optin');
+  if (optIn) optIn.style.display = 'inline-block';
+}
+
+window.enablePhotoArrivalReminders = function() {
+  const optIn = document.getElementById('photo-geo-optin');
+  if (optIn) optIn.textContent = '📍 Locating…';
+  beginArrivalWatch(() => {
+    if (optIn) optIn.style.display = 'none';
+    showToast("Got it — we'll remind you when you're at a store that needs photos.", 'success');
+  }, () => {
+    if (optIn) optIn.textContent = '📍 Location blocked';
+  });
+};
+
+function beginArrivalWatch(onOk, onFail) {
+  if (_arrivalWatchId !== null) return;
+  _arrivalWatchId = navigator.geolocation.watchPosition(
+    (pos) => { if (onOk) { onOk(); onOk = null; } onArrivalPosition(pos); },
+    () => { if (onFail) onFail(); stopArrivalWatch(); },
+    { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 }
+  );
+  geocodePendingStores();
+}
+
+function stopArrivalWatch() {
+  if (_arrivalWatchId !== null) navigator.geolocation.clearWatch(_arrivalWatchId);
+  _arrivalWatchId = null;
+}
+
+function onArrivalPosition(pos) {
+  const { latitude, longitude } = pos.coords;
+  for (const s of _arrivalStores) {
+    if (s.latitude == null || s.longitude == null) continue;
+    if (recentlyNagged(s.id)) continue;
+    if (metersBetween(latitude, longitude, s.latitude, s.longitude) > ARRIVAL_RADIUS_M) continue;
+    try { sessionStorage.setItem(`addy_photo_nag_${s.id}`, String(Date.now())); } catch (e) {}
+    showArrivalPrompt(s);
+    return;   // one store at a time
+  }
+}
+
+function showArrivalPrompt(store) {
+  document.getElementById('photo-arrival-prompt')?.remove();
+  const el = document.createElement('div');
+  el.id = 'photo-arrival-prompt';
+  // Below the photo modal (9999), never over it — this prompt's whole job is to
+  // open that modal, so it must not then sit on top blocking every control.
+  el.style.cssText = `
+    position:fixed;left:16px;right:16px;bottom:20px;z-index:9990;max-width:420px;margin:0 auto;
+    background:var(--bg-card,#fff);border:2px solid #16a34a;border-radius:14px;padding:18px;
+    box-shadow:0 12px 32px rgba(0,0,0,0.28);`;
+  el.innerHTML = `
+    <div style="font-weight:800;margin-bottom:4px;">📍 You're at ${esc(store.name || 'a store')}</div>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+      This store still needs its photos. Two minutes now and it's done.
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-green" style="flex:1;"
+        onclick="document.getElementById('photo-arrival-prompt').remove();openPhotoModal(${store.id},false,'${escAttr(store.name || '')}',${!!store.photos_deferred_at})">
+        📷 Take photos
+      </button>
+      <button class="btn btn-outline" onclick="document.getElementById('photo-arrival-prompt').remove()">Not now</button>
+    </div>`;
+  document.body.appendChild(el);
+  if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+}
+
+/**
+ * Fill in coordinates for pending stores that have none, so the check above has
+ * something to compare against. Nominatim asks for no more than one request a
+ * second; results are cached on the store so this runs at most once per store.
+ */
+async function geocodePendingStores() {
+  for (const s of _arrivalStores) {
+    if (s.latitude != null && s.longitude != null) continue;
+    const parts = [s.address, s.city, s.state, s.zip, 'USA'].filter(Boolean);
+    if (parts.length < 3) continue;   // too vague to place accurately
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='
+        + encodeURIComponent(parts.join(', ')), { headers: { 'Accept': 'application/json' } });
+      const data = await r.json();
+      if (data && data[0]) {
+        s.latitude = parseFloat(data[0].lat);
+        s.longitude = parseFloat(data[0].lon);
+        await apiFetch(`/api/stores/${s.id}/geo`, {
+          method: 'POST',
+          body: JSON.stringify({ latitude: s.latitude, longitude: s.longitude }),
+        }).catch(() => {});
+      }
+      await new Promise(res => setTimeout(res, 1100));
+    } catch (e) { /* a store we can't place just never triggers the reminder */ }
+  }
 }
 
 // ── STORE MAP VIEW ────────────────────────────────────────────────────────────
