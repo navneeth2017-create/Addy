@@ -934,6 +934,77 @@ async function loadActivityFeed() {
 }
 
 // --- Store Detail Modal with Notes ---
+// ── Getting there: hand off to the phone's own maps app ──────────────────────
+/**
+ * A rep looking at a store had no way to get directions to it or ring it —
+ * they were retyping addresses into Maps by hand, in a truck.
+ *
+ * We hand off to the native maps app rather than embedding a map: on iPhone
+ * that's Apple Maps, elsewhere Google Maps, and once either is driving, the
+ * turn-by-turn appears on CarPlay or Android Auto. That's the only route to a
+ * car screen from a web app — CarPlay itself runs native apps only.
+ */
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function mapsUrlFor(store) {
+  const q = [store.name, store.address, store.city, store.state, store.zip]
+    .filter(Boolean).join(' ');
+  const encoded = encodeURIComponent(q);
+  // Apple Maps takes the destination as a search string; dirflg=d = driving.
+  return isIOS()
+    ? `https://maps.apple.com/?daddr=${encoded}&dirflg=d`
+    : `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encoded}`;
+}
+
+/** Tel: link, digits only — spaces and brackets break dialling on some phones. */
+const telHref = (phone) => `tel:${String(phone || '').replace(/[^\d+]/g, '')}`;
+
+/**
+ * Turn-by-turn is part of the paid Sales Suite (Monarch gates its own routes
+ * behind requireFeature('routes'), a Pro-tier feature) — so the in-car
+ * handoff here is Pro-only too, and the site owner always has it.
+ *
+ * Fails CLOSED: if we don't yet know the workspace, nothing is shown.
+ *
+ * Note this is presentation gating, not a data control. The store's address is
+ * already on screen either way — this decides whether we do the convenient
+ * thing with it, not whether it's visible. Anything that actually needs
+ * enforcing lives behind Monarch's server-side plan checks.
+ */
+function hasProSuite() {
+  if (getRole() === 'admin') return true;
+  const ws = window._monarchWorkspace;
+  if (!ws) return false;
+  const paidTier = ws.tier === 'pro' || ws.tier === 'enterprise';
+  const live = ws.status === 'active' || ws.comped;
+  return !!(paidTier && live);
+}
+
+/**
+ * Navigate + Call buttons for a store. `compact` is the inline pair used in a
+ * list row; the default is the full-width pair for a detail panel.
+ */
+function storeActionsHtml(store, compact = false) {
+  if (!hasProSuite()) return '';
+  const hasAddress = !!(store.address || store.city);
+  const hasPhone = !!store.phone;
+  if (!hasAddress && !hasPhone) return '';
+  const pad = compact ? '8px 12px' : '12px';
+  const base = `display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:${pad};border-radius:10px;font-size:${compact ? '13px' : '14px'};font-weight:700;text-decoration:none;border:1px solid var(--border);${compact ? '' : 'flex:1;'}`;
+  const nav = hasAddress
+    ? `<a href="${escAttr(mapsUrlFor(store))}" target="_blank" rel="noopener"
+         style="${base}background:var(--accent);color:#fff;border-color:transparent;"
+         onclick="event.stopPropagation();">🧭 Navigate</a>`
+    : '';
+  const call = hasPhone
+    ? `<a href="${escAttr(telHref(store.phone))}"
+         style="${base}color:var(--text);"
+         onclick="event.stopPropagation();">📞 Call</a>`
+    : '';
+  return `<div style="display:flex;gap:8px;${compact ? '' : 'margin-top:14px;'}">${nav}${call}</div>`;
+}
+
 async function showStoreDetail(id) {
   const [store, notes] = await Promise.all([
     apiFetch(`/api/stores/${id}`),
@@ -949,6 +1020,7 @@ async function showStoreDetail(id) {
   `).join('') || '<div style="color:var(--text-muted);font-size:13px;">No notes yet</div>';
 
   document.getElementById('modal-content').innerHTML = `
+    ${storeActionsHtml(store)}
     <div class="detail-row"><span class="detail-label">Store Name</span><span class="detail-value">${esc(store.name)}</span></div>
     <div class="detail-row"><span class="detail-label">Owner</span><span class="detail-value">${esc(store.owner_name)}</span></div>
     <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value">${esc(store.email)}</span></div>
@@ -1392,14 +1464,25 @@ async function loadMyStores() {
   if (!el) return;
   const stores = await apiFetch('/api/my-stores');
   if (!stores || !stores.length) { el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">🏪</div><div>No stores claimed yet.</div><div style="margin-top:8px;font-size:13px;">Click Claim a Store to get started.</div></div>'; return; }
+  // Navigate/Call sit on the row itself: this list IS the working screen for a
+  // rep out on a route, and making them open a detail panel first to get
+  // directions is the difference between using it and not.
   el.innerHTML = `<div class="table-card">` + stores.map(s => `
-    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);">
-      <div style="flex:1;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
+    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);flex-wrap:wrap;">
+      <div style="flex:1;min-width:190px;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
       <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
+      ${storeActionsHtml(s, true)}
     </div>`).join('');
   const statEl = document.getElementById('stat-my-stores');
   if (statEl) statEl.textContent = stores.filter(s => s.store_approval_status==='approved').length;
 }
+
+// The Suite status arrives after this list first renders, so redraw once it
+// lands — otherwise a Pro subscriber sees their stores without the Navigate
+// and Call buttons they pay for until they leave the tab and come back.
+window.addEventListener('monarch:workspace', () => {
+  if (document.getElementById('my-stores-list')) loadMyStores();
+}, { once: true });
 
 function showClaimStoreModal() {
   // Reset fields each time it opens
