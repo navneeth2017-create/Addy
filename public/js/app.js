@@ -3657,7 +3657,7 @@ window.openPhotoModal = function(storeId, isBulk = false, storeName = '', alread
   if (subtitle) {
     subtitle.textContent = isBulk
       ? `You have 60 days to upload photos for ${_photoStoreName}.`
-      : `Take both photos while you're at ${_photoStoreName}, or set a 30-day deadline below.`;
+      : `Take both photos while you're at ${_photoStoreName}, or set a deadline below.`;
   }
 
   // The deferral is offered for every claim, because a rep entering stores from
@@ -3868,9 +3868,13 @@ async function checkPhotoPendingBanner() {
  * is never asked for location at all.
  */
 const ARRIVAL_RADIUS_M = 200;   // GPS on a phone is good to ~10-50m; 200m covers a parking lot.
-const ARRIVAL_QUIET_MS = 60 * 60 * 1000;  // don't nag about the same store more than hourly
+// Leaving is a wider ring than arriving on purpose. With a single boundary,
+// GPS jitter around 200m would read as leave-arrive-leave and fire the prompt
+// over and over while the rep stands still in the parking lot.
+const ARRIVAL_EXIT_M = 400;
 let _arrivalWatchId = null;
 let _arrivalStores = [];
+let _arrivalInside = new Set();
 
 function metersBetween(aLat, aLng, bLat, bLng) {
   const R = 6371000, toRad = d => d * Math.PI / 180;
@@ -3880,12 +3884,6 @@ function metersBetween(aLat, aLng, bLat, bLng) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-function recentlyNagged(storeId) {
-  try {
-    const at = Number(sessionStorage.getItem(`addy_photo_nag_${storeId}`) || 0);
-    return Date.now() - at < ARRIVAL_QUIET_MS;
-  } catch (e) { return false; }
-}
 
 async function startPhotoArrivalWatch(pending) {
   if (!('geolocation' in navigator) || !window.isSecureContext) return;
@@ -3921,8 +3919,19 @@ function beginArrivalWatch(onOk, onFail) {
   if (_arrivalWatchId !== null) return;
   _arrivalWatchId = navigator.geolocation.watchPosition(
     (pos) => { if (onOk) { onOk(); onOk = null; } onArrivalPosition(pos); },
-    () => { if (onFail) onFail(); stopArrivalWatch(); },
-    { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 }
+    (err) => {
+      // Only a refusal is permanent. A lost fix — underpass, parking garage,
+      // a moment between towers — is routine on a delivery route, and tearing
+      // the watch down for one would silently end the reminders for the rest
+      // of the day. watchPosition recovers on its own; let it.
+      if (err && err.code !== err.PERMISSION_DENIED) return;
+      if (onFail) onFail();
+      stopArrivalWatch();
+    },
+    // maximumAge 0: a geofence needs the position now, not one cached from
+    // half a minute ago. A stale fix means arriving at a store — or leaving
+    // one, which is what re-arms the next visit — goes unnoticed.
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
   );
   geocodePendingStores();
 }
@@ -3930,17 +3939,30 @@ function beginArrivalWatch(onOk, onFail) {
 function stopArrivalWatch() {
   if (_arrivalWatchId !== null) navigator.geolocation.clearWatch(_arrivalWatchId);
   _arrivalWatchId = null;
+  _arrivalInside.clear();
 }
 
+/**
+ * Fires on arrival, every visit — a rep who drives past the same store three
+ * times this week is asked three times, because each visit is a fresh chance
+ * to take the photo.
+ *
+ * "Every visit" is not "every GPS reading": position updates land every few
+ * seconds, so the prompt would be unusable if it repeated on each one. A store
+ * is remembered as entered until the rep is well clear of it, and only then can
+ * it prompt again.
+ */
 function onArrivalPosition(pos) {
   const { latitude, longitude } = pos.coords;
+  let prompted = false;
   for (const s of _arrivalStores) {
     if (s.latitude == null || s.longitude == null) continue;
-    if (recentlyNagged(s.id)) continue;
-    if (metersBetween(latitude, longitude, s.latitude, s.longitude) > ARRIVAL_RADIUS_M) continue;
-    try { sessionStorage.setItem(`addy_photo_nag_${s.id}`, String(Date.now())); } catch (e) {}
-    showArrivalPrompt(s);
-    return;   // one store at a time
+    const away = metersBetween(latitude, longitude, s.latitude, s.longitude);
+    if (away > ARRIVAL_EXIT_M) { _arrivalInside.delete(s.id); continue; }  // left — re-arm
+    if (away > ARRIVAL_RADIUS_M) continue;                                 // in the gap, no change
+    if (_arrivalInside.has(s.id)) continue;                                // still here from last time
+    _arrivalInside.add(s.id);
+    if (!prompted) { showArrivalPrompt(s); prompted = true; }              // one prompt at a time
   }
 }
 
