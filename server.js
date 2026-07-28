@@ -744,14 +744,19 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 app.post('/api/login', rateLimit(10, 60 * 1000), async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, remember } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     const user = await one('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]);
     if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
     if (user.status === 'pending') return res.status(403).json({ error: 'Your account is pending admin approval.' });
     if (user.status === 'inactive') return res.status(403).json({ error: 'Your account has been deactivated.' });
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role, store_id: user.store_id }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ token, role: user.role });
+    // "Keep me signed in" issues a 30-day session instead of a workday one —
+    // the same choice the Sales Suite team login already offers. Reps live in
+    // this on a phone all day, and being thrown out every 24 hours is the
+    // whole reason people stop using it.
+    const expiresIn = remember ? '30d' : '24h';
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role, store_id: user.store_id }, JWT_SECRET, { expiresIn });
+    res.json({ token, role: user.role, expires_in: expiresIn });
   } catch(e) { console.error('Login error:', e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 
