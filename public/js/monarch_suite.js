@@ -58,6 +58,11 @@ async function loadMonarchSuite() {
   const tierNames = { free: 'Free', starter: 'Starter', pro: 'Pro' };
   window._monarchPricing = monarchPricingFrom(status);
   window._monarchWorkspace = ws;
+  // This resolves AFTER the store list has usually rendered, and Pro-only
+  // features (the Navigate/Call handoff) read it. Announce it so anything
+  // already on screen can redraw, instead of a paying user seeing the
+  // free-tier view until they navigate away and back.
+  window.dispatchEvent(new CustomEvent('monarch:workspace', { detail: ws }));
 
   if (ws) {
     // FREE: everything lives right here in Addy — no separate Monarch login.

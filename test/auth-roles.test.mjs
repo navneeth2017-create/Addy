@@ -105,6 +105,22 @@ ok(/id="stay-signed-in"[^>]*checked/.test(LOGIN_HTML), 'the keep-signed-in box e
 ok(/addy_last_email/.test(LOGIN_HTML), 'a remembered address is prefilled on return');
 ok(!/addy_last_password|localStorage.setItem\('addy_pw/.test(APP), 'the PASSWORD is never stored by us');
 
+// ── the in-car handoff is a PAID feature ────────────────────────────────────
+// Navigate/Call hand off to Apple or Google Maps, which is what puts
+// turn-by-turn on a CarPlay screen. It ships with the Sales Suite, so it must
+// not appear for free-tier accounts — and must fail closed while the plan is
+// still unknown, not flash on and then disappear.
+ok(/function hasProSuite/.test(APP), 'the in-car feature has an entitlement check');
+const gate = bodyOf(APP, 'function hasProSuite()');
+ok(/tier === 'pro'/.test(gate), 'it requires a Pro-tier workspace');
+ok(/status === 'active' \|\| ws\.comped/.test(gate), 'active or comped only — a lapsed plan loses it');
+ok(/if \(!ws\) return false/.test(gate), 'and it fails CLOSED when the plan is unknown');
+const actions = bodyOf(APP, 'function storeActionsHtml(');
+ok(/if \(!hasProSuite\(\)\) return ''/.test(actions), 'the buttons are behind that check');
+ok(/maps\.apple\.com/.test(APP) && /google\.com\/maps/.test(APP),
+   'both Apple and Google Maps handoffs exist');
+ok(/replace\(\/\[\^\\\\d\+\]\/g, ''\)/.test(APP) || /telHref/.test(APP),
+   'phone numbers are stripped to digits so dialling works');
 // ── what a token actually opens ─────────────────────────────────────────────
 const store = await makeStore(T);
 const asAdmin = client(INVOICE_URL, admin.token);
