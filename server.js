@@ -121,11 +121,25 @@ const stripe = process.env.STRIPE_SECRET_KEY ? Stripe(process.env.STRIPE_SECRET_
 if (stripe) console.log('💳 Stripe payment processing enabled');
 else console.log('📄 Invoice-only mode (add STRIPE_SECRET_KEY to enable card payments)');
 
+/**
+ * Where this portal lives, for links we put in front of users.
+ *
+ * These were hardcoded to addydsd.com — an extra "s" — which resolves to
+ * nothing at all. Every welcome email's login button, the Terms and Privacy
+ * links in the footer, and the address on every invoice pointed at a domain
+ * that does not exist. Now derived from one place, and overridable, so a
+ * domain change is an env var rather than a search-and-replace through
+ * seventeen string literals.
+ */
+const SITE_URL = (process.env.SITE_URL || 'https://addydsd.com').replace(/\/+$/, '');
+const SITE_DOMAIN = SITE_URL.replace(/^https?:\/\//, '');
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || `admin@${SITE_DOMAIN}`;
+
 // ── WEB PUSH NOTIFICATIONS ────────────────────────────────────────────────────
 const webpush = require('web-push');
 const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BDgZsDCilhapnLmxI8TIFc5KiZLPmdnLwaW7kluTozXvDqo237jLLiKaWac86rtM0ZDymkCr-KpatLntmYvXM5c';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || 'ywl9LZOtPOzH3-QGIotbvz4SHljJ8QUf0EGPVvudvak';
-const VAPID_EMAIL   = process.env.VAPID_EMAIL       || 'mailto:admin@addydsds.com';
+const VAPID_EMAIL   = process.env.VAPID_EMAIL       || `mailto:${SUPPORT_EMAIL}`;
 webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE);
 
 // Native app (App Store / Play Store build) device tokens live in the same
@@ -180,7 +194,7 @@ async function deliverAdminPing(user, message) {
   if (resend && user.email) {
     try {
       await resend.emails.send({
-        from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g, ' ').trim(),
+        from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g, ' ').trim(),
         to: [user.email],
         subject: '📨 A message from the ADDY admin',
         html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
@@ -201,7 +215,7 @@ async function sendNotification(subject, htmlBody) {
     if (!recipients.length) return;
     const to = recipients.map(r => r.email);
     await resend.emails.send({
-      from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+      from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
       to,
       subject,
       html: htmlBody
@@ -483,6 +497,21 @@ async function migrate() {
   // ── Store table optional fields (phone, store number) ───────────────────────
   await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT ''`);
   await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_number TEXT DEFAULT ''`);
+  /**
+   * The store's sales-tax resale (reseller) certificate number, collected when
+   * the rep onboards them. It is what lets the rep sell to that store without
+   * charging sales tax — the store is buying to resell, so the tax is collected
+   * from the shopper at the register instead — and the seller has to be able to
+   * produce it if a state ever asks.
+   *
+   * Free text on purpose: every state formats these differently, and a strict
+   * pattern would reject valid certificates.
+   */
+  await q(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS resale_number TEXT`);
+  // Copied onto the order when it is placed rather than read live, so an
+  // invoice keeps showing the certificate actually relied on for THAT sale
+  // even after the store renews or corrects its number.
+  await q(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS resale_number TEXT`);
   // Relax NOT NULL on owner_name and email so partial store data is accepted
   try { await q('ALTER TABLE stores ALTER COLUMN owner_name DROP NOT NULL'); } catch(e) {}
   try { await q('ALTER TABLE stores ALTER COLUMN email DROP NOT NULL'); } catch(e) {}
@@ -843,7 +872,7 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
     if (resend) {
       try {
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
           to: [email.toLowerCase()],
           subject: 'We received your application — ADDY DSD Portal',
           html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
@@ -864,10 +893,10 @@ app.post('/api/signup', rateLimit(5, 60 * 1000), async (req, res) => {
                 <li>You'll get an email when you're approved</li>
                 <li>Log in and start placing orders</li>
               </ul>
-              <p style="font-size:13px;color:#94a3b8;margin:0;">Questions? DSDly to this email or contact us at <a href="mailto:admin@addydsds.com" style="color:#2563eb;">admin@addydsds.com</a></p>
+              <p style="font-size:13px;color:#94a3b8;margin:0;">Questions? DSDly to this email or contact us at <a href="mailto:${SUPPORT_EMAIL}" style="color:#2563eb;">${SUPPORT_EMAIL}</a></p>
             </div>
             <div style="background:#f8fafc;padding:16px 28px;text-align:center;font-size:12px;color:#94a3b8;">
-              © 2026 ADDY DSD Portal · <a href="https://addydsds.com/terms.html" style="color:#94a3b8;">Terms</a> · <a href="https://addydsds.com/privacy.html" style="color:#94a3b8;">Privacy</a>
+              © 2026 ADDY DSD Portal · <a href="${SITE_URL}/terms.html" style="color:#94a3b8;">Terms</a> · <a href="${SITE_URL}/privacy.html" style="color:#94a3b8;">Privacy</a>
             </div>
           </div>`
         });
@@ -953,7 +982,7 @@ app.post('/api/forgot-password', rateLimit(5, 15 * 60 * 1000), async (req, res) 
       // Production: send code by email, never expose it in the response
       try {
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
           to: [user.email],
           subject: 'Your ADDY password reset code',
           html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;">
@@ -1177,14 +1206,15 @@ app.get('/api/stores/:id', authenticate, authorize('admin'), async (req, res) =>
 
 app.post('/api/stores', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { name, owner_name, email, address, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number } = req.body;
+    const { name, owner_name, email, address, city, state, zip, category, monthly_revenue, wholesale_price, retail_price, distribution_cost, status, phone, store_number, resale_number } = req.body;
     if (!name) return res.status(400).json({ error: 'Store name is required' });
     const result = await one(
-      `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      `INSERT INTO stores (name,owner_name,email,address,city,state,zip,category,monthly_revenue,wholesale_price,retail_price,distribution_cost,status,phone,store_number,resale_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
       [name, owner_name||'', email||'', address||'', city||'', state||'', zip||'',
        category||'General', monthly_revenue||0, wholesale_price||0, retail_price||0,
-       distribution_cost||0, status||'active', phone||'', store_number||'']
+       distribution_cost||0, status||'active', phone||'', store_number||'',
+       (resale_number||'').trim() || null]
     );
     await logActivity('created', name, req.user.email);
     res.status(201).json(result);
@@ -1228,11 +1258,16 @@ app.patch('/api/stores/:id', authenticate, async (req, res) => {
     if (!(await canEditStore(req.user, id))) return res.status(403).json({ error: 'Access denied' });
     const store = await one('SELECT * FROM stores WHERE id=$1', [id]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
-    const allowed = ['name','owner_name','email','address','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status'];
+    const allowed = ['name','owner_name','email','address','city','state','zip','category','monthly_revenue','wholesale_price','retail_price','distribution_cost','status','phone','store_number','resale_number'];
     const updates = [], params = [];
     let pi = 1;
     for (const field of allowed) {
-      if (req.body[field] !== undefined) { updates.push(`${field}=$${pi}`); params.push(req.body[field]); pi++; }
+      if (req.body[field] === undefined) continue;
+      updates.push(`${field}=$${pi}`);
+      // Blank clears the certificate rather than storing '', so "no number on
+      // file" is one state everywhere instead of two.
+      params.push(field === 'resale_number' ? (String(req.body[field]).trim() || null) : req.body[field]);
+      pi++;
     }
     if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
     params.push(id);
@@ -1396,7 +1431,7 @@ app.post('/api/users/:id/ping', authenticate, authorize('admin'), async (req, re
     if (resend && user.email) {
       try {
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g, ' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g, ' ').trim(),
           to: [user.email],
           subject: '📨 A message from the ADDY admin',
           html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
@@ -1599,7 +1634,7 @@ app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req
       try {
         const roleLabel = user.role === 'dsd' ? 'DSD' : user.role === 'dsd' ? 'DSD' : 'DSD';
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
           to: [user.email],
           subject: '✅ Your ADDY account is approved!',
           html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
@@ -1611,9 +1646,9 @@ app.patch('/api/users/:id/approve', authenticate, authorize('admin'), async (req
               <p style="font-size:15px;color:#1e293b;margin:0 0 16px;">Hi ${user.name || 'there'},</p>
               <p style="font-size:14px;color:#475569;margin:0 0 24px;">Your <strong>${roleLabel}</strong> account has been approved. You can now log in and start placing orders.</p>
               <div style="text-align:center;margin:28px 0;">
-                <a href="https://addydsds.com/login.html" style="background:#2563eb;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">Log In to Your Account →</a>
+                <a href="${SITE_URL}/login.html" style="background:#2563eb;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">Log In to Your Account →</a>
               </div>
-              <p style="font-size:13px;color:#94a3b8;margin:0;text-align:center;">Questions? Contact us at <a href="mailto:admin@addydsds.com" style="color:#2563eb;">admin@addydsds.com</a></p>
+              <p style="font-size:13px;color:#94a3b8;margin:0;text-align:center;">Questions? Contact us at <a href="mailto:${SUPPORT_EMAIL}" style="color:#2563eb;">${SUPPORT_EMAIL}</a></p>
             </div>
             <div style="background:#f8fafc;padding:16px 28px;text-align:center;font-size:12px;color:#94a3b8;">© 2026 ADDY DSD Portal</div>
           </div>`
@@ -1637,7 +1672,7 @@ app.patch('/api/users/:id/reject', authenticate, authorize('admin'), async (req,
     if (resend) {
       try {
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
           to: [user.email],
           subject: 'Update on your ADDY application',
           html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
@@ -1649,7 +1684,7 @@ app.patch('/api/users/:id/reject', authenticate, authorize('admin'), async (req,
               <p style="font-size:15px;color:#1e293b;margin:0 0 16px;">Hi ${user.name || 'there'},</p>
               <p style="font-size:14px;color:#475569;margin:0 0 16px;">Thank you for your interest in partnering with ADDY DSD Portal. Unfortunately, we're unable to approve your application at this time.</p>
               <p style="font-size:14px;color:#475569;margin:0 0 24px;">If you believe this is an error or would like more information, please reach out to us directly.</p>
-              <p style="font-size:13px;color:#94a3b8;margin:0;text-align:center;">Contact us at <a href="mailto:admin@addydsds.com" style="color:#2563eb;">admin@addydsds.com</a></p>
+              <p style="font-size:13px;color:#94a3b8;margin:0;text-align:center;">Contact us at <a href="mailto:${SUPPORT_EMAIL}" style="color:#2563eb;">${SUPPORT_EMAIL}</a></p>
             </div>
             <div style="background:#f8fafc;padding:16px 28px;text-align:center;font-size:12px;color:#94a3b8;">© 2026 ADDY DSD Portal</div>
           </div>`
@@ -1805,7 +1840,7 @@ app.patch('/api/products/:id', authenticate, authorize('admin'), async (req, res
       for (const user of preorders) {
         try {
           await resend.emails.send({
-            from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+            from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
             to: [user.email],
             subject: `${productName} is now available — ADDY`,
             html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px;">
@@ -2018,9 +2053,11 @@ app.post('/api/payment/confirm', authenticate, async (req, res) => {
 app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
   try {
     const { role, id: userId } = req.user;
+    // COALESCE so orders placed before the certificate was recorded still show
+    // the store's current one rather than a blank line.
     const order = role === 'admin'
-      ? await one('SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone FROM orders o LEFT JOIN users u ON u.id=o.user_id WHERE o.id=$1', [req.params.orderId])
-      : await one('SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone FROM orders o LEFT JOIN users u ON u.id=o.user_id WHERE o.id=$1 AND o.user_id=$2', [req.params.orderId, userId]);
+      ? await one("SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone,s.name as store_name,COALESCE(o.resale_number,s.resale_number) as resale_number FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN stores s ON s.id=o.store_id WHERE o.id=$1", [req.params.orderId])
+      : await one("SELECT o.*,u.name as user_name,u.email as user_email,u.phone as user_phone,s.name as store_name,COALESCE(o.resale_number,s.resale_number) as resale_number FROM orders o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN stores s ON s.id=o.store_id WHERE o.id=$1 AND o.user_id=$2", [req.params.orderId, userId]);
     if (!order) return res.status(404).send('Invoice not found');
     const invoice = await one('SELECT * FROM invoices WHERE order_id=$1', [req.params.orderId]);
     if (!invoice) return res.status(404).send('Invoice not found');
@@ -2098,7 +2135,7 @@ app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
             <div>
               <div class="party-label">From</div>
               <div class="party-name">ADDY Distribution</div>
-              <div class="party-detail">notifications@addydsds.com<br>addydsds.com</div>
+              <div class="party-detail">notifications@${SITE_DOMAIN}<br>${SITE_DOMAIN}</div>
             </div>
             <div>
               <div class="party-label">Bill To</div>
@@ -2108,6 +2145,10 @@ app.get('/api/invoices/:orderId/print', authenticate, async (req, res) => {
                 ${order.user_phone ? order.user_phone + '<br>' : ''}
                 ${order.shipping_address}<br>
                 ${order.shipping_city}, ${order.shipping_state} ${order.shipping_zip}
+                ${order.store_name ? `<br><br><strong>For store:</strong> ${order.store_name}` : ''}
+                ${order.resale_number
+                  ? `<br><strong>Resale cert:</strong> ${order.resale_number}`
+                  : (order.store_name ? '<br><span style="color:#b45309;">No resale certificate on file</span>' : '')}
               </div>
             </div>
           </div>
@@ -2484,9 +2525,13 @@ app.post('/api/orders', authenticate, async (req, res) => {
     let order;
     try {
       await client.query('BEGIN');
+      // Snapshot the store's resale certificate onto the order. Read here, not
+      // rendered live on the invoice: a store can renew or correct its number,
+      // and this invoice has to keep showing the one relied on for THIS sale.
       const or = await client.query(
-        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+        `INSERT INTO orders (user_id,store_id,payment_method,payment_status,subtotal,shipping_cost,processing_fee,total,shipping_name,shipping_address,shipping_city,shipping_state,shipping_zip,notes,resale_number)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+                 (SELECT resale_number FROM stores WHERE id=$2)) RETURNING *`,
         [userId, store_id||null, payment_method, payment_status, subtotal, shipping_cost, processing_fee, total,
          shipping_name||'', shipping_address, shipping_city, shipping_state, shipping_zip, notes||'']
       );
@@ -2586,7 +2631,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
           ? `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Invoice</td><td style="padding:6px 0;font-size:13px;">${invoice?.invoice_number || ''} — due in 30 days</td></tr>`
           : `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">Payment</td><td style="padding:6px 0;font-size:13px;">Card — paid ✓</td></tr>`;
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
           to: [req.user.email],
           subject: `Order #${order.id} confirmed — $${parseFloat(order.total).toFixed(2)}`,
           html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
@@ -2710,7 +2755,7 @@ app.patch('/api/orders/:id/status', authenticate, authorize('admin'), async (req
       const copy = statusCopy[status];
       try {
         await resend.emails.send({
-          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsds.com>').replace(/\n/g,' ').trim(),
+          from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g,' ').trim(),
           to: [buyer.email],
           subject: copy.subject,
           html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px;">
@@ -3217,13 +3262,13 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
         }
 
         const inserted = await one(
-          `INSERT INTO stores (name,owner_name,email,address,city,state,zip,phone,store_number,category,status,monthly_revenue,wholesale_price,retail_price,distribution_cost,photos_due_at,photos_complete,claimed_via)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,0,0,0,$12,false,$13) RETURNING id`,
+          `INSERT INTO stores (name,owner_name,email,address,city,state,zip,phone,store_number,category,status,monthly_revenue,wholesale_price,retail_price,distribution_cost,photos_due_at,photos_complete,claimed_via,resale_number)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,0,0,0,$12,false,$13,$14) RETURNING id`,
           [name, (row.owner_name||'').trim(), (row.email||'').trim(),
            (row.address||'').trim(), (row.city||'').trim(), (row.state||'').trim(),
            (row.zip||'').trim(), (row.phone||'').trim(), (row.store_number||'').trim(),
            (row.category||'General').trim(), (row.status||'active').trim(),
-           photoDeadline, claimedVia]
+           photoDeadline, claimedVia, (row.resale_number||'').trim() || null]
         );
         await claimImported(inserted.id);
         created++;
@@ -3761,14 +3806,18 @@ app.post('/api/stores/claim', authenticate, authorize('dsd'), async (req, res) =
       }
       // Store exists but unclaimed — claim it (auto-approved), set 24h photo deadline
       await claimStoreForDsd(existing.id, req.user.id, 'manual');
+      // Never overwrite a certificate already on file — the rep claiming it now
+      // may know less about the store than whoever recorded it first.
+      const resale = (req.body.resale_number || '').trim();
+      if (resale) await q('UPDATE stores SET resale_number=$1 WHERE id=$2 AND resale_number IS NULL', [resale, existing.id]);
       await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
       return res.json({ success: true, id: existing.id, needsPhotos: true, message: 'Store claimed and approved.' });
     }
 
     // Brand new store — create it (auto-approved to the claimer), set 24h photo deadline
     const store = await one(
-      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,store_approval_status,exclusive_rep_id,monthly_revenue,status,photos_complete,claimed_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved',$11,0,'active',false,'manual') RETURNING id",
-      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', req.user.id]
+      "INSERT INTO stores (name,owner_name,address,city,state,zip,phone,email,store_number,category,resale_number,store_approval_status,exclusive_rep_id,monthly_revenue,status,photos_complete,claimed_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'approved',$12,0,'active',false,'manual') RETURNING id",
+      [name, req.body.owner_name||'N/A', address||'', city||'', state||'', zip||'N/A', phone||'', email||'', req.body.store_number||'', category||'General', (req.body.resale_number||'').trim() || null, req.user.id]
     );
     await claimStoreForDsd(store.id, req.user.id, 'manual');
     await logActivity('claimed_store', `${name} by rep #${req.user.id}`, req.user.email);
