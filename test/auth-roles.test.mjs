@@ -80,6 +80,31 @@ for (const marker of ['This page is for', 'No saved session', 'rejected your ses
 const LOGIN_HTML = await (await anon('/login.html')).text();
 ok(LOGIN_HTML.includes('signout-reason'), 'the login page can display the reason');
 
+// ── "keep me signed in" ─────────────────────────────────────────────────────
+// Reps use this on a phone between stops; a workday session meant constant
+// re-authentication, which is how a tool stops getting used.
+const sessionDays = (t) => {
+  const p = JSON.parse(Buffer.from(t.split('.')[1], 'base64').toString());
+  return Math.round((p.exp - p.iat) / 86400);
+};
+let kept = await login(INVOICE_URL, dsd.email, PASSWORD);
+ok(kept.status === 200, 'sign-in without the flag still works', `HTTP ${kept.status}`);
+ok(sessionDays(kept.body.token) <= 1, 'and gives the short workday session', `${sessionDays(kept.body.token)} day(s)`);
+
+const remembered = await (await anon('/api/login', {
+  method: 'POST', body: JSON.stringify({ email: dsd.email, password: PASSWORD, remember: true }),
+})).json();
+ok(remembered.token && sessionDays(remembered.token) >= 29,
+   '"keep me signed in" gives a ~30-day session',
+   remembered.token ? `${sessionDays(remembered.token)} days` : 'no token');
+
+// The form must be marked up or the browser won't offer to save the password.
+ok(/autocomplete="username"/.test(LOGIN_HTML), 'the email field is marked autocomplete="username"');
+ok(/autocomplete="current-password"/.test(LOGIN_HTML), 'the password field is marked autocomplete="current-password"');
+ok(/id="stay-signed-in"[^>]*checked/.test(LOGIN_HTML), 'the keep-signed-in box exists and is ticked by default');
+ok(/addy_last_email/.test(LOGIN_HTML), 'a remembered address is prefilled on return');
+ok(!/addy_last_password|localStorage.setItem\('addy_pw/.test(APP), 'the PASSWORD is never stored by us');
+
 // ── what a token actually opens ─────────────────────────────────────────────
 const store = await makeStore(T);
 const asAdmin = client(INVOICE_URL, admin.token);

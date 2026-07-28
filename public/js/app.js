@@ -664,6 +664,9 @@ async function handleLogin(e) {
   e.preventDefault();
   const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
+  // Ticked by default: a 30-day session instead of a workday one. Reps use
+  // this on a phone between stops and were being signed out constantly.
+  const remember = document.getElementById('stay-signed-in')?.checked !== false;
   const errorEl = document.getElementById('error-msg');
   errorEl.style.display = 'none';
 
@@ -671,7 +674,7 @@ async function handleLogin(e) {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password, remember })
     });
     const data = await res.json();
     if (!res.ok) {
@@ -709,6 +712,13 @@ async function handleLogin(e) {
     clearPreviewSession();
     localStorage.setItem('addy_token', data.token);
     localStorage.setItem('addy_role', data.role);
+    // Remember the ADDRESS only — never the password. The browser's own
+    // password manager handles that, which is what the autocomplete
+    // attributes on the form are there to enable.
+    try {
+      if (remember) localStorage.setItem('addy_last_email', email);
+      else localStorage.removeItem('addy_last_email');
+    } catch (e) { /* storage blocked */ }
     window.location.href = `/${dest}.html?t=${t}`;
   } catch {
     errorEl.textContent = 'Connection error';
