@@ -127,7 +127,7 @@ async function mirrorStoresToSuite(userId, names) {
   // Only stores actually linked to this user — a flagged claim conflict
   // (store owned by another rep) never reaches their Suite.
   const stores = (await pool.query(
-    `SELECT name, owner_name, email, address, city, state, zip, phone, category
+    `SELECT name, owner_name, email, address, city, state, zip, phone, category, resale_number
      FROM stores WHERE exclusive_rep_id=$1 AND LOWER(name) = ANY($2)
      LIMIT 500`,
     [userId, names.map(n => n.toLowerCase())]
@@ -142,6 +142,10 @@ async function mirrorStoresToSuite(userId, names) {
     if ((r.phone || '').trim()) out.phone = r.phone.trim();
     if ((r.owner_name || '').trim()) out.contact_name = r.owner_name.trim();
     if ((r.email || '').trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r.email.trim())) out.email = r.email.trim();
+    // The resale certificate travels with the store: the rep collected it once
+    // on Addy and should not be asked for it again in the Suite, where it ends
+    // up on the invoices they send that store.
+    if ((r.resale_number || '').trim()) out.resale_number = r.resale_number.trim();
     return out;
   });
   if (!mapped.length) return;
@@ -478,6 +482,41 @@ function installMonarchIntegration(app) {
         if (r.rows.length) {
           body.suite_mirror = true;
           mirrorStoresToSuite(req.user.id, names)
+            .catch(e => console.error(`Suite mirror failed for user ${req.user.id}:`, e.message));
+        }
+        origJson(body);
+      }).catch(() => origJson(body));
+      return res;
+    };
+    next();
+  });
+
+  /**
+   * The same mirror, for a single store added by hand.
+   *
+   * Only the CSV import was wired up, so a rep who typed in one store — which
+   * is how most stores actually get added, one at a time on the road — had to
+   * enter it a second time in the Suite. Same interception, same background
+   * best-effort behaviour: a slow or down Monarch never blocks or fails the
+   * Addy claim.
+   *
+   * Flagged conflicts are excluded — that store belongs to another rep, and
+   * mirrorStoresToSuite's exclusive_rep_id lookup double-checks it.
+   */
+  app.use('/api/stores/claim', (req, res, next) => {
+    const origJson = res.json.bind(res);
+    res.json = (body) => {
+      const name = String(req.body?.name || '').trim();
+      const eligible = res.statusCode === 200 && body && body.success && !body.flagged
+        && name && req.user?.role === 'dsd' && configured();
+      if (!eligible) return origJson(body);
+      pool.query(
+        `SELECT 1 FROM monarch_workspaces WHERE user_id=$1 AND monarch_provisioned AND status='active'`,
+        [req.user.id]
+      ).then(r => {
+        if (r.rows.length) {
+          body.suite_mirror = true;
+          mirrorStoresToSuite(req.user.id, [name])
             .catch(e => console.error(`Suite mirror failed for user ${req.user.id}:`, e.message));
         }
         origJson(body);

@@ -1565,7 +1565,7 @@ async function requestOwnership(storeId) {
   if (result && result.success) {
     showToast('Ownership request submitted ✓ — admin will review', 'success');
     document.getElementById('claim-store-modal')?.classList.remove('active');
-    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-resale','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
   } else if (result && result.error) {
     showToast(result.error, 'error');
   }
@@ -1580,13 +1580,14 @@ async function submitStoreClaim() {
     city: document.getElementById('cs-city')?.value?.trim(), state: document.getElementById('cs-state')?.value?.trim(),
     zip: document.getElementById('cs-zip')?.value?.trim(), phone: document.getElementById('cs-phone')?.value?.trim(),
     email: document.getElementById('cs-email')?.value?.trim(),
+    resale_number: document.getElementById('cs-resale')?.value?.trim(),
     store_id: storeId ? parseInt(storeId) : null,
   })});
   if (result && result.success) {
     // Claims are auto-approved; a conflict comes back flagged for admin review instead.
     showToast(result.message || (result.flagged ? 'Flagged for admin review' : 'Store claimed ✓'), result.flagged ? 'info' : 'success');
     document.getElementById('claim-store-modal')?.classList.remove('active');
-    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    ['cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-resale','cs-store-id'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
     loadMyStores();
     // Prompt for store photos only when the claim actually went through (required within 24 hours)
     if (result.needsPhotos && !result.flagged) {
