@@ -939,22 +939,21 @@ async function loadActivityFeed() {
  * A rep looking at a store had no way to get directions to it or ring it —
  * they were retyping addresses into Maps by hand, in a truck.
  *
- * We hand off to the native maps app rather than embedding a map: on iPhone
- * that's Apple Maps, elsewhere Google Maps, and once either is driving, the
- * turn-by-turn appears on CarPlay or Android Auto. That's the only route to a
- * car screen from a web app — CarPlay itself runs native apps only.
+ * We hand off to the maps app rather than embedding a map: once Google Maps is
+ * driving, the turn-by-turn appears on CarPlay or Android Auto. That's the only
+ * route to a car screen from a web app — CarPlay itself runs native apps only.
+ *
+ * Google Maps on every device, including iPhone. Apple Maps was tried as the
+ * iOS default and taken back out: its URL scheme has no waypoint parameter, so
+ * a multi-stop route can't be expressed for it, and Monarch's driver routes
+ * need multi-stop. Sending a rep to two different apps depending on which
+ * screen they tapped is worse than picking one and staying there.
  */
-const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
-  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
 function mapsUrlFor(store) {
   const q = [store.name, store.address, store.city, store.state, store.zip]
     .filter(Boolean).join(' ');
   const encoded = encodeURIComponent(q);
-  // Apple Maps takes the destination as a search string; dirflg=d = driving.
-  return isIOS()
-    ? `https://maps.apple.com/?daddr=${encoded}&dirflg=d`
-    : `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encoded}`;
+  return `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encoded}`;
 }
 
 /** Tel: link, digits only — spaces and brackets break dialling on some phones. */
