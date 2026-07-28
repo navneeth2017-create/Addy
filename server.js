@@ -506,6 +506,14 @@ async function migrate() {
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_due_at TIMESTAMPTZ");
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_complete BOOLEAN NOT NULL DEFAULT false");
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS claimed_via TEXT DEFAULT 'manual'");
+  // When a rep adds a store from home they can't photograph it. They defer
+  // instead, agreeing to a 30-day deadline — recorded here, once, so the
+  // agreement is auditable and the deadline can't be rolled forever.
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_deferred_at TIMESTAMPTZ");
+  // Cached geocode, filled in by the client the first time it needs it, used
+  // to notice when a rep is standing at a store whose photos are still owed.
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION");
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION");
 
   // ── Free shipping flag on products ──────────────────────────────────────────
   await q(`ALTER TABLE products ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN NOT NULL DEFAULT false`);
@@ -2965,11 +2973,80 @@ app.get('/api/stores/:id/photos', authenticate, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Defer the photos, once, in exchange for an explicit 30-day commitment.
+ *
+ * Reps enter stores from home, where they cannot photograph a storefront.
+ * The modal used to have no way past it for a manual claim, so those stores
+ * simply never got entered. Deferring is the way through — but it has to be
+ * real, not a client-side dismissal: the deadline moves here, on the server,
+ * and photos_deferred_at makes the agreement auditable.
+ *
+ * Deliberately once per store. A rep who could defer repeatedly would never
+ * owe photos at all, which is the same as not requiring them.
+ */
+const PHOTO_DEFER_DAYS = 30;
+app.post('/api/stores/:id/photos/defer', authenticate, rateLimit(30, 60 * 1000), async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.id);
+    if (!Number.isInteger(storeId)) return res.status(400).json({ error: 'Bad store id' });
+    if (req.body?.agreed !== true) {
+      return res.status(400).json({ error: 'You must agree to the photo deadline first.' });
+    }
+    const store = await one(
+      'SELECT id, name, exclusive_rep_id, photos_complete, photos_deferred_at FROM stores WHERE id=$1', [storeId]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.user.role !== 'admin' && store.exclusive_rep_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (store.photos_complete) {
+      return res.status(400).json({ error: 'This store already has both photos.' });
+    }
+    if (store.photos_deferred_at) {
+      return res.status(409).json({
+        error: 'Photos for this store have already been deferred once. Please upload them.',
+      });
+    }
+    const due = new Date(Date.now() + PHOTO_DEFER_DAYS * 24 * 60 * 60 * 1000);
+    await q('UPDATE stores SET photos_due_at=$1, photos_deferred_at=NOW() WHERE id=$2', [due, storeId]);
+    await logActivity('deferred_store_photos',
+      `agreed to photograph ${store.name} (#${storeId}) within ${PHOTO_DEFER_DAYS} days`, req.user.email);
+    res.json({ success: true, photos_due_at: due, days: PHOTO_DEFER_DAYS });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Could not save that. Try again.' }); }
+});
+
+/**
+ * Cache a store's coordinates so the reminder can tell when a rep has arrived.
+ *
+ * Fill-once, never overwrite: this comes from a client-side geocode, so it is
+ * a cache rather than an edit. A rep cannot move a store that already has
+ * coordinates, and cannot touch a store that isn't theirs.
+ */
+app.post('/api/stores/:id/geo', authenticate, async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.id);
+    const lat = Number(req.body?.latitude);
+    const lng = Number(req.body?.longitude);
+    if (!Number.isInteger(storeId)) return res.status(400).json({ error: 'Bad store id' });
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return res.status(400).json({ error: 'Bad coordinates' });
+    }
+    const store = await one('SELECT id, exclusive_rep_id FROM stores WHERE id=$1', [storeId]);
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.user.role !== 'admin' && store.exclusive_rep_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    await q('UPDATE stores SET latitude=$1, longitude=$2 WHERE id=$3 AND latitude IS NULL', [lat, lng, storeId]);
+    res.json({ success: true });
+  } catch(e) { console.error(e.message); res.status(500).json({ error: 'Could not save coordinates' }); }
+});
+
 // DSD: get all stores with pending/overdue photos (for reminder banner)
 app.get('/api/my-stores/photos-pending', authenticate, async (req, res) => {
   try {
     const stores = await all(
-      `SELECT id, name, photos_due_at, photos_complete, claimed_via,
+      `SELECT id, name, address, city, state, zip,
+              latitude, longitude, photos_due_at, photos_complete, claimed_via, photos_deferred_at,
               (photos_due_at IS NOT NULL AND NOT photos_complete AND photos_due_at < NOW()) as overdue,
               (SELECT array_agg(photo_type) FROM store_photos sp WHERE sp.store_id=stores.id) as uploaded_types
        FROM stores

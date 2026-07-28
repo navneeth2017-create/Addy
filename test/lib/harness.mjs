@@ -80,7 +80,10 @@ const HASH = bcrypt.hashSync(PASSWORD, 10);
 
 /** Creates a user with a known password. Returns { id, email, role, token }. */
 export async function makeUser(role, tag, extra = {}) {
-  const email = `harness_${role}_${tag}@test.invalid`;
+  // Emails are derived from role+tag, so a suite needing TWO users of the same
+  // role must vary this part via extra.emailRole. It stays inside the
+  // `harness_<x>_<tag>@test.invalid` shape so cleanup(tag) still matches.
+  const email = `harness_${extra.emailRole || role}_${tag}@test.invalid`;
   const r = await db(
     `INSERT INTO users (email, name, phone, role, password_hash, status, tier, can_pay_invoice)
      VALUES ($1,$2,'',$3,$4,'active',1,$5) RETURNING id, email, role, store_id`,

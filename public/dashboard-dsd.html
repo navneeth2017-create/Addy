@@ -300,10 +300,23 @@
       <button id="submit-photos-btn" class="btn btn-green" onclick="submitStorePhotos()" style="width:100%;font-size:15px;padding:14px;" disabled>
         Submit Photos
       </button>
-      <div id="photo-skip-wrap" style="text-align:center;margin-top:12px;display:none;">
-        <button onclick="skipPhotosForNow()" style="background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;text-decoration:underline;">
-          I'll do this later (you have 60 days)
+      <!-- Adding a store from home is normal; you cannot photograph a
+           storefront from your kitchen. Deferring is allowed, but it costs an
+           explicit commitment rather than a quiet dismissal. -->
+      <div id="photo-skip-wrap" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;text-align:center;">
+          Not at the store right now?
+        </div>
+        <label for="photo-defer-agree" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;font-size:13px;line-height:1.45;margin-bottom:12px;">
+          <input type="checkbox" id="photo-defer-agree" style="margin-top:2px;flex-shrink:0;" onchange="updateDeferButton()">
+          <span>I agree to upload both photos for this store <strong>within 30 days</strong>.</span>
+        </label>
+        <button id="photo-defer-btn" class="btn btn-outline" onclick="deferStorePhotos()" style="width:100%;font-size:14px;padding:12px;" disabled>
+          Add store now, photos later
         </button>
+        <div id="photo-defer-note" style="font-size:11px;color:var(--text-muted);margin-top:8px;text-align:center;">
+          We'll remind you the next time you're at the store.
+        </div>
       </div>
     </div>
   </div>
