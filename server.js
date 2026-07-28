@@ -507,9 +507,12 @@ async function migrate() {
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_complete BOOLEAN NOT NULL DEFAULT false");
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS claimed_via TEXT DEFAULT 'manual'");
   // When a rep adds a store from home they can't photograph it. They defer
-  // instead, agreeing to a 30-day deadline — recorded here, once, so the
-  // agreement is auditable and the deadline can't be rolled forever.
+  // instead, agreeing to a deadline — recorded here, once, so the agreement is
+  // auditable and the deadline can't be rolled forever.
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS photos_deferred_at TIMESTAMPTZ");
+  // The photo clock runs from when the store was entered, not from whenever the
+  // rep got round to deferring, so this records the claim itself.
+  await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ");
   // Cached geocode, filled in by the client the first time it needs it, used
   // to notice when a rep is standing at a store whose photos are still owed.
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION");
@@ -655,7 +658,7 @@ async function getPriceForUser(productId, userId, role) {
 // (exclusive_rep_id, owner_stores, dsd_stores) so it shows up consistently.
 async function claimStoreForDsd(storeId, userId, via = 'manual') {
   const photoDue = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved', photos_due_at=$2, photos_complete=false, claimed_via=$3 WHERE id=$4",
+  await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved', photos_due_at=$2, photos_complete=false, claimed_via=$3, claimed_at=NOW() WHERE id=$4",
     [userId, photoDue, via, storeId]);
   await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
   await q('INSERT INTO dsd_stores (dsd_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
@@ -2974,7 +2977,7 @@ app.get('/api/stores/:id/photos', authenticate, async (req, res) => {
 });
 
 /**
- * Defer the photos, once, in exchange for an explicit 30-day commitment.
+ * Defer the photos, once, in exchange for an explicit commitment.
  *
  * Reps enter stores from home, where they cannot photograph a storefront.
  * The modal used to have no way past it for a manual claim, so those stores
@@ -2982,10 +2985,17 @@ app.get('/api/stores/:id/photos', authenticate, async (req, res) => {
  * real, not a client-side dismissal: the deadline moves here, on the server,
  * and photos_deferred_at makes the agreement auditable.
  *
+ * The clock runs from when the store was entered, not from when the rep got
+ * round to deferring, so sitting on the prompt for a fortnight doesn't buy
+ * extra time. The floor below keeps that from backfiring: a store entered
+ * long ago would otherwise be past its deadline the instant it was deferred,
+ * which helps nobody.
+ *
  * Deliberately once per store. A rep who could defer repeatedly would never
  * owe photos at all, which is the same as not requiring them.
  */
-const PHOTO_DEFER_DAYS = 30;
+const PHOTO_DEFER_DAYS = 120;
+const PHOTO_DEFER_MIN_DAYS = 30;
 app.post('/api/stores/:id/photos/defer', authenticate, rateLimit(30, 60 * 1000), async (req, res) => {
   try {
     const storeId = parseInt(req.params.id);
@@ -2994,7 +3004,7 @@ app.post('/api/stores/:id/photos/defer', authenticate, rateLimit(30, 60 * 1000),
       return res.status(400).json({ error: 'You must agree to the photo deadline first.' });
     }
     const store = await one(
-      'SELECT id, name, exclusive_rep_id, photos_complete, photos_deferred_at FROM stores WHERE id=$1', [storeId]);
+      'SELECT id, name, exclusive_rep_id, photos_complete, photos_deferred_at, claimed_at FROM stores WHERE id=$1', [storeId]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
     if (req.user.role !== 'admin' && store.exclusive_rep_id !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
@@ -3007,10 +3017,15 @@ app.post('/api/stores/:id/photos/defer', authenticate, rateLimit(30, 60 * 1000),
         error: 'Photos for this store have already been deferred once. Please upload them.',
       });
     }
-    const due = new Date(Date.now() + PHOTO_DEFER_DAYS * 24 * 60 * 60 * 1000);
+    const DAY = 24 * 60 * 60 * 1000;
+    const from = store.claimed_at ? new Date(store.claimed_at).getTime() : Date.now();
+    const due = new Date(Math.max(
+      from + PHOTO_DEFER_DAYS * DAY,             // 120 days from entering the store
+      Date.now() + PHOTO_DEFER_MIN_DAYS * DAY,   // ...but never less than 30 from today
+    ));
     await q('UPDATE stores SET photos_due_at=$1, photos_deferred_at=NOW() WHERE id=$2', [due, storeId]);
     await logActivity('deferred_store_photos',
-      `agreed to photograph ${store.name} (#${storeId}) within ${PHOTO_DEFER_DAYS} days`, req.user.email);
+      `agreed to photograph ${store.name} (#${storeId}) by ${due.toISOString().slice(0, 10)}`, req.user.email);
     res.json({ success: true, photos_due_at: due, days: PHOTO_DEFER_DAYS });
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Could not save that. Try again.' }); }
 });
@@ -3139,7 +3154,7 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
         await flagStoreClaimConflict(storeId, userId, st.exclusive_rep_id, 'Claim conflict via CSV import');
         return { linked: false, flagged: true };
       }
-      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved' WHERE id=$2", [userId, storeId]);
+      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved', claimed_at=COALESCE(claimed_at, NOW()) WHERE id=$2", [userId, storeId]);
       await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
       await q('INSERT INTO dsd_stores (dsd_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
       return { linked: true, flagged: false };

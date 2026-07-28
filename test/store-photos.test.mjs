@@ -10,7 +10,9 @@
  *    the 24-hour claim deadline in place, so a "skipped" store was overdue by
  *    the next morning),
  *  - it costs an explicit agreement,
- *  - and it can only be taken once per store, or the requirement means nothing.
+ *  - it can only be taken once per store, or the requirement means nothing,
+ *  - and the 120 days run from when the store was ENTERED, so sitting on the
+ *    prompt doesn't buy extra time.
  */
 import {
   INVOICE_URL, client, db, ok, finish, makeUser, makeStore, tag,
@@ -23,13 +25,14 @@ const asRep = client(INVOICE_URL, rep.token);
 const asOther = client(INVOICE_URL, other.token);
 
 /** Claim a fresh store for `rep` the way the app does, with the 24h deadline. */
-async function claimedStore() {
+async function claimedStore(claimedDaysAgo = 0) {
   const s = await makeStore(T);
   await db(
     `UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved',
             photos_due_at=NOW() + INTERVAL '24 hours', photos_complete=false,
-            photos_deferred_at=NULL, claimed_via='manual'
-     WHERE id=$2`, [rep.id, s.id]);
+            photos_deferred_at=NULL, claimed_via='manual',
+            claimed_at=NOW() - ($2 || ' days')::interval
+     WHERE id=$3`, [rep.id, String(claimedDaysAgo), s.id]);
   await db('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [rep.id, s.id]);
   return s;
 }
@@ -47,12 +50,29 @@ const res = await asRep(`/api/stores/${store.id}/photos/defer`, {
 });
 const body = await res.json();
 ok(res.status === 200, 'a rep can defer the photos', `HTTP ${res.status}`);
-ok(body.days === 30, 'the agreement is for 30 days', `${body.days} days`);
+ok(body.days === 120, 'the agreement is for 120 days', `${body.days} days`);
 
 const after = (await db('SELECT photos_due_at, photos_deferred_at FROM stores WHERE id=$1', [store.id])).rows[0];
 const days = hoursUntil(after.photos_due_at) / 24;
-ok(days > 29 && days < 31, 'the deadline REALLY moved, in the database', `${days.toFixed(1)} days`);
+ok(days > 119 && days < 121, 'the deadline REALLY moved, in the database', `${days.toFixed(1)} days`);
 ok(!!after.photos_deferred_at, 'and the agreement is recorded for audit');
+
+// ── the clock runs from when the store was entered ──────────────────────────
+// Sitting on the prompt for a month must not buy a month of extra time.
+const old = await claimedStore(30);
+await asRep(`/api/stores/${old.id}/photos/defer`, { method: 'POST', body: JSON.stringify({ agreed: true }) });
+const oldDays = hoursUntil((await db('SELECT photos_due_at FROM stores WHERE id=$1', [old.id])).rows[0].photos_due_at) / 24;
+ok(oldDays > 89 && oldDays < 91,
+   'a store entered 30 days ago has 90 days left, not a fresh 120', `${oldDays.toFixed(1)} days`);
+
+// ...but a store entered long ago must not be born overdue, which would make
+// deferring pointless. A floor keeps the agreement worth taking.
+const ancient = await claimedStore(400);
+await asRep(`/api/stores/${ancient.id}/photos/defer`, { method: 'POST', body: JSON.stringify({ agreed: true }) });
+const ancientDays = hoursUntil((await db('SELECT photos_due_at FROM stores WHERE id=$1', [ancient.id])).rows[0].photos_due_at) / 24;
+ok(ancientDays > 29 && ancientDays < 31,
+   'a very old store still gets a 30-day floor rather than being instantly overdue',
+   `${ancientDays.toFixed(1)} days`);
 
 // ── it is a commitment, not a dismissal ─────────────────────────────────────
 const store2 = await claimedStore();
@@ -75,7 +95,7 @@ const twice = await asRep(`/api/stores/${store.id}/photos/defer`, {
 });
 ok(twice.status === 409, 'the SAME store cannot be deferred a second time', `HTTP ${twice.status}`);
 const unmoved = (await db('SELECT photos_due_at FROM stores WHERE id=$1', [store.id])).rows[0];
-ok(hoursUntil(unmoved.photos_due_at) / 24 < 31, 'so the deadline cannot be rolled forever');
+ok(hoursUntil(unmoved.photos_due_at) / 24 < 121, 'so the deadline cannot be rolled forever');
 
 // ── it is still someone else's store ────────────────────────────────────────
 const store3 = await claimedStore();
@@ -128,7 +148,10 @@ const APP = await (await client(INVOICE_URL)('/js/app.js')).text();
 const HTML = await (await client(INVOICE_URL)('/dashboard-dsd.html')).text();
 ok(!/skipPhotosForNow/.test(APP), 'the client-only "skip" that never told the server is gone');
 ok(/photos\/defer/.test(APP), 'the modal calls the real defer endpoint');
-ok(/photo-defer-agree/.test(HTML), 'and makes you tick the 30-day agreement first');
+ok(/photo-defer-agree/.test(HTML), 'and makes you tick the agreement first');
+ok(/<strong>within 120 days<\/strong>/.test(HTML), 'which states the 120-day deadline plainly');
+ok(!/ARRIVAL_QUIET_MS/.test(APP) && /ARRIVAL_EXIT_M/.test(APP),
+   'the reminder fires per VISIT, not on an hourly timer');
 ok(!/display\s*=\s*isBulk \? 'block' : 'none'/.test(APP),
    'the defer control is no longer hidden for manual claims — the bug Danny hit');
 
