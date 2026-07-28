@@ -131,8 +131,14 @@ else console.log('📄 Invoice-only mode (add STRIPE_SECRET_KEY to enable card p
  * domain change is an env var rather than a search-and-replace through
  * seventeen string literals.
  */
-const SITE_URL = (process.env.SITE_URL || 'https://addydsd.com').replace(/\/+$/, '');
-const SITE_DOMAIN = SITE_URL.replace(/^https?:\/\//, '');
+const SITE_URL = (process.env.SITE_URL || 'https://www.addydsd.com').replace(/\/+$/, '');
+/**
+ * Links keep whatever host is canonical, which on a registrar that can't put a
+ * CNAME on the bare domain means www. Mailboxes and printed addresses do not:
+ * admin@www.addydsd.com is not a real address, and "www.addydsd.com" on an
+ * invoice reads like a typo. So the display/email form drops the www.
+ */
+const SITE_DOMAIN = SITE_URL.replace(/^https?:\/\//, '').replace(/^www\./, '');
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || `admin@${SITE_DOMAIN}`;
 
 // ── WEB PUSH NOTIFICATIONS ────────────────────────────────────────────────────
