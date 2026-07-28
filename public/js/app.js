@@ -1527,7 +1527,9 @@ async function loadMyStores() {
   el.innerHTML = `<div class="table-card">` + stores.map(s => `
     <div onclick="editMyStore(${s.id})" title="Edit this store"
          style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);flex-wrap:wrap;cursor:pointer;">
-      <div style="flex:1;min-width:190px;"><div style="font-weight:700;color:var(--text);">${esc(s.name)} <span style="font-size:11px;font-weight:600;color:var(--text-muted);">✎ edit</span></div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
+      <div style="flex:1;min-width:190px;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
+      <button type="button" onclick="event.stopPropagation();editMyStore(${s.id});"
+        style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:700;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;">✎ Edit</button>
       <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
       ${storeActionsHtml(s, true)}
     </div>`).join('');
@@ -1551,6 +1553,37 @@ window.addEventListener('monarch:workspace', () => {
  * got a 403. Details a rep collects on the road — a corrected address, the
  * phone, the resale certificate — had no way in at all.
  */
+const EDIT_STORE_FIELDS = [
+  ['name', 'Store name *'], ['owner_name', 'Owner / contact'], ['address', 'Address'],
+  ['city', 'City'], ['state', 'State'], ['zip', 'ZIP'],
+  ['phone', 'Phone'], ['email', 'Email'], ['category', 'Category'],
+  ['resale_number', 'Tax resale / reseller number'],
+];
+
+/** The same dialog the page ships with, created on demand when it isn't there. */
+function buildEditStoreModal() {
+  if (document.getElementById('edit-store-modal')) return document.getElementById('edit-store-modal');
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-overlay';
+  wrap.id = 'edit-store-modal';
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.classList.remove('active'); };
+  const input = (id, label) => `
+    <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">${label}</label>
+      <input type="text" id="es-${id}" style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>`;
+  wrap.innerHTML = `
+    <div class="modal" style="max-width:520px;">
+      <button class="close-btn" onclick="document.getElementById('edit-store-modal').classList.remove('active')">&times;</button>
+      <h2>Edit <span id="es-title"></span></h2>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
+        ${EDIT_STORE_FIELDS.map(([id, label]) => input(id, label)).join('')}
+        <div id="es-error" style="display:none;color:var(--red);font-size:13px;"></div>
+        <button class="btn btn-green" id="es-save" onclick="saveMyStore()" style="padding:12px;font-size:15px;">Save changes</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  return wrap;
+}
+
 window.editMyStore = async function(id) {
   const store = await apiFetch(`/api/stores/${id}`);
   // apiFetch hands back the error body, which is truthy — checking only for
@@ -1559,12 +1592,16 @@ window.editMyStore = async function(id) {
     showToast((store && store.error) || "Couldn't open that store.", 'error');
     return;
   }
-  const modal = document.getElementById('edit-store-modal');
-  if (!modal) return;
+  // Build the dialog if the page didn't ship with it. A cached or older copy of
+  // dashboard-dsd.html has no #edit-store-modal, and the old code returned here
+  // without a word — the button looked dead for reasons nothing on screen could
+  // explain. Owning the markup in JS means the button works whatever HTML the
+  // browser is holding.
+  const modal = document.getElementById('edit-store-modal') || buildEditStoreModal();
+  if (!modal) { showToast("Couldn't open the editor on this page — try reloading.", 'error'); return; }
   modal.dataset.storeId = id;
   const set = (f, v) => { const el = document.getElementById('es-' + f); if (el) el.value = v ?? ''; };
-  ['name','owner_name','address','city','state','zip','phone','email','category','resale_number']
-    .forEach(f => set(f, store[f]));
+  EDIT_STORE_FIELDS.forEach(([f]) => set(f, store[f]));
   document.getElementById('es-title').textContent = store.name || 'Store';
   document.getElementById('es-error').style.display = 'none';
   modal.classList.add('active');
@@ -1579,8 +1616,7 @@ window.saveMyStore = async function() {
   if (!val('name')) { err.textContent = 'The store needs a name.'; err.style.display = 'block'; return; }
   btn.disabled = true; btn.textContent = 'Saving…';
   const body = {};
-  ['name','owner_name','address','city','state','zip','phone','email','category','resale_number']
-    .forEach(f => { body[f] = val(f); });
+  EDIT_STORE_FIELDS.forEach(([f]) => { body[f] = val(f); });
   const r = await apiFetch(`/api/stores/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
   btn.disabled = false; btn.textContent = 'Save changes';
   if (r && r.id) {
