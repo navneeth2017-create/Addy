@@ -2542,6 +2542,9 @@ async function loadUsersTab() {
         }
         ${u.can_pay_invoice ? `<span style="display:inline-block;margin-left:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(217,119,6,0.12);color:#d97706;" title="Can pay by Invoice/Net-30">📄 Invoice</span>` : ''}
         ${u.house_partner ? `<span style="display:inline-block;margin-left:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(37,99,235,0.12);color:var(--accent);" title="House partner — locked 35%, earns on the network">⭐ House</span>` : ''}
+        ${u.role !== 'admin' && !u.house_partner
+          ? `<span style="display:inline-block;margin-left:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:${u.house_5pct ? 'rgba(22,163,74,0.12);color:var(--green)' : 'rgba(100,116,139,0.12);color:var(--text-muted)'};" title="What the house partner earns on this rep's orders">${u.house_5pct ? '5% grandfathered' : '2%'}</span>`
+          : ''}
       </td>
       <td onclick="event.stopPropagation()">
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -2569,6 +2572,10 @@ async function loadUsersTab() {
             ? `<button class="btn btn-sm btn-outline" onclick="makeHousePartner(${u.id}, '${escAttr(u.name || u.email)}')" title="Lock at 35% and grandfather everyone else at 5% for them">⭐ House</button>`
             : ''
           }
+          ${u.role !== 'admin' && !u.house_partner
+            ? `<button class="btn btn-sm btn-outline" onclick="setHouseRate(${u.id}, '${escAttr(u.name || u.email)}', ${!u.house_5pct})" title="What the house partner earns on this rep's orders">${u.house_5pct ? '↓ Set 2%' : '↑ Grandfather 5%'}</button>`
+            : ''
+          }
           ${u.role === 'dsd'
             ? `<button class="btn btn-sm btn-outline" onclick="grantSuitePro(${u.id}, '${escAttr(u.name || u.email)}')" title="Comp the full Sales Suite (Pro) — no payment, no upgrade prompts">🦋 Suite Pro</button>`
             : ''
@@ -2586,6 +2593,153 @@ async function makeHousePartner(id, name) {
   if (!confirm(`Make ${name} the house partner?\n\n• Locks their margin at 35% on every order\n• They earn 5% on every existing user's orders and their invites\n• Plus a flat 2% on all other future sales\n\nThe reps themselves are never shown any of this.`)) return;
   const r = await apiFetch(`/api/admin/users/${id}/house-partner`, { method: 'POST', body: JSON.stringify({}) });
   if (r && r.success) { showToast(`⭐ ${name} is the house partner — 35% locked`, 'success'); if (typeof loadUsersTab === 'function') loadUsersTab(); }
+}
+
+/**
+ * Move a rep between the house partner's two rates.
+ *
+ * This only ever came from a one-shot boot migration, so anyone who joined
+ * afterwards was quietly stuck at 2% with no way to grant the 5% and no way
+ * to even see which they were on.
+ */
+async function setHouseRate(id, name, grandfathered) {
+  const msg = grandfathered
+    ? `Grandfather ${name} at 5%?\n\nThe house partner will earn 5% of every future order they place, instead of 2%.\n\nOrders already placed keep the rate they were made at — use Recalculate on an order to restate one.`
+    : `Move ${name} back to 2%?\n\nThe house partner will earn 2% of their future orders instead of 5%.`;
+  if (!confirm(msg)) return;
+  const r = await apiFetch(`/api/users/${id}/house-rate`, {
+    method: 'PATCH', body: JSON.stringify({ grandfathered }),
+  });
+  if (r && r.success) {
+    showToast(`${name} → house earns ${r.rate}% on their orders`, 'success');
+    if (typeof loadUsersTab === 'function') loadUsersTab();
+  } else if (r && r.error) showToast(r.error, 'error');
+}
+
+// ── RECORD A PAST ORDER ───────────────────────────────────────────────────────
+// Commission only ever ran inside checkout, so orders taken before the site was
+// live paid nobody. This puts them on the books through the same calculation.
+let _boProducts = [], _boUsers = [];
+
+async function showBackdatedOrderModal() {
+  const modal = document.getElementById('backdated-order-modal');
+  if (!modal) return;
+  modal.classList.add('active');
+  document.getElementById('bo-error').style.display = 'none';
+  document.getElementById('bo-date').valueAsDate = new Date();
+
+  const [users, products, stores] = await Promise.all([
+    apiFetch('/api/users').catch(() => []),
+    apiFetch('/api/products').catch(() => []),
+    apiFetch('/api/stores').catch(() => []),
+  ]);
+  _boUsers = (users || []).filter(u => u.role !== 'admin');
+  _boProducts = (products || []);
+
+  const userSel = document.getElementById('bo-user');
+  userSel.innerHTML = _boUsers.map(u =>
+    `<option value="${u.id}">${esc(u.name || u.email)} — ${esc(u.role)}</option>`).join('');
+  userSel.onchange = showBackdatedRate;
+  showBackdatedRate();
+
+  // /api/stores answers { stores, total, ... } for every role, not a bare array.
+  const storeList = Array.isArray(stores) ? stores : (stores?.stores || []);
+  document.getElementById('bo-store').innerHTML =
+    '<option value="">— no store —</option>' +
+    storeList.map(st => `<option value="${st.id}">${esc(st.name)}</option>`).join('');
+
+  document.getElementById('bo-items').innerHTML = '';
+  addBackdatedLine();
+}
+
+// Say up front what this order will pay the house partner, so a wrong rate is
+// caught before the order exists rather than after.
+function showBackdatedRate() {
+  const note = document.getElementById('bo-rate-note');
+  const u = _boUsers.find(x => String(x.id) === document.getElementById('bo-user').value);
+  if (!note || !u) return;
+  note.textContent = u.house_partner
+    ? 'This is the house partner — his own orders generate no house commission.'
+    : `House partner earns ${u.house_5pct ? '5% (grandfathered)' : '2%'} of this order's total.`;
+}
+
+function addBackdatedLine() {
+  const wrap = document.getElementById('bo-items');
+  if (!wrap) return;
+  const row = document.createElement('div');
+  row.className = 'bo-line';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 70px 90px 30px;gap:6px;margin-bottom:6px;align-items:center;';
+  row.innerHTML = `
+    <select class="bo-p" style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:13px;">
+      ${_boProducts.map(p => `<option value="${p.id}" data-price="${p.retail_price || 0}">${esc(p.name)}</option>`).join('')}
+    </select>
+    <input class="bo-q" type="number" min="1" step="1" value="1" placeholder="Qty" style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:13px;">
+    <input class="bo-u" type="number" min="0" step="0.01" placeholder="Unit $" style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:13px;">
+    <button class="btn btn-sm btn-danger" title="Remove line" style="padding:6px 9px;">×</button>`;
+  row.querySelector('button').onclick = () => { row.remove(); renderBackdatedTotal(); };
+  row.querySelectorAll('input, select').forEach(el => el.addEventListener('input', renderBackdatedTotal));
+  wrap.appendChild(row);
+  renderBackdatedTotal();
+}
+
+function backdatedLines() {
+  return [...document.querySelectorAll('.bo-line')].map(r => ({
+    product_id: parseInt(r.querySelector('.bo-p').value),
+    quantity: parseInt(r.querySelector('.bo-q').value) || 0,
+    unit_price: parseFloat(r.querySelector('.bo-u').value) || 0,
+  }));
+}
+
+function renderBackdatedTotal() {
+  const el = document.getElementById('bo-total');
+  if (!el) return;
+  const subtotal = backdatedLines().reduce((a, l) => a + l.quantity * l.unit_price, 0);
+  const ship = parseFloat(document.getElementById('bo-shipping').value) || 0;
+  const fee = parseFloat(document.getElementById('bo-fee').value) || 0;
+  const total = subtotal + ship + fee;
+  const u = _boUsers.find(x => String(x.id) === document.getElementById('bo-user')?.value);
+  // Commission is on the TOTAL, shipping included — same as a live checkout.
+  const rate = !u || u.house_partner ? 0 : (u.house_5pct ? 0.05 : 0.02);
+  el.innerHTML = `Subtotal ${formatCurrency(subtotal)} · Shipping ${formatCurrency(ship)} · Fee ${formatCurrency(fee)}
+    <strong style="float:right;">Total ${formatCurrency(total)}</strong>
+    ${rate ? `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">House commission at ${rate * 100}% of the total: <strong style="color:var(--green);">${formatCurrency(total * rate)}</strong></div>` : ''}`;
+}
+
+async function submitBackdatedOrder() {
+  const btn = document.getElementById('bo-submit');
+  const err = document.getElementById('bo-error');
+  const items = backdatedLines().filter(l => l.quantity > 0 && l.unit_price >= 0);
+  err.style.display = 'none';
+  if (!items.length) { err.textContent = 'Add at least one line with a quantity.'; err.style.display = 'block'; return; }
+  const date = document.getElementById('bo-date').value;
+  if (!date) { err.textContent = 'Set the date this order happened.'; err.style.display = 'block'; return; }
+
+  btn.disabled = true; btn.textContent = 'Recording…';
+  const r = await apiFetch('/api/admin/orders/backdated', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: parseInt(document.getElementById('bo-user').value),
+      store_id: parseInt(document.getElementById('bo-store').value) || null,
+      items,
+      shipping_cost: parseFloat(document.getElementById('bo-shipping').value) || 0,
+      processing_fee: parseFloat(document.getElementById('bo-fee').value) || 0,
+      placed_at: new Date(date + 'T12:00:00').toISOString(),
+      payment_status: document.getElementById('bo-payment').value,
+      status: document.getElementById('bo-status').value,
+      notes: document.getElementById('bo-notes').value.trim(),
+    }),
+  });
+  btn.disabled = false; btn.textContent = 'Record order & pay commission';
+  if (r && r.success) {
+    const paid = (r.commissions || [])
+      .map(c => `${c.earner_name} ${formatCurrency(c.amount)} (${Math.round(c.rate * 100)}%)`).join(', ');
+    showToast(`Order #${r.order.id} recorded${paid ? ' — paid ' + paid : ' — no commission due'}`, 'success');
+    document.getElementById('backdated-order-modal').classList.remove('active');
+    if (typeof loadAdminOrders === 'function') loadAdminOrders();
+  } else {
+    err.textContent = (r && r.error) || 'Could not record that order.';
+    err.style.display = 'block';
+  }
 }
 
 // Comp the full Sales Suite (Pro tier) for a rep — house partners like Danny.

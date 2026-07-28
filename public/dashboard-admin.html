@@ -247,7 +247,10 @@
       <div id="tab-orders" style="display:none;">
         <div class="page-header">
           <div><h1>Orders</h1><p>All orders across the platform</p></div>
-          <button class="btn btn-sm btn-outline" onclick="exportOrdersCSV()">⬇ Export CSV</button>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-sm btn-green" onclick="showBackdatedOrderModal()">+ Record past order</button>
+            <button class="btn btn-sm btn-outline" onclick="exportOrdersCSV()">⬇ Export CSV</button>
+          </div>
         </div>
         <div class="table-card">
           <div class="table-toolbar"><h2>All Orders</h2></div>
@@ -738,5 +741,69 @@
   </div>
 
   <script src="/js/pwa.js" defer></script>
+
+  <!-- Orders taken before the site went live. Commission is only ever
+       calculated during checkout, so anything sold off-site paid nobody until
+       it is entered here. -->
+  <div class="modal-overlay" id="backdated-order-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:640px;">
+      <button class="close-btn" onclick="document.getElementById('backdated-order-modal').classList.remove('active')">&times;</button>
+      <h2>Record a past order</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:18px;">
+        For orders taken before the site was live. Commission is calculated the same way as a live
+        checkout, so the house and referral cuts come out identical. Stock is <strong>not</strong>
+        reduced — those goods already shipped.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Rep this order belongs to *</label>
+          <select id="bo-user" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;"></select>
+          <div id="bo-rate-note" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Store (optional)</label>
+          <select id="bo-store" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;"></select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Line items *</label>
+          <div id="bo-items"></div>
+          <button class="btn btn-sm btn-outline" onclick="addBackdatedLine()" style="margin-top:6px;">+ Add line</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Shipping</label>
+            <input type="number" id="bo-shipping" value="0" min="0" step="0.01" oninput="renderBackdatedTotal()" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Processing fee</label>
+            <input type="number" id="bo-fee" value="0" min="0" step="0.01" oninput="renderBackdatedTotal()" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Date it happened *</label>
+            <input type="date" id="bo-date" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Payment</label>
+            <select id="bo-payment" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+              <option value="paid">Paid</option><option value="unpaid">Unpaid</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);">Order status</label>
+            <select id="bo-status" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+              <option value="delivered">Delivered</option><option value="shipped">Shipped</option>
+              <option value="processing">Processing</option><option value="pending">Pending</option>
+            </select>
+          </div>
+        </div>
+        <input type="text" id="bo-notes" placeholder="Note (optional) — e.g. how it was taken" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;">
+        <div id="bo-total" style="padding:12px 14px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);font-size:14px;"></div>
+        <div id="bo-error" style="display:none;color:var(--red);font-size:13px;"></div>
+        <button class="btn btn-green" id="bo-submit" onclick="submitBackdatedOrder()" style="padding:13px;font-size:15px;">Record order &amp; pay commission</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
