@@ -131,10 +131,51 @@
           <div><h1>My Exclusive Stores</h1><p>Stores claimed exclusively by you — no other rep can sell into these locations</p></div>
           <button class="btn btn-green" onclick="showClaimStoreModal()">+ Claim a Store</button>
         </div>
-        <div id="my-stores-list"><div class="loading">Loading...</div></div>
+        <div style="text-align:right;margin-bottom:10px;">
+        <button class="btn btn-sm btn-outline" onclick="syncStoresToSuite(this)" title="Push these stores into your Sales Suite">🦋 Send my stores to the Suite</button>
+      </div>
+      <div id="my-stores-list"><div class="loading">Loading...</div></div>
       </div>
 
       <!-- Claim Store Modal -->
+
+  <!-- A rep's own store, editable. The detail endpoint used to be admin-only,
+       so tapping a store did nothing and corrections collected on the road had
+       nowhere to go. -->
+  <div class="modal-overlay" id="edit-store-modal" onclick="if(event.target===this)this.classList.remove('active')">
+    <div class="modal" style="max-width:520px;">
+      <button class="close-btn" onclick="document.getElementById('edit-store-modal').classList.remove('active')">&times;</button>
+      <h2>Edit <span id="es-title"></span></h2>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
+        <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Store name *</label>
+              <input type="text" id="es-name"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Owner / contact</label>
+              <input type="text" id="es-owner_name"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Address</label>
+              <input type="text" id="es-address"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        <div style="display:grid;grid-template-columns:1fr 70px 100px;gap:8px;">
+          <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">City</label>
+              <input type="text" id="es-city"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+          <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">State</label>
+              <input type="text" id="es-state" maxlength="2" style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+          <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">ZIP</label>
+              <input type="text" id="es-zip"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Phone</label>
+              <input type="text" id="es-phone"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+          <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Email</label>
+              <input type="text" id="es-email"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        </div>
+        <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Category</label>
+              <input type="text" id="es-category"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        <div><label style="font-size:11px;font-weight:600;color:var(--text-muted);">Tax resale / reseller number</label>
+              <input type="text" id="es-resale_number"  style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text);font-size:14px;box-sizing:border-box;"></div>
+        <div id="es-error" style="display:none;color:var(--red);font-size:13px;"></div>
+        <button class="btn btn-green" id="es-save" onclick="saveMyStore()" style="padding:12px;font-size:15px;">Save changes</button>
+      </div>
+    </div>
+  </div>
       <div class="modal-overlay" id="claim-store-modal" onclick="if(event.target===this)this.classList.remove('active')">
         <div class="modal" style="max-width:480px;">
           <button class="close-btn" onclick="document.getElementById('claim-store-modal').classList.remove('active')">&times;</button>

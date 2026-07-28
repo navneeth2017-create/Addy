@@ -128,7 +128,9 @@ async function mirrorStoresToSuite(userId, names) {
   // (store owned by another rep) never reaches their Suite.
   const stores = (await pool.query(
     `SELECT name, owner_name, email, address, city, state, zip, phone, category, resale_number
-     FROM stores WHERE exclusive_rep_id=$1 AND LOWER(name) = ANY($2)
+     FROM stores
+     WHERE (exclusive_rep_id=$1 OR id IN (SELECT store_id FROM owner_stores WHERE owner_id=$1))
+       AND LOWER(name) = ANY($2)
      LIMIT 500`,
     [userId, names.map(n => n.toLowerCase())]
   )).rows;
@@ -524,6 +526,40 @@ function installMonarchIntegration(app) {
       return res;
     };
     next();
+  });
+
+  /**
+   * Push every store this rep already owns into their Suite.
+   *
+   * The mirror only ever ran at the moment a store was created or imported, so
+   * anything claimed before the Suite was switched on — or before that mirror
+   * existed at all — was never sent, and their Customers list sat empty while
+   * Addy showed the stores. Monarch dedupes on phone/email/address, so running
+   * this repeatedly is safe.
+   */
+  app.post('/api/monarch/sync-stores', authenticate, authorize('dsd'), async (req, res) => {
+    try {
+      if (!configured()) return res.status(400).json({ error: 'The Sales Suite is not configured yet.' });
+      const ws = (await pool.query(
+        `SELECT 1 FROM monarch_workspaces WHERE user_id=$1 AND monarch_provisioned AND status='active'`,
+        [req.user.id]
+      )).rows[0];
+      if (!ws) return res.status(400).json({ error: "Your Sales Suite isn't active yet." });
+
+      const names = (await pool.query(
+        `SELECT name FROM stores
+         WHERE exclusive_rep_id=$1 OR id IN (SELECT store_id FROM owner_stores WHERE owner_id=$1)`,
+        [req.user.id]
+      )).rows.map(r => r.name).filter(Boolean);
+      if (!names.length) return res.json({ success: true, synced: 0, message: 'No stores to send yet.' });
+
+      await mirrorStoresToSuite(req.user.id, names);
+      res.json({ success: true, synced: names.length,
+                 message: `Sent ${names.length} store${names.length === 1 ? '' : 's'} to your Sales Suite.` });
+    } catch (e) {
+      console.error('sync-stores failed:', e.message);
+      res.status(500).json({ error: 'Could not reach your Sales Suite just now. Try again in a minute.' });
+    }
   });
 
   /** Status + tier catalog for the DSD dashboard card. */

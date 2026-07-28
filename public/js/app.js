@@ -984,6 +984,47 @@ function hasProSuite() {
  * Navigate + Call buttons for a store. `compact` is the inline pair used in a
  * list row; the default is the full-width pair for a detail panel.
  */
+/**
+ * Dial on a phone; show the number on a desktop.
+ *
+ * A bare tel: link is silent on desktop browsers that have no handler for it —
+ * the button looked dead. Rather than hide Call there (a rep at a laptop still
+ * needs the number), fall back to putting it on screen.
+ */
+const canDial = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+window.handleCallClick = function(event, phone, storeName) {
+  if (canDial()) return true;              // let the tel: link do its job
+  event.preventDefault();
+  showPhoneNumber(phone, storeName);
+  return false;
+};
+
+function showPhoneNumber(phone, storeName) {
+  document.getElementById('phone-popover')?.remove();
+  const el = document.createElement('div');
+  el.id = 'phone-popover';
+  el.style.cssText = `
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10050;
+    background:var(--bg-card,#fff);border:1px solid var(--border,#ddd);border-radius:14px;
+    padding:22px 26px;box-shadow:0 16px 40px rgba(0,0,0,0.3);text-align:center;min-width:260px;`;
+  el.innerHTML = `
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">${esc(storeName)}</div>
+    <div style="font-size:26px;font-weight:800;letter-spacing:1px;margin-bottom:14px;">${esc(phone)}</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-green" style="flex:1;" onclick="copyPhoneNumber('${escAttr(phone)}', this)">Copy</button>
+      <button class="btn btn-outline" onclick="document.getElementById('phone-popover').remove()">Close</button>
+    </div>`;
+  document.body.appendChild(el);
+}
+
+window.copyPhoneNumber = function(phone, btn) {
+  navigator.clipboard?.writeText(phone).then(() => {
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => document.getElementById('phone-popover')?.remove(), 700);
+  }).catch(() => { btn.textContent = 'Copy failed'; });
+};
+
 function storeActionsHtml(store, compact = false) {
   if (!hasProSuite()) return '';
   const hasAddress = !!(store.address || store.city);
@@ -996,10 +1037,13 @@ function storeActionsHtml(store, compact = false) {
          style="${base}background:var(--accent);color:#fff;border-color:transparent;"
          onclick="event.stopPropagation();">🧭 Navigate</a>`
     : '';
+  // On a phone, tel: dials. On a desktop browser with no handler registered it
+  // does nothing at all, which reads as a broken button — so there we show the
+  // number instead, ready to read out or copy.
   const call = hasPhone
     ? `<a href="${escAttr(telHref(store.phone))}"
          style="${base}color:var(--text);"
-         onclick="event.stopPropagation();">📞 Call</a>`
+         onclick="event.stopPropagation(); return handleCallClick(event, '${escAttr(store.phone)}', '${escAttr(store.name || 'this store')}');">📞 Call</a>`
     : '';
   return `<div style="display:flex;gap:8px;${compact ? '' : 'margin-top:14px;'}">${nav}${call}</div>`;
 }
@@ -1467,8 +1511,9 @@ async function loadMyStores() {
   // rep out on a route, and making them open a detail panel first to get
   // directions is the difference between using it and not.
   el.innerHTML = `<div class="table-card">` + stores.map(s => `
-    <div style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);flex-wrap:wrap;">
-      <div style="flex:1;min-width:190px;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
+    <div onclick="editMyStore(${s.id})" title="Edit this store"
+         style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);flex-wrap:wrap;cursor:pointer;">
+      <div style="flex:1;min-width:190px;"><div style="font-weight:700;color:var(--text);">${esc(s.name)} <span style="font-size:11px;font-weight:600;color:var(--text-muted);">✎ edit</span></div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
       <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
       ${storeActionsHtml(s, true)}
     </div>`).join('');
@@ -1483,9 +1528,68 @@ window.addEventListener('monarch:workspace', () => {
   if (document.getElementById('my-stores-list')) loadMyStores();
 }, { once: true });
 
+/**
+ * Open a rep's own store for editing.
+ *
+ * The rows weren't clickable and there was nothing to click through TO: the
+ * store detail endpoint was admin-only, so a rep who tapped their own store
+ * got a 403. Details a rep collects on the road — a corrected address, the
+ * phone, the resale certificate — had no way in at all.
+ */
+window.editMyStore = async function(id) {
+  const store = await apiFetch(`/api/stores/${id}`);
+  // apiFetch hands back the error body, which is truthy — checking only for
+  // falsy would open a blank form on a refusal instead of saying why.
+  if (!store || store.error || !store.id) {
+    showToast((store && store.error) || "Couldn't open that store.", 'error');
+    return;
+  }
+  const modal = document.getElementById('edit-store-modal');
+  if (!modal) return;
+  modal.dataset.storeId = id;
+  const set = (f, v) => { const el = document.getElementById('es-' + f); if (el) el.value = v ?? ''; };
+  ['name','owner_name','address','city','state','zip','phone','email','category','resale_number']
+    .forEach(f => set(f, store[f]));
+  document.getElementById('es-title').textContent = store.name || 'Store';
+  document.getElementById('es-error').style.display = 'none';
+  modal.classList.add('active');
+};
+
+window.saveMyStore = async function() {
+  const modal = document.getElementById('edit-store-modal');
+  const id = modal.dataset.storeId;
+  const btn = document.getElementById('es-save');
+  const err = document.getElementById('es-error');
+  const val = (f) => document.getElementById('es-' + f).value.trim();
+  if (!val('name')) { err.textContent = 'The store needs a name.'; err.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const body = {};
+  ['name','owner_name','address','city','state','zip','phone','email','category','resale_number']
+    .forEach(f => { body[f] = val(f); });
+  const r = await apiFetch(`/api/stores/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  btn.disabled = false; btn.textContent = 'Save changes';
+  if (r && r.id) {
+    showToast('Store updated ✓', 'success');
+    modal.classList.remove('active');
+    loadMyStores();
+  } else {
+    err.textContent = (r && r.error) || 'Could not save that.';
+    err.style.display = 'block';
+  }
+};
+
+/** Push existing stores into the Suite — the mirror only ever ran on new ones. */
+window.syncStoresToSuite = async function(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const r = await apiFetch('/api/monarch/sync-stores', { method: 'POST', body: JSON.stringify({}) });
+  if (btn) { btn.disabled = false; btn.textContent = '🦋 Send my stores to the Suite'; }
+  if (r && r.success) showToast(r.message || 'Sent to your Sales Suite ✓', 'success');
+  else showToast((r && r.error) || 'Could not reach your Sales Suite.', 'error');
+};
+
 function showClaimStoreModal() {
   // Reset fields each time it opens
-  ['cs-search','cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-store-id'].forEach(id => {
+  ['cs-search','cs-name','cs-address','cs-city','cs-state','cs-zip','cs-phone','cs-email','cs-resale','cs-store-id'].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.value = ''; el.readOnly = false; }
   });
