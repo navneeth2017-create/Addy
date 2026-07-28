@@ -525,7 +525,14 @@ function updateThemeButton(theme) {
 }
 
 // --- Toast Notifications ---
-function showToast(message, type = 'success') {
+/**
+ * `action` is optional: { label, onClick }. A toast that reports something you
+ * might want to act on ("3 stores added") is a dead end without it — the next
+ * step belongs on the message, not in a menu the reader has to go find.
+ * With an action it also lingers, since three seconds isn't long enough to
+ * read a sentence and decide to click.
+ */
+function showToast(message, type = 'success', action = null) {
   let container = document.getElementById('toast-container');
   if (!container) {
     container = document.createElement('div');
@@ -537,8 +544,15 @@ function showToast(message, type = 'success') {
   toast.className = `toast ${type}`;
   const icons = { success: '\u2713', error: '\u2717', info: '\u24D8' };
   toast.innerHTML = `<span>${icons[type] || ''}</span><span>${message}</span>`;
+  if (action && action.label) {
+    const btn = document.createElement('button');
+    btn.textContent = action.label;
+    btn.style.cssText = 'margin-left:10px;padding:4px 10px;border-radius:6px;border:1px solid currentColor;background:transparent;color:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;';
+    btn.onclick = () => { toast.remove(); action.onClick?.(); };
+    toast.appendChild(btn);
+  }
   container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  setTimeout(() => toast.remove(), action ? 8000 : 3000);
 }
 
 // --- Animated Counter ---
@@ -1519,6 +1533,7 @@ async function loadMyStores() {
     </div>`).join('');
   const statEl = document.getElementById('stat-my-stores');
   if (statEl) statEl.textContent = stores.filter(s => s.store_approval_status==='approved').length;
+  updateSuiteSyncButton();
 }
 
 // The Suite status arrives after this list first renders, so redraw once it
@@ -1578,14 +1593,99 @@ window.saveMyStore = async function() {
   }
 };
 
+/**
+ * Send a butterfly across the screen while the stores travel.
+ *
+ * The sync takes a few seconds against a live Monarch and there is nothing to
+ * look at meanwhile. One butterfly per store makes the wait legible — you can
+ * see how many are going — and it is Monarch's own mark, so it reads as "these
+ * are heading over there" rather than as decoration.
+ *
+ * Honours prefers-reduced-motion: some people get motion sick, and a flurry of
+ * moving objects is exactly the trigger. They still get the result.
+ */
+function flyButterflies(count = 1, fromEl) {
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  if (!document.getElementById('butterfly-keyframes')) {
+    const st = document.createElement('style');
+    st.id = 'butterfly-keyframes';
+    st.textContent = `
+      @keyframes addy-flutter { 0%,100% { transform: rotate(-12deg) scale(1); } 50% { transform: rotate(12deg) scale(1.12); } }
+      .addy-butterfly { position: fixed; z-index: 10060; pointer-events: none; will-change: transform, opacity; }
+      .addy-butterfly > span { display: block; animation: addy-flutter .22s ease-in-out infinite; }`;
+    document.head.appendChild(st);
+  }
+  const start = fromEl?.getBoundingClientRect();
+  const x0 = start ? start.left + start.width / 2 : window.innerWidth / 2;
+  const y0 = start ? start.top + start.height / 2 : window.innerHeight / 2;
+
+  for (let i = 0; i < Math.min(count, 12); i++) {
+    const b = document.createElement('div');
+    b.className = 'addy-butterfly';
+    b.innerHTML = '<span>🦋</span>';
+    b.style.left = `${x0}px`;
+    b.style.top = `${y0}px`;
+    b.style.fontSize = `${18 + Math.round(Math.random() * 12)}px`;
+    document.body.appendChild(b);
+    // Up and to the right, with enough spread that they read as a flight
+    // rather than one sprite drawn several times.
+    const dx = 120 + Math.random() * (window.innerWidth * 0.5);
+    const dy = -(140 + Math.random() * 260);
+    const drift = (Math.random() - 0.5) * 120;
+    b.animate([
+      { transform: 'translate(-50%,-50%) translate(0,0)', opacity: 0 },
+      { transform: `translate(-50%,-50%) translate(${dx * 0.35 + drift}px, ${dy * 0.5}px)`, opacity: 1, offset: 0.25 },
+      { transform: `translate(-50%,-50%) translate(${dx * 0.7 - drift}px, ${dy * 0.8}px)`, opacity: 1, offset: 0.7 },
+      { transform: `translate(-50%,-50%) translate(${dx}px, ${dy}px)`, opacity: 0 },
+    ], {
+      duration: 1500 + Math.random() * 900,
+      delay: i * 90,
+      easing: 'cubic-bezier(.35,.1,.25,1)',
+    }).onfinish = () => b.remove();
+  }
+}
+
 /** Push existing stores into the Suite — the mirror only ever ran on new ones. */
 window.syncStoresToSuite = async function(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const count = document.querySelectorAll('#my-stores-list > div > div').length || 1;
+  flyButterflies(count, btn);
+  const label = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = '🦋 Flying…'; }
   const r = await apiFetch('/api/monarch/sync-stores', { method: 'POST', body: JSON.stringify({}) });
-  if (btn) { btn.disabled = false; btn.textContent = '🦋 Send my stores to the Suite'; }
-  if (r && r.success) showToast(r.message || 'Sent to your Sales Suite ✓', 'success');
-  else showToast((r && r.error) || 'Could not reach your Sales Suite.', 'error');
+  if (btn) { btn.disabled = false; btn.textContent = label || '🦋 Send my stores to the Suite'; }
+  if (r && r.success) {
+    // A second flight on arrival, so a slow round trip still ends with the
+    // butterflies landing rather than a bare toast some seconds later.
+    flyButterflies(Math.min(r.created || count, 8), btn);
+    showToast(`🦋 ${r.message}`, 'success', r.created ? {
+      label: 'Open the Suite', onClick: () => { window.location.href = '/suite.html'; },
+    } : undefined);
+  } else {
+    showToast((r && r.error) || 'Could not reach your Sales Suite.', 'error');
+  }
 };
+
+/**
+ * Only offer the send when there is somewhere to send to. A rep without a live
+ * Suite pressing it just gets an error, which is a worse answer than the button
+ * not being there. Any paid tier counts — the sync is not Pro-only, unlike the
+ * in-car buttons.
+ */
+function updateSuiteSyncButton() {
+  const btn = document.getElementById('suite-sync-btn');
+  if (!btn) return;
+  // The status payload carries slug/tier/status/comped — there is no
+  // "provisioned" field on it, so don't pretend to check one. Whether the
+  // workspace is actually provisioned is the server's call, and it says so.
+  const ws = window._monarchWorkspace;
+  const live = !!ws && (ws.status === 'active' || ws.comped);
+  btn.style.display = live ? 'inline-block' : 'none';
+  const count = document.querySelectorAll('#my-stores-list > div > div').length;
+  btn.textContent = count
+    ? `🦋 Send ${count} store${count === 1 ? '' : 's'} to the Suite`
+    : '🦋 Send my stores to the Suite';
+}
+window.addEventListener('monarch:workspace', updateSuiteSyncButton);
 
 function showClaimStoreModal() {
   // Reset fields each time it opens

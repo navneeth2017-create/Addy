@@ -117,12 +117,12 @@ function suiteStoreType(category) {
  * duplicating.
  */
 async function mirrorStoresToSuite(userId, names) {
-  if (!configured() || !names.length) return;
+  if (!configured() || !names.length) return { created: 0, skipped: 0, errors: 0 };
   const ws = (await pool.query(
     `SELECT slug, status, monarch_provisioned, monarch_email FROM monarch_workspaces WHERE user_id=$1`,
     [userId]
   )).rows[0];
-  if (!ws || !ws.monarch_provisioned || ws.status !== 'active') return;
+  if (!ws || !ws.monarch_provisioned || ws.status !== 'active') return { created: 0, skipped: 0, errors: 0 };
 
   // Only stores actually linked to this user — a flagged claim conflict
   // (store owned by another rep) never reaches their Suite.
@@ -150,11 +150,14 @@ async function mirrorStoresToSuite(userId, names) {
     if ((r.resale_number || '').trim()) out.resale_number = r.resale_number.trim();
     return out;
   });
-  if (!mapped.length) return;
+  if (!mapped.length) return { created: 0, skipped: 0, errors: 0 };
 
   const sso = await suiteSession(ws);
   const result = await monarchStaffApi('/api/imports/stores', sso.token, { rows: mapped });
   console.log(`🦋 Suite mirror for user ${userId}: ${result.created} created, ${result.skipped} skipped, ${result.errors} errors`);
+  // Handed back so the caller can say what happened. "Sent 5 stores" reads the
+  // same on the first press and the fifth; "3 added, 2 already there" doesn't.
+  return { created: result.created || 0, skipped: result.skipped || 0, errors: result.errors || 0 };
 }
 
 /** Mint a Suite staff session for a workspace — known email first, then the
@@ -553,9 +556,15 @@ function installMonarchIntegration(app) {
       )).rows.map(r => r.name).filter(Boolean);
       if (!names.length) return res.json({ success: true, synced: 0, message: 'No stores to send yet.' });
 
-      await mirrorStoresToSuite(req.user.id, names);
-      res.json({ success: true, synced: names.length,
-                 message: `Sent ${names.length} store${names.length === 1 ? '' : 's'} to your Sales Suite.` });
+      const r = await mirrorStoresToSuite(req.user.id, names);
+      const bits = [];
+      if (r.created) bits.push(`${r.created} added`);
+      if (r.skipped) bits.push(`${r.skipped} already there`);
+      if (r.errors) bits.push(`${r.errors} couldn't be sent`);
+      res.json({
+        success: true, synced: names.length, ...r,
+        message: bits.length ? bits.join(' · ') : 'Everything was already in your Suite.',
+      });
     } catch (e) {
       console.error('sync-stores failed:', e.message);
       res.status(500).json({ error: 'Could not reach your Sales Suite just now. Try again in a minute.' });
