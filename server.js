@@ -551,6 +551,16 @@ async function migrate() {
   // Cached geocode, filled in by the client the first time it needs it, used
   // to notice when a rep is standing at a store whose photos are still owed.
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION");
+  // Repair the drift between the two records of ownership. Every claim is meant
+  // to write both, but a store carrying exclusive_rep_id with no owner_stores
+  // row appeared on the rep's "My Stores" and vanished from their directory.
+  // Idempotent, so it also heals anything that drifts later.
+  try {
+    const fixed = await q(`INSERT INTO owner_stores (owner_id, store_id)
+                           SELECT exclusive_rep_id, id FROM stores WHERE exclusive_rep_id IS NOT NULL
+                           ON CONFLICT DO NOTHING`);
+    if (fixed.rowCount) console.log(`✅ Linked ${fixed.rowCount} claimed store(s) that were missing an owner row`);
+  } catch(e) { console.log('ℹ️  owner_stores backfill skipped:', e.message); }
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION");
 
   // ── Free shipping flag on products ──────────────────────────────────────────
@@ -1071,8 +1081,16 @@ app.get('/api/stores', authenticate, async (req, res) => {
     const { search, sort, order, page, limit, category, state, status } = req.query;
 
     if (role === 'dsd') {
+      // A claim writes BOTH exclusive_rep_id and an owner_stores row, but the
+      // two drift — an admin reassignment or an older claim path can leave one
+      // without the other. This list read only owner_stores while "My Stores"
+      // read only exclusive_rep_id, so the same rep saw different stores on two
+      // screens. Union them: claimed is claimed, by either record.
       const owned = await all(
-        'SELECT s.* FROM stores s INNER JOIN owner_stores os ON os.store_id=s.id WHERE os.owner_id=$1',
+        `SELECT * FROM stores
+         WHERE exclusive_rep_id = $1
+            OR id IN (SELECT store_id FROM owner_stores WHERE owner_id = $1)
+         ORDER BY name`,
         [userId]
       );
       if (owned.length > 0) {
@@ -1202,9 +1220,15 @@ app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, re
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/stores/:id', authenticate, authorize('admin'), async (req, res) => {
+// Openable by an admin or by whoever the store belongs to. It was admin-only,
+// so a rep tapping their own store got a 403 and nothing happened — which is
+// why the list looked unclickable and nothing could be edited.
+app.get('/api/stores/:id', authenticate, async (req, res) => {
   try {
-    const store = await one('SELECT * FROM stores WHERE id=$1', [req.params.id]);
+    const id = parseInt(req.params.id);
+    if (!Number.isInteger(id)) return res.status(404).json({ error: 'Store not found' });
+    if (!(await canEditStore(req.user, id))) return res.status(403).json({ error: 'Access denied' });
+    const store = await one('SELECT * FROM stores WHERE id=$1', [id]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
     res.json(store);
   } catch(e) { console.error(e.message); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
@@ -1240,7 +1264,13 @@ async function canEditStore(user, storeId) {
   if (role === 'admin') return true;
   if (role === 'investor') return false;
   if (role === 'dsd') {
-    const owned = await one('SELECT 1 AS ok FROM owner_stores WHERE owner_id=$1 AND store_id=$2', [userId, storeId]);
+    // Both records count. A claim writes owner_stores AND exclusive_rep_id, but
+    // they drift, and a store carrying only the latter was listed as the rep's
+    // while every read and write against it came back 403.
+    const owned = await one(
+      `SELECT 1 AS ok FROM stores
+       WHERE id=$2 AND (exclusive_rep_id=$1 OR id IN (SELECT store_id FROM owner_stores WHERE owner_id=$1))`,
+      [userId, storeId]);
     if (owned) return true;
     return !!(user.store_id && Number(user.store_id) === storeId);
   }
@@ -4036,7 +4066,10 @@ app.patch('/api/ownership-requests/:id', authenticate, authorize('admin'), async
 app.get('/api/my-stores', authenticate, authorize('dsd'), async (req, res) => {
   try {
     const stores = await all(
-      'SELECT * FROM stores WHERE exclusive_rep_id=$1 ORDER BY store_approval_status DESC, name',
+      `SELECT * FROM stores
+       WHERE exclusive_rep_id = $1
+          OR id IN (SELECT store_id FROM owner_stores WHERE owner_id = $1)
+       ORDER BY store_approval_status DESC, name`,
       [req.user.id]
     );
     res.json(stores);
