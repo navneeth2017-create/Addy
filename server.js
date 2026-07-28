@@ -731,6 +731,33 @@ async function getPriceForUser(productId, userId, role) {
 const PHOTO_DEADLINE_DAYS = 120;
 const PHOTO_DEADLINE_FLOOR_DAYS = 30;
 
+/**
+ * What a store record is still missing.
+ *
+ * A rep drops in a spreadsheet and some rows are half-filled — no phone on one,
+ * no ZIP on another, no resale number on a third. The import used to mention it
+ * once in the result dialog and then forget, so the gaps were invisible the
+ * moment that dialog closed and nobody ever went back to them.
+ *
+ * Derived from the record rather than stored as a flag, so filling a gap clears
+ * it by itself. A stored flag would have to be recomputed on every edit and
+ * would go stale the first time someone forgot.
+ *
+ * These six are the ones that stop a rep working: you cannot navigate without
+ * the address, cannot ring without the phone, and cannot invoice tax-free
+ * without the certificate. Owner name and category are not on the list —
+ * missing them is untidy, not blocking.
+ */
+const STORE_REQUIRED_FIELDS = [
+  ['address', 'street address'], ['city', 'city'], ['state', 'state'],
+  ['zip', 'ZIP'], ['phone', 'phone'], ['resale_number', 'resale number'],
+];
+function missingStoreFields(store) {
+  return STORE_REQUIRED_FIELDS
+    .filter(([f]) => !String(store?.[f] ?? '').trim() || String(store[f]).trim().toUpperCase() === 'N/A')
+    .map(([, label]) => label);
+}
+
 // ── Store claiming ────────────────────────────────────────────────────────────
 // A DSD's claim is auto-approved and linked everywhere the store list reads from
 // (exclusive_rep_id, owner_stores, dsd_stores) so it shows up consistently.
@@ -1259,10 +1286,13 @@ app.get('/api/stores/map-data', authenticate, authorize('admin'), async (req, re
 // Openable by an admin or by whoever the store belongs to. It was admin-only,
 // so a rep tapping their own store got a 403 and nothing happened — which is
 // why the list looked unclickable and nothing could be edited.
-app.get('/api/stores/:id', authenticate, async (req, res) => {
+app.get('/api/stores/:id', authenticate, async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isInteger(id)) return res.status(404).json({ error: 'Store not found' });
+    // Hand anything that isn't a store id to the routes registered after this
+    // one. /api/stores/example-csv matched :id and was answered with a 404,
+    // so the "download a sample file" link has been broken all along.
+    if (!Number.isInteger(id)) return next();
     if (!(await canEditStore(req.user, id))) return res.status(403).json({ error: 'Access denied' });
     const store = await one('SELECT * FROM stores WHERE id=$1', [id]);
     if (!store) return res.status(404).json({ error: 'Store not found' });
@@ -3290,7 +3320,7 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
     const photoDeadline = new Date(Date.now() + PHOTO_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
     const claimedVia = isBulkBatch ? 'csv_bulk' : 'csv_small';
 
-    let created = 0, skipped = 0, errors = 0;
+    let created = 0, skipped = 0, errors = 0, incomplete = 0;
     const results = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -3304,9 +3334,11 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
         continue;
       }
 
-      // Warn about missing address fields (flagged, not hard-blocked)
-      const missingFields = ['address','city','state','zip'].filter(f => !(row[f]||'').trim());
-      const warning = missingFields.length > 0 ? ` (missing: ${missingFields.join(', ')})` : '';
+      // Gaps never block the import — a half-filled row is still a real store,
+      // and refusing it would send the rep back to their spreadsheet. They are
+      // recorded per row and counted, so the import can say how many need
+      // finishing instead of mentioning it once and forgetting.
+      const missing = missingStoreFields(row);
 
       try {
         // Match on name AND location. Matching on name alone treated every
@@ -3329,9 +3361,17 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
           // Store already exists — claim it to this importer, or flag a conflict.
           const r = await claimImported(exists.id);
           skipped++;
+          // Judge the stored record, not the sparse row — the store on file may
+          // already carry what this spreadsheet left out.
+          const onFile = r.linked ? await one('SELECT * FROM stores WHERE id=$1', [exists.id]) : null;
+          const stillMissing = onFile ? missingStoreFields(onFile) : [];
+          if (stillMissing.length) incomplete++;
           results.push({
             row: rowNum,
             status: r.flagged ? 'flagged' : 'skipped',
+            name,
+            store_id: exists.id,
+            missing: stillMissing.length ? stillMissing : undefined,
             reason: r.flagged
               ? `"${name}" is already claimed by another rep — flagged for admin review`
               : `"${name}" already exists${r.linked ? ' — claimed to you' : ''}`
@@ -3350,24 +3390,34 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
         );
         await claimImported(inserted.id);
         created++;
-        results.push({ row: rowNum, status: 'created', note: warning || undefined });
+        if (missing.length) incomplete++;
+        results.push({
+          row: rowNum, status: 'created', name,
+          store_id: inserted.id,
+          missing: missing.length ? missing : undefined,
+          note: missing.length ? ` (missing: ${missing.join(', ')})` : undefined,
+        });
       } catch(rowErr) {
         errors++;
         results.push({ row: rowNum, status: 'error', reason: rowErr.message });
       }
     }
 
-    await logActivity('bulk_imported_stores', `${created} created, ${skipped} skipped, ${errors} errors (${claimedVia})`, req.user.email);
-    res.json({ created, skipped, errors, results, isBulkBatch, photoDeadlineDays: isBulkBatch ? 60 : 1 });
+    await logActivity('bulk_imported_stores',
+      `${created} created, ${skipped} skipped, ${errors} errors, ${incomplete} incomplete (${claimedVia})`, req.user.email);
+    // photoDeadlineDays used to report 60 or 1 depending on batch size — both
+    // wrong since the deadline became a single number for every path.
+    res.json({ created, skipped, errors, incomplete, results, isBulkBatch,
+               photoDeadlineDays: PHOTO_DEADLINE_DAYS });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── EXAMPLE CSV DOWNLOAD ───────────────────────────────────────────────────────
 app.get('/api/stores/example-csv', authenticate, (req, res) => {
   const csv = [
-    'name,owner_name,email,address,city,state,zip,phone,store_number,category',
-    '"Corner Market",John Smith,john@example.com,"123 Main St",Miami,FL,33101,(305) 555-0100,ST-001,Convenience',
-    '"Green Leaf Deli",Jane Doe,jane@example.com,"456 Oak Ave",Dallas,TX,75001,214.555.0200,,Grocery',
+    'name,owner_name,email,address,city,state,zip,phone,store_number,category,resale_number',
+    '"Corner Market",John Smith,john@example.com,"123 Main St",Miami,FL,33101,(305) 555-0100,ST-001,Convenience,FL-85-1234567',
+    '"Green Leaf Deli",Jane Doe,jane@example.com,"456 Oak Ave",Dallas,TX,75001,214.555.0200,,Grocery,TX-11-2233445',
   ].join('\n');
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=stores-import-example.csv');
@@ -4114,7 +4164,7 @@ app.get('/api/my-stores', authenticate, authorize('dsd'), async (req, res) => {
        ORDER BY store_approval_status DESC, name`,
       [req.user.id]
     );
-    res.json(stores);
+    res.json(stores.map(st => ({ ...st, missing_fields: missingStoreFields(st) })));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

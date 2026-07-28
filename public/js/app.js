@@ -1527,7 +1527,11 @@ async function loadMyStores() {
   el.innerHTML = `<div class="table-card">` + stores.map(s => `
     <div onclick="editMyStore(${s.id})" title="Edit this store"
          style="display:flex;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:var(--bg-card);flex-wrap:wrap;cursor:pointer;">
-      <div style="flex:1;min-width:190px;"><div style="font-weight:700;color:var(--text);">${esc(s.name)}</div><div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', '))}</div></div>
+      <div style="flex:1;min-width:190px;">
+        <div style="font-weight:700;color:var(--text);">${esc(s.name)}</div>
+        <div style="font-size:13px;color:var(--text-secondary);">${esc([s.address,s.city,s.state].filter(Boolean).join(', ')) || 'No address on file'}</div>
+        ${(s.missing_fields || []).length ? `<div style="font-size:12px;color:#b45309;margin-top:3px;">⚠ Missing ${esc(s.missing_fields.join(', '))}</div>` : ''}
+      </div>
       <button type="button" onclick="event.stopPropagation();editMyStore(${s.id});"
         style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:700;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;">✎ Edit</button>
       <span class="status-badge ${s.store_approval_status==='approved'?'active':s.store_approval_status==='rejected'?'inactive':'pending'}">${s.store_approval_status==='approved'?'✓ Exclusive':s.store_approval_status==='rejected'?'Rejected':'⏳ Pending'}</span>
@@ -1536,6 +1540,7 @@ async function loadMyStores() {
   const statEl = document.getElementById('stat-my-stores');
   if (statEl) statEl.textContent = stores.filter(s => s.store_approval_status==='approved').length;
   updateSuiteSyncButton();
+  renderIncompleteStores(stores);
 }
 
 // The Suite status arrives after this list first renders, so redraw once it
@@ -1722,6 +1727,47 @@ function updateSuiteSyncButton() {
     : '🦋 Send my stores to the Suite';
 }
 window.addEventListener('monarch:workspace', updateSuiteSyncButton);
+
+/**
+ * The stores that came in short of detail, gathered at the top of the list.
+ *
+ * A spreadsheet import fills in what it has and leaves the rest blank. Those
+ * gaps used to be mentioned once in the import dialog and then never again, so
+ * they sat there — no phone to ring, no address to navigate to, no certificate
+ * to invoice against — until someone happened to open the store.
+ */
+function renderIncompleteStores(stores) {
+  const host = document.getElementById('incomplete-stores');
+  if (!host) return;
+  const gaps = (stores || []).filter(s => (s.missing_fields || []).length);
+  if (!gaps.length) { host.innerHTML = ''; return; }
+
+  // Which gap is the most common tells the rep what their spreadsheet is
+  // missing as a whole, rather than making them infer it store by store.
+  const tally = {};
+  gaps.forEach(s => s.missing_fields.forEach(f => { tally[f] = (tally[f] || 0) + 1; }));
+  const worst = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+
+  host.innerHTML = `
+    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+      <div style="font-weight:700;color:#92400e;margin-bottom:4px;">
+        ⚠ ${gaps.length} store${gaps.length === 1 ? '' : 's'} ${gaps.length === 1 ? 'is' : 'are'} missing details
+      </div>
+      <div style="font-size:13px;color:#92400e;opacity:0.9;margin-bottom:10px;">
+        ${worst ? `Most often the ${esc(worst[0])} — ${worst[1]} of them.` : ''}
+        You can still sell to these; filling the gaps is what makes Navigate, Call and tax-free invoicing work.
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${gaps.slice(0, 12).map(s => `
+          <button onclick="editMyStore(${s.id})"
+            style="padding:7px 12px;border-radius:9px;border:1px solid #fcd34d;background:#fff;color:#92400e;font-size:12px;font-weight:700;cursor:pointer;"
+            title="Missing ${escAttr(s.missing_fields.join(', '))}">
+            ${esc(s.name)} <span style="font-weight:500;opacity:0.75;">— ${esc(s.missing_fields.join(', '))}</span>
+          </button>`).join('')}
+        ${gaps.length > 12 ? `<span style="align-self:center;font-size:12px;color:#92400e;">+ ${gaps.length - 12} more below</span>` : ''}
+      </div>
+    </div>`;
+}
 
 function showClaimStoreModal() {
   // Reset fields each time it opens
