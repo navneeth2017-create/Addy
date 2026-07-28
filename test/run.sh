@@ -11,6 +11,7 @@ export JWT_SECRET="${JWT_SECRET:-testsecret}"
 cleanup() {
   [ -n "${INV_PID:-}" ] && kill "$INV_PID" 2>/dev/null
   [ -n "${CARD_PID:-}" ] && kill "$CARD_PID" 2>/dev/null
+  [ -n "${MON_PID:-}" ] && kill "$MON_PID" 2>/dev/null
   wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM HUP PIPE
@@ -18,13 +19,21 @@ trap cleanup EXIT INT TERM HUP PIPE
 # Refuse to run against a server we didn't start. A leftover process on either
 # port silently serves the tests stale code, which shows up as baffling
 # intermittent 500s rather than an honest failure.
-for port in 8123 8126 9922; do
+for port in 8123 8126 9922 9977; do
   if curl -sf --noproxy '*' -o /dev/null -m 2 "http://localhost:$port/" 2>/dev/null \
      || (command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":$port "); then
     echo "port $port is already in use — stop that process first (these tests need their own servers)" >&2
     exit 1
   fi
 done
+
+# A stand-in Monarch, so the Suite mirror can be proven to actually deliver
+# rather than merely to have been called. Harmless to every other suite: the
+# mirror no-ops for any user without a monarch_workspaces row, which is all of
+# them except the one that creates one.
+node test/lib/fake-monarch.js > /tmp/addy-test-monarch.log 2>&1 & MON_PID=$!
+export MONARCH_API_URL="http://127.0.0.1:9977"
+export MONARCH_PARTNER_KEY="harness-partner-key"
 
 PORT=8123 node boot.js > /tmp/addy-test-invoice.log 2>&1 & INV_PID=$!
 PORT=8126 STRIPE_SECRET_KEY=sk_test_fake_harness node test/fake-stripe-boot.js > /tmp/addy-test-card.log 2>&1 & CARD_PID=$!
@@ -42,7 +51,7 @@ done
 fails=0
 for t in test/security.test.mjs test/auth-roles.test.mjs test/ordering.test.mjs test/inventory.test.mjs \
          test/store-photos.test.mjs test/photo-deadline.test.mjs test/resale-number.test.mjs test/backdated-commissions.test.mjs test/pricing.test.mjs test/card-payments.test.mjs \
-         test/refund-on-rollback.test.mjs; do
+         test/suite-autosync.test.mjs test/refund-on-rollback.test.mjs; do
   echo "── $t"
   node "$t" || fails=$((fails+1))
 done
