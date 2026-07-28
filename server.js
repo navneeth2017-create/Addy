@@ -551,6 +551,31 @@ async function migrate() {
   // Cached geocode, filled in by the client the first time it needs it, used
   // to notice when a rep is standing at a store whose photos are still owed.
   await q("ALTER TABLE stores ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION");
+  /**
+   * Put every outstanding store on the real deadline.
+   *
+   * Claims used to get 24 hours unless the rep explicitly deferred, and a store
+   * claimed through the CSV path as an existing record got no deadline at all —
+   * which both dated stores wrongly and hid them from the reminder entirely.
+   * One-shot: recompute from when the store was entered, floored so nothing
+   * lands already overdue on the day this ships.
+   */
+  try {
+    const done = await one("SELECT 1 FROM app_migrations WHERE key='photo_deadline_120d_v1'");
+    if (!done) {
+      const r = await q(
+        `UPDATE stores
+            SET photos_due_at = GREATEST(
+                  COALESCE(claimed_at, NOW()) + INTERVAL '120 days',
+                  NOW() + INTERVAL '30 days')
+          WHERE exclusive_rep_id IS NOT NULL
+            AND NOT photos_complete
+            AND (photos_due_at IS NULL OR photos_due_at < NOW() + INTERVAL '30 days')`);
+      await q("INSERT INTO app_migrations (key) VALUES ('photo_deadline_120d_v1')");
+      console.log(`✅ Photo deadline set to 120 days on ${r.rowCount||0} outstanding store(s)`);
+    }
+  } catch(e) { console.log('ℹ️  photo deadline migration skipped:', e.message); }
+
   // Repair the drift between the two records of ownership. Every claim is meant
   // to write both, but a store carrying exclusive_rep_id with no owner_stores
   // row appeared on the rep's "My Stores" and vanished from their directory.
@@ -698,11 +723,22 @@ async function getPriceForUser(productId, userId, role) {
   return rolePrice ? parseFloat(rolePrice.price) : null;
 }
 
+/**
+ * How long a rep has to photograph a store, measured from when they entered it.
+ * One number for every path — a manual claim, a CSV import, a deferral — so a
+ * rep is never told two different things about the same store.
+ */
+const PHOTO_DEADLINE_DAYS = 120;
+const PHOTO_DEADLINE_FLOOR_DAYS = 30;
+
 // ── Store claiming ────────────────────────────────────────────────────────────
 // A DSD's claim is auto-approved and linked everywhere the store list reads from
 // (exclusive_rep_id, owner_stores, dsd_stores) so it shows up consistently.
 async function claimStoreForDsd(storeId, userId, via = 'manual') {
-  const photoDue = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  // 120 days from entering the store, for every claim. It used to be 24 hours
+  // unless the rep explicitly deferred — so a rep who simply closed the modal
+  // was overdue by the next morning without ever being told that was the deal.
+  const photoDue = new Date(Date.now() + PHOTO_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
   await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved', photos_due_at=$2, photos_complete=false, claimed_via=$3, claimed_at=NOW() WHERE id=$4",
     [userId, photoDue, via, storeId]);
   await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
@@ -3075,8 +3111,8 @@ app.get('/api/stores/:id/photos', authenticate, async (req, res) => {
  * Deliberately once per store. A rep who could defer repeatedly would never
  * owe photos at all, which is the same as not requiring them.
  */
-const PHOTO_DEFER_DAYS = 120;
-const PHOTO_DEFER_MIN_DAYS = 30;
+const PHOTO_DEFER_DAYS = PHOTO_DEADLINE_DAYS;
+const PHOTO_DEFER_MIN_DAYS = PHOTO_DEADLINE_FLOOR_DAYS;
 app.post('/api/stores/:id/photos/defer', authenticate, rateLimit(30, 60 * 1000), async (req, res) => {
   try {
     const storeId = parseInt(req.params.id);
@@ -3146,8 +3182,9 @@ app.get('/api/my-stores/photos-pending', authenticate, async (req, res) => {
               (photos_due_at IS NOT NULL AND NOT photos_complete AND photos_due_at < NOW()) as overdue,
               (SELECT array_agg(photo_type) FROM store_photos sp WHERE sp.store_id=stores.id) as uploaded_types
        FROM stores
-       WHERE exclusive_rep_id=$1 AND NOT photos_complete AND photos_due_at IS NOT NULL
-       ORDER BY photos_due_at ASC`,
+       WHERE (exclusive_rep_id=$1 OR id IN (SELECT store_id FROM owner_stores WHERE owner_id=$1))
+         AND NOT photos_complete
+       ORDER BY photos_due_at ASC NULLS LAST`,
       [req.user.id]
     );
     res.json(stores);
@@ -3235,17 +3272,22 @@ app.post('/api/stores/bulk-import', authenticate, authorize('admin', 'dsd', 'mem
         await flagStoreClaimConflict(storeId, userId, st.exclusive_rep_id, 'Claim conflict via CSV import');
         return { linked: false, flagged: true };
       }
-      await q("UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved', claimed_at=COALESCE(claimed_at, NOW()) WHERE id=$2", [userId, storeId]);
+      await q(
+        `UPDATE stores SET exclusive_rep_id=$1, store_approval_status='approved',
+                claimed_at=COALESCE(claimed_at, NOW()),
+                photos_due_at=COALESCE(photos_due_at, NOW() + ($3 || ' days')::interval)
+         WHERE id=$2`,
+        [userId, storeId, String(PHOTO_DEADLINE_DAYS)]);
       await q('INSERT INTO owner_stores (owner_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
       await q('INSERT INTO dsd_stores (dsd_id, store_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, storeId]);
       return { linked: true, flagged: false };
     }
 
-    // Photo deadline: >25 stores in one batch gets 60 days, otherwise 24 hours
+    // The same 120 days as every other path. Batch size used to change it —
+    // 60 days over 25 stores, 24 hours under — which meant the deadline
+    // depended on how the rep happened to split their file.
     const isBulkBatch = rows.length > 25;
-    const photoDeadline = isBulkBatch
-      ? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000)   // 60 days
-      : new Date(Date.now() + 24 * 60 * 60 * 1000);         // 24 hours
+    const photoDeadline = new Date(Date.now() + PHOTO_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
     const claimedVia = isBulkBatch ? 'csv_bulk' : 'csv_small';
 
     let created = 0, skipped = 0, errors = 0;
