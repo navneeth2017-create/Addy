@@ -2266,9 +2266,44 @@ function switchTab(tab, btn) {
   if (tab === 'products') loadProductsTab();
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();
-  if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); loadDbSize(); loadProgramDocs('admin-docs-gallery', true); }
+  if (tab === 'settings') { loadStripeStatus(); loadNotifEmails(); loadFeedbackList(); loadDbSize(); loadProgramDocs('admin-docs-gallery', true); }
   if (tab === 'mail') loadMailTab(window._mailBox || 'inbox');
   if (tab === 'activity') loadActivityLog();
+}
+
+// ==========================================
+// ADMIN: PAYMENTS STATUS (Settings card)
+// ==========================================
+/** Answers "which Stripe account is this, and is it actually able to charge"
+ *  from the dashboard — identity only, never keys. */
+async function loadStripeStatus() {
+  const wrap = document.getElementById('stripe-status-card');
+  if (!wrap) return;
+  const s = await apiFetch('/api/admin/stripe-status');
+  if (!s) return;
+  if (!s.configured) {
+    wrap.innerHTML = `<div class="card" style="margin:0 0 18px;padding:16px 18px;">
+      <div style="font-weight:700;margin-bottom:4px;">💳 Card payments</div>
+      <div style="color:var(--text-muted);font-size:14px;">Off — the shop runs invoice-only. To turn cards on, add <code>STRIPE_SECRET_KEY</code> and <code>STRIPE_PUBLISHABLE_KEY</code> in Railway.</div>
+    </div>`;
+    return;
+  }
+  const live = s.mode === 'live';
+  const rows = [];
+  if (s.account) {
+    rows.push(`<div>Stripe account: <b>${esc(s.account.email || 'email hidden by Stripe')}</b>${s.account.business_name ? ` (${esc(s.account.business_name)})` : ''}</div>`);
+    rows.push(`<div style="margin-top:4px;">${s.account.charges_enabled ? '✅ Can take payments' : '❌ Charges disabled — finish Stripe onboarding'}${s.account.payouts_enabled ? ' · ✅ Payouts to bank enabled' : ' · ⚠️ Bank payouts not enabled yet'}</div>`);
+  } else if (s.account_error) {
+    rows.push(`<div style="color:var(--red);">${esc(s.account_error)}</div>`);
+  }
+  if (!s.publishable_key_set) rows.push(`<div style="color:var(--red);margin-top:4px;">⚠️ STRIPE_PUBLISHABLE_KEY is missing — the card form cannot load.</div>`);
+  if (s.key_mismatch) rows.push(`<div style="color:var(--red);margin-top:4px;">⚠️ Your secret key is ${esc(s.mode)} but the publishable key is not — checkout will never succeed. Use both keys from the same mode.</div>`);
+  wrap.innerHTML = `<div class="card" style="margin:0 0 18px;padding:16px 18px;">
+    <div style="font-weight:700;margin-bottom:6px;">💳 Card payments
+      <span style="font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;background:${live ? 'var(--green)' : '#f59e0b'};color:#fff;">${live ? 'LIVE' : 'TEST MODE'}</span>
+    </div>
+    <div style="font-size:14px;color:var(--text-muted);line-height:1.6;">${rows.join('')}</div>
+  </div>`;
 }
 
 // ==========================================
