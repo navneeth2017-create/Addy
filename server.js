@@ -2233,7 +2233,11 @@ app.get('/api/admin/stripe-status', authenticate, authorize('admin'), async (req
   }
   const sk = process.env.STRIPE_SECRET_KEY || '';
   const pk = process.env.STRIPE_PUBLISHABLE_KEY || '';
-  const mode = sk.startsWith('sk_live') ? 'live' : sk.startsWith('sk_test') ? 'test' : 'unknown';
+  // sk_ (standard) and rk_ (restricted) keys both carry the mode in the
+  // prefix. The first production key this met was rk_live_, and the card
+  // called it TEST MODE — a wrong answer about whether real cards get
+  // charged, which is the one thing this card must never be wrong about.
+  const mode = /^(?:sk|rk)_live_/.test(sk) ? 'live' : /^(?:sk|rk)_test_/.test(sk) ? 'test' : 'unknown';
   const out = {
     configured: true,
     mode,
