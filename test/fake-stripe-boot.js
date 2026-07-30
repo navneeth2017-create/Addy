@@ -39,6 +39,17 @@ const fakeStripe = {
       return i;
     },
   },
+  accounts: {
+    async retrieve() {
+      calls.push({ method: 'accounts.retrieve', args: {} });
+      return {
+        email: 'owner@fake-stripe.test',
+        business_profile: { name: 'Fake Stripe LLC' },
+        charges_enabled: true,
+        payouts_enabled: true,
+      };
+    },
+  },
   refunds: {
     async create(args) {
       calls.push({ method: 'refunds.create', args });

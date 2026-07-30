@@ -2222,6 +2222,42 @@ app.get('/api/config', (req, res) => {
   });
 });
 
+/**
+ * Which Stripe account this portal charges into — because "what email did I
+ * use for Stripe" should be answerable from the dashboard, not by searching
+ * three inboxes. Admin only; exposes identity, never keys.
+ */
+app.get('/api/admin/stripe-status', authenticate, authorize('admin'), async (req, res) => {
+  if (!stripe) {
+    return res.json({ configured: false });
+  }
+  const sk = process.env.STRIPE_SECRET_KEY || '';
+  const pk = process.env.STRIPE_PUBLISHABLE_KEY || '';
+  const mode = sk.startsWith('sk_live') ? 'live' : sk.startsWith('sk_test') ? 'test' : 'unknown';
+  const out = {
+    configured: true,
+    mode,
+    publishable_key_set: !!pk,
+    // A live secret with a test publishable (or vice versa) renders a checkout
+    // that can never succeed — the card form and the charge live in different
+    // worlds. Cheap to detect, maddening to debug.
+    key_mismatch: !!pk && mode !== 'unknown' && !pk.startsWith(mode === 'live' ? 'pk_live' : 'pk_test'),
+  };
+  try {
+    const acct = await stripe.accounts.retrieve();
+    out.account = {
+      email: acct.email || null,
+      business_name: (acct.business_profile && acct.business_profile.name)
+        || (acct.settings && acct.settings.dashboard && acct.settings.dashboard.display_name) || null,
+      charges_enabled: acct.charges_enabled !== false,
+      payouts_enabled: acct.payouts_enabled !== false,
+    };
+  } catch (e) {
+    out.account_error = `Configured, but Stripe did not answer: ${e.message}`;
+  }
+  res.json(out);
+});
+
 // ── PUSH NOTIFICATION ENDPOINTS ───────────────────────────────────────────────
 app.post('/api/push/subscribe', authenticate, async (req, res) => {
   try {

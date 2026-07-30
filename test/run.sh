@@ -51,7 +51,7 @@ done
 fails=0
 for t in test/security.test.mjs test/auth-roles.test.mjs test/ordering.test.mjs test/inventory.test.mjs \
          test/store-photos.test.mjs test/photo-deadline.test.mjs test/incomplete-stores.test.mjs test/resale-number.test.mjs test/backdated-commissions.test.mjs test/pricing.test.mjs test/card-payments.test.mjs \
-         test/suite-autosync.test.mjs test/refund-on-rollback.test.mjs test/admin-mail.test.mjs; do
+         test/suite-autosync.test.mjs test/refund-on-rollback.test.mjs test/admin-mail.test.mjs test/stripe-status.test.mjs; do
   echo "── $t"
   node "$t" || fails=$((fails+1))
 done
