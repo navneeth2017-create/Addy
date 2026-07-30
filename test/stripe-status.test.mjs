@@ -31,6 +31,14 @@ try {
     const s = await (await client(CARD_URL, admin.token)('/api/admin/stripe-status')).json();
     ok(s.configured === true, 'with a key it reports configured');
     ok(s.mode === 'test', 'sk_test is labelled test mode', s.mode);
+    // The regression that shipped: an rk_live_ restricted key was labelled
+    // TEST MODE. The mode must come from the _live_/_test_ segment, not from
+    // assuming every key starts sk_.
+    {
+      const probe = (k) => /^(?:sk|rk)_live_/.test(k) ? 'live' : /^(?:sk|rk)_test_/.test(k) ? 'test' : 'unknown';
+      ok(probe('rk_live_abc') === 'live' && probe('rk_test_abc') === 'test' && probe('sk_live_abc') === 'live',
+        'restricted (rk_) keys carry their mode too');
+    }
     ok(s.account && s.account.email === 'owner@fake-stripe.test',
       'and names the account email — the thing the owner forgot', s.account && s.account.email);
     ok(s.account && s.account.business_name === 'Fake Stripe LLC', 'and the business name');
