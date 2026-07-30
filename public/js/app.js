@@ -922,6 +922,14 @@ async function loadAdminDashboard() {
   await loadPendingBadge();
   await checkLowStockBadge();
   await checkNewOrdersBadge();
+  checkMailBadge();
+}
+
+/** Unread-mail count on the Mail tab, refreshed on dashboard load. */
+async function checkMailBadge() {
+  if (!document.getElementById('mail-badge')) return;
+  const data = await apiFetch('/api/admin/mail?box=inbox&limit=1');
+  if (data) updateMailBadge(data.unread);
 }
 
 // --- Admin Activity Feed ---
@@ -2230,7 +2238,7 @@ async function handleSignup(e) {
 // ADMIN: TABS
 // ==========================================
 function switchTab(tab, btn) {
-  ['stores', 'pending', 'reps', 'users', 'products', 'orders', 'inventory', 'commissions', 'store-claims', 'activity', 'settings'].forEach(t => {
+  ['stores', 'pending', 'reps', 'users', 'products', 'orders', 'inventory', 'commissions', 'store-claims', 'mail', 'activity', 'settings'].forEach(t => {
     const el = document.getElementById('tab-' + t);
     if (!el) return;
     if (t === tab) {
@@ -2259,7 +2267,143 @@ function switchTab(tab, btn) {
   if (tab === 'orders') { loadAdminOrders(); markOrdersSeen(); }
   if (tab === 'inventory') loadInventory();
   if (tab === 'settings') { loadNotifEmails(); loadFeedbackList(); loadDbSize(); loadProgramDocs('admin-docs-gallery', true); }
+  if (tab === 'mail') loadMailTab(window._mailBox || 'inbox');
   if (tab === 'activity') loadActivityLog();
+}
+
+// ==========================================
+// ADMIN: MAIL (inbox + sent)
+// ==========================================
+/**
+ * The portal's own mailbox. Outbound is logged at the send facade so it is
+ * complete by construction; inbound arrives from Resend's webhook. Bodies are
+ * rendered inside a sandboxed iframe — inbox mail is stranger-controlled HTML,
+ * and the sandbox (no scripts, no forms, no top-navigation) is what makes
+ * reading it safe.
+ */
+async function loadMailTab(box) {
+  window._mailBox = box;
+  document.getElementById('mail-box-inbox').classList.toggle('active', box === 'inbox');
+  document.getElementById('mail-box-sent').classList.toggle('active', box === 'sent');
+  const list = document.getElementById('mail-list');
+  list.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted);">Loading…</div>';
+  const data = await apiFetch(`/api/admin/mail?box=${box}`);
+  if (!data) { list.innerHTML = '<div class="empty-note">Could not load mail.</div>'; return; }
+  updateMailBadge(data.unread);
+
+  const note = document.getElementById('mail-setup-note');
+  if (box === 'inbox' && data.messages.length === 0) {
+    note.style.display = 'block';
+    note.innerHTML = 'No mail yet. Receiving needs two things in Resend: <b>Enable Receiving</b> on the addydsd.com domain (it gives you an MX record to add in GoDaddy), and a webhook for <b>email.received</b> pointing at <code>https://www.addydsd.com/api/webhooks/resend-inbound</code>.';
+  } else note.style.display = 'none';
+
+  if (data.messages.length === 0) {
+    list.innerHTML = `<div style="padding:48px;text-align:center;color:var(--text-muted);">${box === 'inbox' ? '📭 Inbox is empty' : 'Nothing sent yet'}</div>`;
+    return;
+  }
+  list.innerHTML = `<table class="data-table"><thead><tr>
+      <th>${box === 'inbox' ? 'From' : 'To'}</th><th>Subject</th><th>Status</th><th>When</th>
+    </tr></thead><tbody>` + data.messages.map(m => {
+      const who = box === 'inbox' ? (m.from_addr || '—') : (m.to_addr || '—');
+      const unread = box === 'inbox' && !m.read_at;
+      const status = m.status === 'failed'
+        ? `<span class="status-badge rejected" title="${escAttr(m.error || '')}">failed</span>`
+        : `<span class="status-badge active">${esc(m.status)}</span>`;
+      return `<tr onclick="openMailMessage(${m.id})" style="cursor:pointer;${unread ? 'font-weight:700;' : ''}">
+        <td>${unread ? '● ' : ''}${esc(who)}</td>
+        <td>${esc(m.subject || '(no subject)')}</td>
+        <td>${status}</td>
+        <td style="white-space:nowrap;">${new Date(m.created_at).toLocaleString()}</td>
+      </tr>`;
+    }).join('') + '</tbody></table>';
+}
+
+function updateMailBadge(unread) {
+  const badge = document.getElementById('mail-badge');
+  if (!badge) return;
+  badge.style.display = unread > 0 ? '' : 'none';
+  badge.textContent = unread > 0 ? unread : '';
+}
+
+function ensureMailModal() {
+  if (document.getElementById('mail-modal')) return;
+  const div = document.createElement('div');
+  div.innerHTML = `<div class="modal-overlay" id="mail-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal" style="max-width:720px;width:94vw;">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <div id="mail-modal-content"></div>
+    </div></div>`;
+  document.body.appendChild(div.firstChild);
+}
+
+async function openMailMessage(id) {
+  const m = await apiFetch(`/api/admin/mail/${id}`);
+  if (!m || m.error) { showToast(m && m.error ? m.error : 'Could not open message', 'error'); return; }
+  ensureMailModal();
+  const inbound = m.direction === 'inbound';
+  // Refresh the list so the unread dot clears without a manual reload.
+  if (inbound && !m.read_at) setTimeout(() => loadMailTab('inbox'), 300);
+
+  const replyTo = inbound ? (m.from_addr || '').match(/<([^>]+)>/)?.[1] || m.from_addr || '' : '';
+  let bodyHtml;
+  if (m.body_html) {
+    // srcdoc + sandbox with no permissions: HTML renders, scripts/forms/links-to-top do not.
+    // Plain HTML-attribute escaping, NOT escAttr — escAttr JS-escapes first
+    // (\" and \n), which mangles a real email body. Inside a quoted
+    // attribute only & and " need encoding; the browser decodes them back
+    // before parsing the iframe's document.
+    const doc = String(m.body_html).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    bodyHtml = `<iframe sandbox="" srcdoc="${doc}" style="width:100%;min-height:340px;border:1px solid var(--border,#e2e8f0);border-radius:8px;background:#fff;"></iframe>`;
+  } else if (m.body_text) {
+    bodyHtml = `<pre style="white-space:pre-wrap;font-family:inherit;font-size:14px;background:var(--bg-2,#f8fafc);padding:14px;border-radius:8px;">${esc(m.body_text)}</pre>`;
+  } else {
+    bodyHtml = `<div class="empty-note">No body was stored for this message${m.error ? ` (${esc(m.error)})` : ''}.</div>`;
+  }
+  document.getElementById('mail-modal-content').innerHTML = `
+    <h2 style="margin-right:28px;">${esc(m.subject || '(no subject)')}</h2>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:4px;">${inbound ? 'From' : 'To'}: <b>${esc(inbound ? (m.from_addr || '—') : (m.to_addr || '—'))}</b></div>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">${new Date(m.created_at).toLocaleString()} · ${esc(m.status)}${m.error && m.status === 'failed' ? ` — ${esc(m.error)}` : ''}</div>
+    ${bodyHtml}
+    <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end;">
+      ${inbound && replyTo ? `<button class="btn btn-green" onclick='openMailCompose(${JSON.stringify(replyTo)}, ${JSON.stringify('Re: ' + (m.subject || ''))})'>↩︎ Reply</button>` : ''}
+      <button class="btn" onclick="closeModal()">Close</button>
+    </div>`;
+  document.getElementById('mail-modal').classList.add('active');
+}
+
+function openMailCompose(to, subject) {
+  ensureMailModal();
+  document.getElementById('mail-modal-content').innerHTML = `
+    <h2>${to ? 'Reply' : 'New email'}</h2>
+    <div class="form-group"><label>To</label><input type="email" id="mail-to" value="${escAttr(to || '')}" placeholder="who@example.com"></div>
+    <div class="form-group"><label>Subject</label><input type="text" id="mail-subject" value="${escAttr(subject || '')}" maxlength="300"></div>
+    <div class="form-group"><label>Message</label><textarea id="mail-body" rows="8" style="width:100%;"></textarea></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" id="mail-send-btn" onclick="sendMailCompose(this)">Send</button>
+    </div>`;
+  document.getElementById('mail-modal').classList.add('active');
+  document.getElementById(to ? 'mail-body' : 'mail-to').focus();
+}
+
+async function sendMailCompose(btn) {
+  btn.disabled = true;
+  const r = await apiFetch('/api/admin/mail/send', {
+    method: 'POST',
+    body: JSON.stringify({
+      to: document.getElementById('mail-to').value.trim(),
+      subject: document.getElementById('mail-subject').value.trim(),
+      body: document.getElementById('mail-body').value,
+    }),
+  });
+  btn.disabled = false;
+  if (r && r.success) {
+    closeModal();
+    showToast('Email sent ✓');
+    loadMailTab('sent');
+  } else {
+    showToast((r && r.error) || 'Send failed', 'error');
+  }
 }
 
 // ==========================================

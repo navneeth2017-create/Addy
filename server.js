@@ -9,7 +9,13 @@ const crypto = require('crypto');
 const { authenticate, authorize, JWT_SECRET } = require('./middleware/auth');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  // Webhook signatures are computed over the exact bytes on the wire, and a
+  // re-stringified req.body is not those bytes. Stash the raw buffer for the
+  // webhook paths only, so the rest of the app pays nothing for it.
+  verify: (req, res, buf) => { if (req.originalUrl.startsWith('/api/webhooks/')) req.rawBody = buf; },
+}));
 
 /**
  * Baseline security headers. Addy previously sent none at all.
@@ -89,9 +95,46 @@ const _resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND
 // (like the old client) only when NEITHER transport is available, so the
 // dev-mode branches (e.g. password reset code in the response) still work.
 const { suiteHouseEmail, suiteMailConfigured } = require('./monarch_integration');
+/**
+ * Every email leaves with the ADDY mark on it, from one place.
+ *
+ * The logo cannot ride along as the little sender avatar Gmail shows — that
+ * image belongs to the receiving mail client and is earned via BIMI (a paid,
+ * DNS-verified logo certificate), not sent. What we control is the body, so
+ * the header carries the logo there, injected here rather than pasted into
+ * eleven templates that would drift.
+ */
+function brandEmailHtml(html) {
+  if (!html || /class="addy-mail-head"/.test(html)) return html;
+  const head = `<div class="addy-mail-head" style="text-align:center;padding:18px 0 4px;">` +
+    `<img src="${SITE_URL}/icon-192.png" alt="ADDY" width="48" height="48" style="border-radius:10px;">` +
+    `</div>`;
+  return head + html;
+}
+
+/** One row per email, in or out — what the admin Mail tab reads. Never throws:
+ *  losing a log line must not lose the email. */
+async function logEmail(row) {
+  try {
+    await q(
+      `INSERT INTO email_log (direction, from_addr, to_addr, subject, body_html, body_text, status, error, provider_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (provider_id) WHERE provider_id IS NOT NULL DO NOTHING`,
+      [row.direction, row.from || null, Array.isArray(row.to) ? row.to.join(', ') : (row.to || null),
+       row.subject || null, row.html || null, row.text || null,
+       row.status || 'sent', row.error || null, row.providerId || null]
+    );
+  } catch (e) { console.error('email_log write failed:', e.message); }
+}
+
 const resend = (_resendClient || suiteMailConfigured()) ? {
   emails: {
     send: async (opts) => {
+      opts = { ...opts, html: brandEmailHtml(opts.html) };
+      const logged = (status, error, providerId) => logEmail({
+        direction: 'outbound', from: opts.from, to: opts.to, subject: opts.subject,
+        html: opts.html, text: opts.text, status, error, providerId,
+      });
       if (_resendClient) {
         // The Resend SDK does NOT throw on failure — it resolves with
         // { data: null, error: {...} }, including for network errors. Checking
@@ -101,15 +144,22 @@ const resend = (_resendClient || suiteMailConfigured()) ? {
         try { out = await _resendClient.emails.send(opts); }
         catch (e) { thrown = e; }
         const failure = thrown || (out && out.error) || null;
-        if (!failure) return out;
+        if (!failure) { await logged('sent', null, out && out.data && out.data.id); return out; }
         const why = failure.message || String(failure);
         if (!suiteMailConfigured()) {
           // No fallback available — surface it loudly instead of pretending.
+          await logged('failed', why, null);
           throw new Error(`Resend send failed: ${why}`);
         }
         console.warn('Resend send failed — retrying via Sales Suite mail:', why);
       }
-      await suiteHouseEmail({ to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
+      try {
+        await suiteHouseEmail({ to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
+      } catch (e) {
+        await logged('failed', e.message, null);
+        throw e;
+      }
+      await logged('sent_via_suite', null, null);
       return { via: 'suite' };
     },
   },
@@ -213,6 +263,139 @@ async function deliverAdminPing(user, message) {
   }
 }
 
+// ── ADMIN MAIL (inbox + sent, backed by email_log) ────────────────────────────
+/**
+ * Inbound email for the portal itself: Resend receives mail for addydsd.com
+ * and posts an email.received event here. The webhook carries metadata only,
+ * so the full body is fetched back from Resend's API before logging.
+ *
+ * Signed with svix headers. In production a missing RESEND_WEBHOOK_SECRET
+ * refuses everything — an unauthenticated endpoint that writes attacker text
+ * into the admin's inbox is a phishing machine, not a feature.
+ */
+function verifyResendWebhook(req) {
+  const secret = process.env.RESEND_WEBHOOK_SECRET || '';
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') return false;
+    return true; // local dev without a secret
+  }
+  const id = req.get('svix-id'), ts = req.get('svix-timestamp'), sigHeader = req.get('svix-signature');
+  if (!id || !ts || !sigHeader || !req.rawBody) return false;
+  // Stale timestamps are replays, not late mail — Resend retries with a fresh signature.
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64');
+  const expected = crypto.createHmac('sha256', key)
+    .update(Buffer.concat([Buffer.from(`${id}.${ts}.`), req.rawBody]))
+    .digest('base64');
+  return sigHeader.split(' ').some(part => {
+    const v = (part.split(',')[1] || '');
+    try {
+      const a = Buffer.from(v), b = Buffer.from(expected);
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch { return false; }
+  });
+}
+
+app.post('/api/webhooks/resend-inbound', async (req, res) => {
+  try {
+    if (!verifyResendWebhook(req)) return res.status(401).json({ error: 'Bad signature' });
+    const ev = req.body || {};
+    // Acknowledge everything that isn't inbound mail so Resend stops retrying it.
+    if (ev.type !== 'email.received') return res.json({ ok: true });
+    const d = ev.data || {};
+
+    // The event is metadata only; the body lives behind the API. A fetch
+    // failure still logs the message — a subject line in the inbox beats
+    // silence — and the open error explains the missing body.
+    let html = null, text = null, fetchErr = null;
+    if (process.env.RESEND_API_KEY && d.email_id) {
+      try {
+        const r = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(d.email_id)}`, {
+          headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+        });
+        if (r.ok) {
+          const full = await r.json();
+          html = full.html || null;
+          text = full.text || null;
+        } else fetchErr = `body fetch HTTP ${r.status}`;
+      } catch (e) { fetchErr = `body fetch failed: ${e.message}`; }
+    }
+
+    await logEmail({
+      direction: 'inbound',
+      from: typeof d.from === 'string' ? d.from : (d.from && d.from.email) || null,
+      to: d.to, subject: d.subject, html, text,
+      status: 'received', error: fetchErr, providerId: d.email_id || null,
+    });
+
+    // Best-effort heads-up on the admins' phones. Never an email — emailing
+    // the admin about the admin's email is how loops start.
+    try {
+      const admins = await all("SELECT id FROM users WHERE role='admin' AND status='active'");
+      const fromShort = String(d.from || '').replace(/<.*$/, '').trim() || 'someone';
+      for (const a of admins) {
+        sendPushToUser(a.id, '📬 New email', `${fromShort} — ${d.subject || '(no subject)'}`, '/dashboard-admin.html').catch(() => {});
+      }
+    } catch {}
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('resend inbound webhook failed:', e.message);
+    // 500 on purpose: Resend retries, and a transient DB blip should not eat mail.
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+/** The admin's mail: newest first, bodies omitted (they can be megabytes). */
+app.get('/api/admin/mail', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const box = req.query.box === 'sent' ? 'outbound' : 'inbound';
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const messages = await all(
+      `SELECT id, direction, from_addr, to_addr, subject, status, error, read_at, created_at
+       FROM email_log WHERE direction=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [box, limit, offset]
+    );
+    const unread = await one("SELECT COUNT(*)::int AS n FROM email_log WHERE direction='inbound' AND read_at IS NULL");
+    res.json({ messages, unread: unread ? unread.n : 0 });
+  } catch (e) { res.status(500).json({ error: 'Could not load mail' }); }
+});
+
+app.get('/api/admin/mail/:id', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Bad id' });
+    const m = await one('SELECT * FROM email_log WHERE id=$1', [id]);
+    if (!m) return res.status(404).json({ error: 'Not found' });
+    if (m.direction === 'inbound' && !m.read_at) {
+      await q('UPDATE email_log SET read_at=NOW() WHERE id=$1', [id]);
+    }
+    res.json(m);
+  } catch (e) { res.status(500).json({ error: 'Could not load message' }); }
+});
+
+/** Compose/reply from the Mail tab. Goes through the same facade as every
+ *  other email, so it is branded and logged like the rest. */
+app.post('/api/admin/mail/send', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const { to, subject, body } = req.body || {};
+    const addr = String(to || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) return res.status(400).json({ error: 'Enter a valid email address' });
+    if (!String(subject || '').trim()) return res.status(400).json({ error: 'Enter a subject' });
+    if (!String(body || '').trim()) return res.status(400).json({ error: 'Write a message' });
+    if (!resend) return res.status(503).json({ error: 'Email is not configured (no RESEND_API_KEY)' });
+    await resend.emails.send({
+      from: (process.env.EMAIL_FROM || 'ADDY DSD Portal <notifications@addydsd.com>').replace(/\n/g, ' ').trim(),
+      to: [addr],
+      subject: String(subject).slice(0, 300),
+      text: String(body),
+      html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;font-size:15px;color:#334155;line-height:1.6;white-space:pre-wrap;">${String(body).replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>`,
+    });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: `Send failed: ${e.message}` }); }
+});
+
 // ── EMAIL HELPER ──────────────────────────────────────────────────────────────
 async function sendNotification(subject, htmlBody) {
   if (!resend) return; // silently skip if no API key configured
@@ -237,6 +420,32 @@ async function migrate() {
   const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
   await q(schema);
   console.log('✅ Schema ready');
+
+  // ── Admin mail log: every email in or out, one table the Mail tab reads ────
+  // try/catch because two instances of this server can boot at once (the test
+  // harness does) and CREATE TABLE IF NOT EXISTS still races on the sequence —
+  // the loser gets a duplicate-key on pg_class, and the table exists either way.
+  try {
+  await q(`CREATE TABLE IF NOT EXISTS email_log (
+    id SERIAL PRIMARY KEY,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound')),
+    from_addr TEXT,
+    to_addr TEXT,
+    subject TEXT,
+    body_html TEXT,
+    body_text TEXT,
+    status TEXT NOT NULL DEFAULT 'sent',
+    error TEXT,
+    provider_id TEXT,
+    read_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  // Resend retries webhooks until acknowledged; the same email must not
+  // appear in the inbox twice for it.
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS email_log_provider_uq
+           ON email_log (provider_id) WHERE provider_id IS NOT NULL`);
+  await q(`CREATE INDEX IF NOT EXISTS email_log_box_idx ON email_log (direction, created_at DESC)`);
+  } catch (e) { console.log('ℹ️  email_log already up to date'); }
 
   // ── Fix orders.user_id FK to allow NULL (enables user deletion) ──────────────
   try {
