@@ -66,6 +66,7 @@
         <button class="admin-tab" onclick="switchTab('inventory',this)">Inventory</button>
         <button class="admin-tab" onclick="switchTab('commissions',this)">Commissions <span id="payouts-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
         <button class="admin-tab" onclick="switchTab('store-claims',this)">Store Claims <span id="claims-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
+        <button class="admin-tab" onclick="switchTab('mail',this)">Mail <span id="mail-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px;"></span></button>
         <button class="admin-tab" onclick="switchTab('activity',this)">Activity Log</button>
         <button class="admin-tab" onclick="switchTab('settings',this)">Settings</button>
       </div>
@@ -312,6 +313,21 @@
           <div><h1>Ownership Transfer Requests</h1><p>Reps requesting to take over a store already claimed by someone else.</p></div>
         </div>
         <div id="ownership-requests-list"><div class="loading">Loading...</div></div>
+      </div>
+
+      <!-- MAIL: the portal's own mailbox — everything Addy sent, everything addydsd.com received -->
+      <div id="tab-mail" style="display:none;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          <div class="admin-tabs" style="margin:0;">
+            <button class="admin-tab active" id="mail-box-inbox" onclick="loadMailTab('inbox')">Inbox <span id="mail-inbox-count" style="font-size:11px;color:var(--text-muted);"></span></button>
+            <button class="admin-tab" id="mail-box-sent" onclick="loadMailTab('sent')">Sent</button>
+          </div>
+          <div style="flex:1;"></div>
+          <button class="btn btn-sm" onclick="loadMailTab(window._mailBox || 'inbox')">↻ Refresh</button>
+          <button class="btn btn-sm btn-green" onclick="openMailCompose()">✉️ Compose</button>
+        </div>
+        <div id="mail-setup-note" style="display:none;" class="empty-note"></div>
+        <div id="mail-list"></div>
       </div>
 
       <div id="tab-activity" style="display:none;">
