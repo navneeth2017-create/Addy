@@ -1289,7 +1289,7 @@ async function refreshInvestorTable() {
   const { sort, order, page, search } = investorState;
   const params = new URLSearchParams({ sort, order, page, limit: 25, search });
   const data = await apiFetch(`/api/stores?${params}`);
-  if (!data) return;
+  if (!data || !Array.isArray(data.stores)) return; // error payloads have no stores — the toast already told the user
 
   animateValue(document.getElementById('stat-total'), data.total);
   animateCurrency(document.getElementById('stat-revenue'), data.total_revenue);
@@ -2777,7 +2777,7 @@ async function refreshAdminTable() {
   const { sort, order, page, search, category, state, status } = adminState;
   const params = new URLSearchParams({ sort, order, page, limit: 25, search, category, state, status });
   const data = await apiFetch(`/api/stores?${params}`);
-  if (!data) return;
+  if (!data || !Array.isArray(data.stores)) return; // error payloads have no stores — the toast already told the user
 
   animateValue(document.getElementById('stat-total'), data.total);
   animateCurrency(document.getElementById('stat-revenue'), data.total_revenue);
