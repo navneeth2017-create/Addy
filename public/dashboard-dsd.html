@@ -309,11 +309,32 @@
   <!-- Store Photo Upload Modal (required after claiming) -->
   <div id="store-photo-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);overflow-y:auto;">
     <div style="background:var(--bg-card);border-radius:16px;max-width:520px;margin:40px auto;padding:32px;position:relative;">
-      <!-- No X button — must complete or dismiss is blocked for manual claims -->
+      <button id="photo-modal-x" onclick="skipStorePhotos()" title="Skip for now — photos stay due on the deadline"
+        style="position:absolute;top:12px;right:14px;background:none;border:none;font-size:22px;color:var(--text-muted);cursor:pointer;line-height:1;">&times;</button>
       <div style="text-align:center;margin-bottom:24px;">
         <div style="font-size:40px;margin-bottom:12px;">📸</div>
         <h2 style="margin:0 0 8px;">Store Photos Required</h2>
         <p id="photo-modal-subtitle" style="color:var(--text-muted);font-size:14px;margin:0;"></p>
+      </div>
+
+      <!-- The skip lives at the TOP: reps adding stores from home must see the
+           way past this modal without scrolling. Red + pulse so it cannot be
+           missed; the 120-day deadline runs server-side regardless. -->
+      <style>
+        @keyframes photoSkipPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.55); }
+          50%      { box-shadow: 0 0 0 12px rgba(239,68,68,0); }
+        }
+      </style>
+      <div id="photo-skip-wrap" style="margin-bottom:20px;">
+        <button id="photo-defer-btn" onclick="skipStorePhotos()"
+          style="width:100%;font-size:15px;font-weight:700;padding:14px;border-radius:12px;border:none;cursor:pointer;
+                 background:#ef4444;color:#fff;animation:photoSkipPulse 1.6s ease-out infinite;">
+          🚫 Not at the store? Skip for now
+        </button>
+        <div style="font-size:12px;color:var(--text-muted);text-align:center;margin-top:8px;">
+          Photos stay due within <strong>120 days</strong> — we'll remind you when you're there.
+        </div>
       </div>
 
       <!-- Front of Store -->
@@ -347,24 +368,7 @@
       <button id="submit-photos-btn" class="btn btn-green" onclick="submitStorePhotos()" style="width:100%;font-size:15px;padding:14px;" disabled>
         Submit Photos
       </button>
-      <!-- Adding a store from home is normal; you cannot photograph a
-           storefront from your kitchen. Deferring is allowed, but it costs an
-           explicit commitment rather than a quiet dismissal. -->
-      <div id="photo-skip-wrap" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
-        <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;text-align:center;">
-          Not at the store right now?
-        </div>
-        <label for="photo-defer-agree" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;font-size:13px;line-height:1.45;margin-bottom:12px;">
-          <input type="checkbox" id="photo-defer-agree" style="margin-top:2px;flex-shrink:0;" onchange="updateDeferButton()">
-          <span>I agree to upload both photos for this store <strong>within 120 days</strong> of adding it.</span>
-        </label>
-        <button id="photo-defer-btn" class="btn btn-outline" onclick="deferStorePhotos()" style="width:100%;font-size:14px;padding:12px;" disabled>
-          Add store now, photos later
-        </button>
-        <div id="photo-defer-note" style="font-size:11px;color:var(--text-muted);margin-top:8px;text-align:center;">
-          We'll remind you every time you're at the store.
-        </div>
-      </div>
+
     </div>
   </div>
 

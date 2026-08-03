@@ -148,8 +148,11 @@ const APP = await (await client(INVOICE_URL)('/js/app.js')).text();
 const HTML = await (await client(INVOICE_URL)('/dashboard-dsd.html')).text();
 ok(!/skipPhotosForNow/.test(APP), 'the client-only "skip" that never told the server is gone');
 ok(/photos\/defer/.test(APP), 'the modal calls the real defer endpoint');
-ok(/photo-defer-agree/.test(HTML), 'and makes you tick the agreement first');
-ok(/<strong>within 120 days<\/strong>/.test(HTML), 'which states the 120-day deadline plainly');
+// The agreement checkbox is gone BY DESIGN: skipping is now one tap (the X
+// or the skip button), because a rep must never be blocked from entering a
+// store — the 120-day deadline is enforced server-side either way.
+ok(/skipStorePhotos/.test(APP) && /photo-modal-x/.test(HTML), 'one-tap skip (X) exists and is wired');
+ok(/120 days/.test(HTML), 'the 120-day deadline is still stated on the modal');
 ok(!/ARRIVAL_QUIET_MS/.test(APP) && /ARRIVAL_EXIT_M/.test(APP),
    'the reminder fires per VISIT, not on an hourly timer');
 ok(!/display\s*=\s*isBulk \? 'block' : 'none'/.test(APP),
