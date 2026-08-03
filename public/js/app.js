@@ -4285,11 +4285,12 @@ window.openPhotoModal = function(storeId, isBulk = false, storeName = '', alread
   // no way past the modal, so the store never got entered at all. It is only
   // hidden once this store has already used its one deferral.
   const skipWrap = document.getElementById('photo-skip-wrap');
-  if (skipWrap) skipWrap.style.display = _photoAlreadyDeferred ? 'none' : 'block';
-  const agree = document.getElementById('photo-defer-agree');
-  if (agree) agree.checked = false;
+  if (skipWrap) skipWrap.style.display = 'block';
   const deferBtn = document.getElementById('photo-defer-btn');
-  if (deferBtn) { deferBtn.disabled = true; deferBtn.textContent = 'Add store now, photos later'; }
+  if (deferBtn) {
+    deferBtn.disabled = false;
+    deferBtn.textContent = _photoAlreadyDeferred ? '🚫 Skip — photos still due' : '🚫 Not at the store? Skip for now';
+  }
 
   // Reset previews and statuses
   ['front','display'].forEach(type => {
@@ -4321,6 +4322,33 @@ window.updateDeferButton = function() {
  * store kept whatever deadline it was given at claim time — 24 hours for a
  * manual claim — and a rep who "skipped" was overdue by the next morning.
  */
+/**
+ * The ✕ / "Skip for now" on the photo modal. One tap, no checkbox ceremony:
+ * the rep is never blocked from entering a store, and skipping changes no
+ * deadline — photos_due_at has been ticking since the claim. If this store
+ * already used its formal deferral, the button simply closes the modal (the
+ * old behavior was a modal with NO exit at all, which trapped the rep on
+ * their own dashboard).
+ */
+window.skipStorePhotos = async function() {
+  const modal = document.getElementById('store-photo-modal');
+  if (!_photoAlreadyDeferred && _photoStoreId) {
+    try {
+      const result = await apiFetch(`/api/stores/${_photoStoreId}/photos/defer`, {
+        method: 'POST',
+        body: JSON.stringify({ agreed: true }),
+      });
+      if (result && result.success) {
+        const due = new Date(result.photos_due_at).toLocaleDateString();
+        showToast(`Store added ✓ Photos due by ${due} — we'll remind you when you're there.`, 'success');
+      }
+    } catch (e) { /* skipping must never block — the deadline is server-side either way */ }
+  }
+  if (modal) modal.style.display = 'none';
+  if (typeof loadMyStores === 'function') loadMyStores();
+  checkPhotoPendingBanner();
+};
+
 window.deferStorePhotos = async function() {
   const btn = document.getElementById('photo-defer-btn');
   const errEl = document.getElementById('photo-modal-error');
