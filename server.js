@@ -1420,13 +1420,13 @@ app.get('/api/stores', authenticate, async (req, res) => {
     if (role === 'admin' && stores.length) {
       const ids = stores.map(s => s.id);
       const claims = await all(`
-        SELECT store_id, string_agg(DISTINCT COALESCE(u.name,u.email), ', ') AS claimed_by FROM (
+        SELECT t.store_id, string_agg(DISTINCT COALESCE(u.name,u.email), ', ') AS claimed_by FROM (
           SELECT id AS store_id, exclusive_rep_id AS uid FROM stores WHERE id = ANY($1) AND exclusive_rep_id IS NOT NULL
           UNION
           SELECT store_id, owner_id AS uid FROM owner_stores WHERE store_id = ANY($1)
           UNION
           SELECT store_id, dsd_id  AS uid FROM dsd_stores   WHERE store_id = ANY($1)
-        ) t JOIN users u ON u.id = t.uid GROUP BY store_id`, [ids]);
+        ) t JOIN users u ON u.id = t.uid GROUP BY t.store_id`, [ids]);
       const map = {}; claims.forEach(c => { map[c.store_id] = c.claimed_by; });
       stores.forEach(s => { s.claimed_by = map[s.id] || null; });
     }
