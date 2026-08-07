@@ -3210,7 +3210,7 @@ async function submitBackdatedOrder() {
 // Comp the full Sales Suite (Pro tier) for a rep — house partners like Danny.
 // Provisions their workspace on Monarch and removes every buy/upgrade prompt.
 async function grantSuitePro(id, name) {
-  if (!confirm(`Give ${name} the full Sales Suite (Pro) on the house?\n\n• Their workspace is created/upgraded to Pro immediately\n• No payment, and they'll never see plan pricing or upgrade prompts\n• They open it right from their dashboard — it stays inside ADDY`)) return;
+  if (!confirm(`Give ${name} the full Sales Suite (Pro) on the house?\n\n• Their workspace is created/upgraded to Pro immediately\n• Includes everything: AI calls, routes, automation, bulk email, and GPS-verified store visits with sale/no-sale rep tracking\n• No payment, and they'll never see plan pricing or upgrade prompts\n• They open it right from their dashboard — it stays inside ADDY`)) return;
   const r = await apiFetch('/api/admin/monarch/grant', { method: 'POST', body: JSON.stringify({ user_id: id, tier: 'pro' }) });
   if (r && r.success) showToast(`🦋 ${name} now has the full Sales Suite (Pro, on the house)`, 'success');
 }
